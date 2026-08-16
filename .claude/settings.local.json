@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter --version)",
+      "Bash(dotnet --version)",
+      "Bash(flutter create *)",
+      "Bash(flutter pub *)",
+      "Bash(python3 -)",
+      "Bash(flutter analyze *)",
+      "Bash(flutter test *)",
+      "Bash(flutter devices *)",
+      "Bash(xcrun simctl *)",
+      "Bash(xcode-select -p)",
+      "Bash(flutter run *)",
+      "Bash(dart format *)"
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+@WordOs.Api_HostAddress = http://localhost:5186
+
+GET {{WordOs.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

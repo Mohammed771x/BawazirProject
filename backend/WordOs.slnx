@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WordOs.Api/WordOs.Api.csproj" />
+    <Project Path="src/WordOs.Application/WordOs.Application.csproj" />
+    <Project Path="src/WordOs.Domain/WordOs.Domain.csproj" />
+    <Project Path="src/WordOs.Infrastructure/WordOs.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/WordOs.Api.Tests/WordOs.Api.Tests.csproj" />
+    <Project Path="tests/WordOs.Domain.Tests/WordOs.Domain.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/" />
+  <Folder Name="/tools/lexicon/" />
+  <Folder Name="/tools/lexicon/importer/">
+    <Project Path="tools/lexicon/importer/WordOs.LexiconImporter.csproj" />
+  </Folder>
+</Solution>

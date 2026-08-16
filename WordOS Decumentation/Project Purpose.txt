@@ -1,0 +1,523 @@
+Project: WordOS — Word Operating System
+Document Type: MVP Technical Documentation
+Document Status: Draft for Review
+Purpose: Define the fundamental purpose, problem, vision, and success definition of WordOS before defining its implementation details.
+
+1. Project Overview
+
+WordOS (Word Operating System) is a vocabulary-learning system designed around a simple principle:
+
+A word is not truly learned when the user merely recognizes its meaning. A word is learned when the user can understand and use it across the essential dimensions of language.
+
+Traditional vocabulary learning often treats a word as a small piece of information: a word, its translation, and perhaps a few example sentences. WordOS approaches the problem differently.
+
+Instead of treating vocabulary as a static list, WordOS treats each word as an entity with its own lifecycle.
+
+A newly introduced word enters a controlled learning process. It is exposed to the user through multiple language skills over separated periods of time. The system evaluates whether the user can successfully understand and use the word rather than simply recognize or memorize it.
+
+The five core skills are:
+
+Reading
+Listening
+Speaking
+Writing
+Spelling
+
+A word is not considered mature until it successfully passes all required skills.
+
+After achieving mastery, the word enters the user's Active Vocabulary, where it can continue appearing naturally in AI-generated content. Eventually, as the user's language level develops and the word becomes sufficiently established, the word may move to Archive rather than being permanently deleted.
+
+Therefore, the fundamental lifecycle of a word is:
+
+New Word → Learning → Skill Validation → Mastery → Active Usage → Archive
+
+This lifecycle is the foundation upon which the rest of WordOS is built.
+
+2. The Problem WordOS Solves
+
+Learning vocabulary is not primarily difficult because users cannot discover new words.
+
+The larger problem is retention and usable knowledge.
+
+A learner may encounter a word, understand its translation, and even remember it temporarily, but still be unable to:
+
+understand it when hearing it;
+recognize it naturally inside a paragraph;
+use it correctly in a sentence;
+pronounce/use it during conversation;
+spell it correctly;
+retrieve it after a period without seeing it.
+
+Consequently, there is an important difference between:
+
+Knowing what a word means
+
+and:
+
+Actually possessing that word as usable language knowledge.
+
+WordOS is designed around this distinction.
+
+The system therefore does not define success simply as:
+
+"The user answered a vocabulary question correctly."
+
+Instead, the system asks a more meaningful question:
+
+Can the learner successfully understand and use this word across different language contexts after having time to retrieve it from memory?
+
+That is the problem the product is designed to address.
+
+3. The Core Concept — Word Operating System
+
+The name WordOS represents the central architecture of the product.
+
+A conventional vocabulary application can be thought of as a collection:
+
+Words → Review → Words
+
+WordOS instead treats vocabulary as a system:
+
+Word → State → Skills → Evaluation → Progression → Usage → Retention
+
+Every word has a state.
+
+Every word has a learning history.
+
+Every word has completed and incomplete skills.
+
+Every word has future actions.
+
+Every word has a lifecycle.
+
+The system continuously determines what should happen to each word based on its current state.
+
+This makes WordOS closer to a Word Operating System than a conventional vocabulary list.
+
+The system is responsible for managing the lifecycle of vocabulary in the same way an operating system manages resources according to their current state and requirements.
+
+4. Product Philosophy
+
+WordOS is built around five fundamental principles.
+
+4.1 Understanding Over Memorization
+
+The objective is not to make the user memorize translations.
+
+The system should place words inside meaningful contexts and require the user to retrieve their meaning and usage.
+
+For example, instead of simply displaying:
+
+Operating system = نظام تشغيل
+
+WordOS may present the word inside a meaningful sentence and ask the user to determine its meaning from context.
+
+The objective is to develop contextual understanding, not isolated memorization.
+
+4.2 Retrieval Over Recognition
+
+Recognizing a word when the answer is displayed is weaker than retrieving its meaning independently.
+
+Therefore, WordOS intentionally creates situations where the user must retrieve knowledge from memory.
+
+This is particularly important because the system introduces time gaps between learning stages.
+
+The user should not simply remember the word because they saw it a few seconds earlier.
+
+The system should give the memory an opportunity to weaken and then require the learner to retrieve it again.
+
+4.3 Multi-Skill Mastery
+
+A word is multidimensional.
+
+A learner may recognize a word while reading but fail to understand it when hearing it.
+
+They may understand it but use it incorrectly when writing.
+
+They may write it correctly but fail to produce it naturally during speaking.
+
+Therefore, WordOS separates vocabulary mastery into five skills:
+
+Skill	Primary Goal
+Reading	Understand the word within written context
+Listening	Understand the word when heard
+Speaking	Use the word appropriately in spoken communication
+Writing	Produce the word appropriately in written communication
+Spelling	Produce the correct written form
+
+A word must successfully pass the required skills before it can become Mature.
+
+5. Long-Term Retention
+
+WordOS is not optimized merely for completing the largest number of words in the shortest possible time.
+
+The system prioritizes retention quality.
+
+The learning pipeline therefore introduces deliberate gaps between skill evaluations.
+
+For the current MVP configuration, the intended progression is:
+
+Reading
+↓
+2-day interval
+↓
+Listening
+↓
+2-day interval
+↓
+Speaking
+↓
+2-day interval
+↓
+Writing
+↓
+2-day interval
+↓
+Spelling
+↓
+Mastered
+
+The interval is a configurable system parameter rather than a hard-coded architectural rule.
+
+For example:
+
+LEARNING_INTERVAL_DAYS = 2
+
+This allows the learning policy to be changed after real-world testing without redesigning the application.
+
+The same principle applies to other configurable parameters such as:
+
+DAILY_TARGET_WORDS = 10
+MIN_DAILY_TARGET_WORDS = 5
+MAX_DAILY_TARGET_WORDS = 15
+
+The MVP therefore establishes a scientifically motivated initial configuration while keeping the underlying system flexible enough for future experimentation.
+
+6. The Role of AI
+
+AI is not the product itself.
+
+AI is the content and evaluation engine that enables WordOS to create personalized learning experiences around the user's vocabulary.
+
+The system uses AI to generate contextually appropriate material such as:
+
+stories;
+paragraphs;
+questions;
+examples;
+writing situations;
+conversations;
+speaking interactions;
+evaluations;
+feedback.
+
+For example, the system can provide a paragraph appropriate for the user's current English level and incorporate the vocabulary currently being studied.
+
+The AI should not arbitrarily decide the state of the learning system.
+
+Instead:
+
+WordOS owns the learning algorithm and business rules. AI supplies content and performs specific evaluations where appropriate.
+
+This separation is fundamental.
+
+The application determines:
+
+which words should be studied;
+which skill is required;
+when a skill becomes available;
+whether a skill has been completed;
+when the next skill becomes available;
+when a word becomes Mature;
+when a word enters Active;
+when a word can be archived.
+
+The AI primarily determines things such as:
+
+what content should be generated;
+what questions should be asked;
+what constitutes an appropriate contextual response;
+whether a user's generated sentence is semantically appropriate;
+whether a speaking response successfully uses the target vocabulary.
+
+This prevents the learning algorithm from becoming dependent on unpredictable AI behavior.
+
+7. Personalization
+
+WordOS is designed to adapt the learning experience to the individual learner.
+
+The system considers factors such as:
+
+current language level;
+skill-specific performance;
+vocabulary being learned;
+learning history;
+completed skills;
+interests;
+exposure to active vocabulary;
+performance over time.
+
+The AI can therefore generate content that is both linguistically appropriate and personally relevant.
+
+For example, a learner interested in:
+
+programming;
+artificial intelligence;
+entrepreneurship;
+technology;
+
+can receive vocabulary contexts related to those domains rather than completely unrelated examples.
+
+This increases the likelihood that vocabulary appears in meaningful situations.
+
+8. User Target
+
+The initial target audience for WordOS is intentionally specific.
+
+Primary MVP Audience
+
+Students learning English for academic, university, or international examination purposes.
+
+This includes learners preparing for environments such as:
+
+university study;
+academic English;
+IELTS;
+TOEFL;
+other international English-language examinations.
+
+The architecture should nevertheless remain general enough that WordOS can later expand toward the broader market of English learners.
+
+The MVP should not over-engineer this expansion.
+
+The initial objective is to validate the core learning model with a focused user group.
+
+9. What Makes WordOS Different
+
+The fundamental distinction can be summarized as follows.
+
+Traditional vocabulary model
+Learn word
+    ↓
+Review word
+    ↓
+Remember word
+WordOS model
+Introduce word
+      ↓
+Understand in Reading
+      ↓
+Retrieve through Listening
+      ↓
+Use through Speaking
+      ↓
+Produce through Writing
+      ↓
+Verify Spelling
+      ↓
+       Mastery
+      ↓
+Active Vocabulary
+      ↓
+Natural AI-supported usage
+      ↓
+Archive when appropriate
+
+The second model treats vocabulary as developing language capability, not simply stored information.
+
+10. Definition of Mastery
+
+For WordOS, mastery is intentionally strict.
+
+A word is not Mature because:
+
+the user has seen it many times;
+the user knows its translation;
+the user answered one question correctly;
+AI used it in a story;
+the user recognized it once.
+
+A word becomes Mature only when:
+
+Reading     ✓
+Listening   ✓
+Speaking    ✓
+Writing     ✓
+Spelling    ✓
+
+have all been successfully completed according to the rules of their respective skill evaluations.
+
+If a skill fails, the successful skills remain completed.
+
+The system does not unnecessarily restart the entire learning journey.
+
+Only the failed skill requires further work.
+
+This is a critical design principle because it prevents the system from wasting previously demonstrated learning.
+
+11. Active Vocabulary
+
+After successful completion of the learning pipeline, the word becomes part of the user's Active Vocabulary.
+
+Active Vocabulary has a different purpose from Learning.
+
+Learning
+
+Answers the question:
+
+Has the user demonstrated mastery of this word?
+
+Active
+
+Answers the question:
+
+Can this mastered word continue to participate in natural language usage?
+
+Active vocabulary therefore provides a bridge between:
+
+learning a word
+
+and
+
+actually using the word as part of the learner's language.
+
+AI-generated content can preferentially use active words that have received relatively little exposure, while still maintaining natural language quality.
+
+Each active word can maintain an Exposure Count.
+
+The lower the exposure count, the higher its relative priority for future natural usage.
+
+The system does not force an unnatural sentence simply to increase a word's count.
+
+Natural language quality remains a constraint.
+
+12. Archive Philosophy
+
+Archive is not deletion.
+
+When a word eventually becomes sufficiently established relative to the user's evolving language level and satisfies the required archival conditions, it can move from Active to Archive.
+
+Conceptually:
+
+Active
+  ↓
+Sufficient exposure
+  +
+Higher user proficiency
+  +
+Word sufficiently established
+  ↓
+Archive
+
+The word remains stored.
+
+Its history remains available.
+
+Its existence is not erased.
+
+This ensures that WordOS maintains a long-term record of the learner's vocabulary development.
+
+13. What WordOS Is Not
+
+The MVP should not be understood as:
+
+a traditional flashcard application;
+a dictionary;
+a translation application;
+a simple vocabulary list;
+a chatbot that happens to teach words;
+an AI story generator with vocabulary attached.
+
+AI-generated content is a component.
+
+The learning algorithm is the core.
+
+The vocabulary lifecycle is the core.
+
+The ultimate objective is long-term usable vocabulary knowledge.
+
+14. Product Success Definition
+
+The primary measure of success is not:
+
+"How many words did the user add?"
+
+Nor is it:
+
+"How many words did the user see?"
+
+The fundamental success question is:
+
+How effectively can WordOS transform newly introduced vocabulary into vocabulary that the learner can understand, retrieve, produce, and use over time?
+
+Therefore, the system should eventually evaluate success through measurable indicators such as:
+
+skill completion rate;
+skill failure rate;
+weekly performance;
+retention performance;
+vocabulary mastery rate;
+active vocabulary usage;
+exposure distribution;
+progression by language level;
+user consistency;
+long-term vocabulary performance.
+
+These metrics will later form the foundation of the product's monitoring and algorithm-validation system.
+
+15. MVP Purpose
+
+The purpose of the MVP is not to build the final WordOS platform.
+
+The purpose is to validate the fundamental hypothesis:
+
+Can a vocabulary system built around controlled, spaced, multi-skill mastery produce better and more meaningful vocabulary learning behavior than simply presenting users with words and traditional reviews?
+
+Therefore, the MVP should focus on validating the core loop:
+
+Add Words
+   ↓
+Learning Pipeline
+   ↓
+Reading
+   ↓
+Listening
+   ↓
+Speaking
+   ↓
+Writing
+   ↓
+Spelling
+   ↓
+Mastery
+   ↓
+Active Vocabulary
+   ↓
+AI-supported natural usage
+
+The MVP will then be tested with real users, and the resulting behavioral data and feedback will guide future versions of the algorithm and product.
+
+16. Core Product Principle
+
+Everything implemented in WordOS should ultimately support one principle:
+
+Do not optimize for the number of words a learner has seen. Optimize for the number of words the learner can actually retain and use.
+
+This principle should act as a decision-making filter for future product and engineering decisions.
+
+If a future feature increases the number of words shown but decreases meaningful retention, it should be questioned.
+
+If a feature makes the application more visually impressive but does not improve learning, it should not automatically be prioritized.
+
+If a feature makes the system more complex without improving the learner's ability to retain and use vocabulary, its value should be challenged.
+
+WordOS exists to build usable vocabulary, not merely to accumulate vocabulary.
+
+17. Purpose Statement
+Short Version
+
+WordOS is a Word Operating System designed to transform vocabulary from words users merely recognize into language they can understand, retrieve, and use. It manages each word through a structured, spaced, multi-skill learning lifecycle, validates mastery across Reading, Listening, Speaking, Writing, and Spelling, and then keeps mastered vocabulary alive through natural AI-supported usage.
+
+One-Sentence Vision
+
+WordOS aims to turn every learned word into a usable part of the learner's language.

@@ -1,0 +1,11 @@
+# Build output
+bin/
+obj/
+*.user
+
+# Secrets — never commit. Use environment variables or `dotnet user-secrets`.
+appsettings.Development.json
+appsettings.*.Local.json
+.env
+*.pfx
+secrets.json

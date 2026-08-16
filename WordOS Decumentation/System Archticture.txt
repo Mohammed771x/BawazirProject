@@ -1,0 +1,1121 @@
+# الوثيقة رقم 5 — معمارية النظام (System Architecture)
+
+## 1. الهدف من المعمارية
+
+تم تصميم معمارية **WordOS** بحيث تحقق ثلاثة أهداف رئيسية في الوقت نفسه:
+
+1. **فصل المسؤوليات بوضوح** بين واجهة التطبيق، منطق النظام، الذكاء الاصطناعي، وقاعدة البيانات.
+2. **الحفاظ على الخوارزمية الأساسية تحت سيطرة النظام** وعدم جعلها معتمدة بشكل مباشر على نموذج ذكاء اصطناعي معين.
+3. **إتاحة التوسع مستقبلًا** دون الحاجة إلى إعادة بناء التطبيق من الصفر.
+
+WordOS ليس مجرد تطبيق يعرض كلمات للمستخدم، وإنما نظام يدير دورة حياة الكلمة من لحظة إضافتها، مرورًا بالمهارات الخمس، وحتى استخدامها داخل Active Vocabulary ثم أرشفتها.
+
+لذلك يجب أن تكون الـ Architecture قادرة على التعامل مع:
+
+* المستخدمين.
+* الكلمات.
+* مستويات المستخدم.
+* مستويات المهارات المختلفة.
+* Learning Pipeline.
+* ترتيب الكلمات وأولوياتها.
+* المهارات الخمس.
+* المحتوى المولد بواسطة AI.
+* تقييم إجابات المستخدم.
+* المراجعات الأسبوعية.
+* إعدادات المستخدم.
+* الـ Logging والـ Analytics.
+* ومراقبة أداء الخوارزمية.
+
+---
+
+# 2. المعمارية العامة
+
+يعتمد WordOS في الـ MVP على **Layered / Modular Architecture** بدلًا من بناء Microservices متعددة منذ البداية.
+
+الشكل العام للنظام:
+
+```text
+                 ┌──────────────────────┐
+                 │      Flutter App     │
+                 │    Mobile Frontend   │
+                 └──────────┬───────────┘
+                            │
+                       RESTful API
+                            │
+                            ▼
+                 ┌──────────────────────┐
+                 │    ASP.NET Core API  │
+                 │      C# Backend      │
+                 └──────────┬───────────┘
+                            │
+          ┌─────────────────┼─────────────────┐
+          │                 │                 │
+          ▼                 ▼                 ▼
+   ┌─────────────┐   ┌──────────────┐  ┌──────────────┐
+   │ Business    │   │ WordOS       │  │ Analytics &  │
+   │ Logic       │   │ Algorithm    │  │ Logging      │
+   └─────────────┘   └──────────────┘  └──────────────┘
+          │                 │
+          └────────┬────────┘
+                   │
+                   ▼
+          ┌──────────────────┐
+          │    PostgreSQL    │
+          │     Database     │
+          └──────────────────┘
+
+                   ▲
+                   │ RESTful API
+                   ▼
+
+          ┌──────────────────┐
+          │   Python AI      │
+          │     Service      │
+          └────────┬─────────┘
+                   │
+                   ▼
+          ┌──────────────────┐
+          │    AI Provider   │
+          │    / AI APIs     │
+          └──────────────────┘
+```
+
+هذه المعمارية تعني أن **Flutter لا يتعامل مباشرة مع قاعدة البيانات أو AI APIs**.
+
+كما أن الـ AI لا يمتلك القرار النهائي حول حالة الكلمة داخل النظام.
+
+الـ Backend هو المسؤول عن ذلك.
+
+---
+
+# 3. Flutter Mobile Application
+
+## 3.1 المسؤولية
+
+Flutter هو الـ **Frontend** الخاص بتطبيق WordOS على الهاتف.
+
+وظيفته الأساسية هي:
+
+* عرض واجهات التطبيق.
+* استقبال إدخال المستخدم.
+* عرض الكلمات والمحتوى.
+* تشغيل الصوت.
+* تسجيل صوت المستخدم عند الحاجة.
+* عرض الأسئلة.
+* إرسال إجابات المستخدم إلى Backend.
+* استقبال النتائج وعرضها.
+* إدارة تجربة المستخدم UI/UX.
+
+Flutter **لا يحتوي على Business Logic الأساسية للخوارزمية**.
+
+بمعنى أن Flutter لا يقرر:
+
+> هل الكلمة انتقلت من Reading إلى Listening؟
+
+ولا يقرر:
+
+> هل الكلمة أصبحت Mature؟
+
+ولا يقرر:
+
+> هل يجب أرشفة الكلمة؟
+
+هذه القرارات يجب أن تأتي من Backend.
+
+---
+
+# 4. واجهات التطبيق الرئيسية
+
+في الـ MVP، يحتوي التطبيق على الواجهات الأساسية التي تم اعتمادها سابقًا:
+
+### Authentication
+
+* Login
+* إنشاء الحساب إذا كان مطلوبًا ضمن التدفق المعتمد.
+
+### Placement Test
+
+يظهر للمستخدم الجديد لتحديد نقطة البداية.
+
+### Skills Hub
+
+وهي الواجهة التي تجمع المهارات الخمس:
+
+* Reading
+* Listening
+* Speaking
+* Writing
+* Spelling
+
+ومن خلالها يستطيع المستخدم اختيار المهارة التي يريد الدخول إليها.
+
+### Reading
+
+واجهة القراءة والأسئلة المرتبطة بها.
+
+### Listening
+
+واجهة الاستماع والمحتوى الصوتي والأسئلة.
+
+### Speaking
+
+واجهة المحادثة مع AI.
+
+### Writing
+
+واجهة كتابة الجمل وتقييمها.
+
+### Spelling
+
+واجهة اختبار التهجئة.
+
+### Weekly Review
+
+المراجعة الأسبوعية للكلمات التي تمت إضافتها خلال الأسبوع.
+
+### Settings
+
+تحتوي على الإعدادات التي يسمح بها النظام، ومنها مستوى المهارات والإعدادات المتعلقة بعدد الكلمات.
+
+### Owner / Admin Dashboard
+
+واجهة خاصة بصاحب النظام لمراقبة المستخدمين والخوارزمية والبيانات التشغيلية.
+
+---
+
+# 5. ASP.NET Core Backend
+
+الـ Backend هو **العقل التشغيلي الأساسي لـ WordOS**.
+
+وسيتم تطويره باستخدام **C# وASP.NET Core**.
+
+ويتحمل مسؤولية:
+
+* Authentication.
+* User Management.
+* Word Management.
+* Skill Management.
+* Learning Pipeline.
+* Word State Management.
+* Priority Calculation.
+* Daily Target.
+* Scheduling.
+* Weekly Review.
+* Level Management.
+* Persistence.
+* Analytics.
+* Logging.
+* التواصل مع Python AI Service.
+
+---
+
+# 6. لماذا يكون الـ Business Logic في C#؟
+
+الهدف هو أن تكون القواعد الأساسية للنظام مستقلة عن الذكاء الاصطناعي.
+
+مثلًا:
+
+```text
+إذا نجحت Reading
+        ↓
+انتظر الفترة المحددة
+        ↓
+افتح Listening
+```
+
+هذا **ليس قرار AI**.
+
+وكذلك:
+
+```text
+Reading ✓
+Listening ✓
+Writing ✓
+Speaking ✓
+Spelling ✓
+        ↓
+Mature
+```
+
+هذا قرار من WordOS Algorithm.
+
+والـ Backend هو المسؤول عن تنفيذ هذه القواعد.
+
+وبذلك إذا تم تغيير AI Provider مستقبلًا، لن نحتاج إلى إعادة بناء الخوارزمية.
+
+---
+
+# 7. تقسيم الـ Backend
+
+يتم تنظيم الـ Backend داخليًا إلى Modules / Layers واضحة.
+
+### 7.1 API Layer
+
+مسؤولة عن استقبال طلبات Flutter وإرجاع Responses.
+
+مثال:
+
+```text
+POST /api/auth/login
+POST /api/words
+GET  /api/skills
+GET  /api/reading
+POST /api/reading/answer
+POST /api/listening/answer
+POST /api/writing/evaluate
+POST /api/speaking/result
+GET  /api/weekly-review
+```
+
+هذه مجرد أمثلة على شكل الـ API، وليس قائمة نهائية للـ endpoints.
+
+---
+
+## 7.2 Application / Business Layer
+
+تحتوي على Use Cases الخاصة بالنظام.
+
+مثل:
+
+* Add Word.
+* Start Reading.
+* Submit Reading Answer.
+* Complete Skill.
+* Move Word to Next Skill.
+* Calculate Priority.
+* Build Skill Session.
+* Complete Weekly Review.
+* Update User Skill Level.
+* Archive Word.
+
+هذه الطبقة هي المكان الرئيسي الذي يتم فيه تطبيق قواعد WordOS.
+
+---
+
+## 7.3 Domain / Algorithm Layer
+
+تحتوي على منطق WordOS نفسه.
+
+مثل:
+
+* Word Lifecycle.
+* Skill progression.
+* Priority calculation.
+* Waiting periods.
+* State transitions.
+* Mastery rules.
+* Active Vocabulary rules.
+* Archive rules.
+* Level progression rules.
+
+ويجب أن تكون هذه الطبقة مستقلة قدر الإمكان عن Flutter وعن AI Provider.
+
+---
+
+## 7.4 Infrastructure Layer
+
+تتعامل مع التفاصيل التقنية الخارجية مثل:
+
+* PostgreSQL.
+* Authentication infrastructure.
+* External APIs.
+* Python AI Service.
+* File/audio storage إذا احتاج النظام ذلك.
+* Logging infrastructure.
+
+---
+
+# 8. PostgreSQL Database
+
+سيتم استخدام **PostgreSQL** كقاعدة البيانات الأساسية.
+
+السبب هو أن WordOS يعتمد بشكل كبير على بيانات مترابطة.
+
+لدينا علاقة بين:
+
+```text
+User
+  ↓
+Words
+  ↓
+Skills
+  ↓
+Skill Attempts
+  ↓
+Sessions
+  ↓
+AI Content
+  ↓
+Evaluations
+  ↓
+Analytics
+```
+
+وبالتالي قاعدة بيانات علائقية مناسبة جدًا للـ MVP.
+
+---
+
+# 9. مبدأ Persistence
+
+من أهم متطلبات WordOS أن البيانات **لا تضيع عند إغلاق التطبيق أو تسجيل الخروج أو العودة بعد عدة أيام**.
+
+مثلًا إذا أضاف المستخدم كلمة:
+
+```text
+Operating System
+```
+
+فإن النظام يجب أن يحفظ:
+
+* Word ID.
+* Word Text.
+* Meaning / Translation.
+* Word Level.
+* Added Date.
+* Current State.
+* Skill Status.
+* Skill Level.
+* Last Review.
+* Attempts.
+* Exposure Count.
+* Priority.
+* وغيرها من البيانات المطلوبة.
+
+وعندما يعود المستخدم بعد أسبوع، يجب أن يجد النظام حالة الكلمة كما تركها.
+
+---
+
+# 10. Python AI Service
+
+سيكون هناك Service منفصل مكتوب بـ **Python**.
+
+هذه الخدمة مسؤولة عن كل ما يتعلق بالتعامل المباشر مع AI.
+
+الهدف من فصلها هو منع تداخل AI مع الـ Core Business Logic.
+
+---
+
+# 11. مسؤوليات Python AI Service
+
+تشمل:
+
+### AI Prompt Construction
+
+بناء الـ prompts المناسبة لكل عملية.
+
+مثل:
+
+* Reading generation.
+* Listening generation.
+* Writing evaluation.
+* Speaking evaluation.
+* Word level classification.
+* Placement Test generation.
+* Content generation.
+
+### AI API Communication
+
+Python يرسل الطلب إلى AI Provider.
+
+مثال:
+
+```text
+Backend
+   ↓
+Python AI Service
+   ↓
+AI API
+   ↓
+Python
+   ↓
+Backend
+```
+
+---
+
+# 12. AI لا يتحكم في النظام
+
+هذه قاعدة معمارية مهمة جدًا.
+
+الـ AI يستطيع أن يقول:
+
+```text
+User Answer: Correct
+Confidence: 0.91
+```
+
+ولكنه لا يقرر بنفسه:
+
+> انقل الكلمة إلى Active Vocabulary.
+
+الـ Backend يأخذ نتيجة AI ويطبق Business Rules.
+
+مثلًا:
+
+```text
+AI Evaluation
+      ↓
+Backend Validation
+      ↓
+WordOS Rules
+      ↓
+State Update
+```
+
+وهذا يمنع أن يصبح النظام معتمدًا بشكل كامل على قرار غير حتمي من نموذج AI.
+
+---
+
+# 13. Speaking Architecture
+
+Speaking تختلف عن بقية المهارات لأنها تعتمد على تفاعل صوتي.
+
+التدفق الأساسي:
+
+```text
+Flutter
+   ↓
+User Voice
+   ↓
+Speaking / AI Service
+   ↓
+AI Conversation
+   ↓
+Evaluation
+   ↓
+Python
+   ↓
+C# Backend
+   ↓
+Database
+```
+
+الـ Backend يحدد:
+
+* مستوى المستخدم.
+* الكلمات المستهدفة.
+* عدد الكلمات.
+* الهدف من الجلسة.
+* قواعد المحادثة.
+
+ثم يتم بناء Prompt مناسب.
+
+الـ AI يبدأ المحادثة بشكل طبيعي، لكن لديه تعليمات واضحة حول الكلمات التي يجب أن يناقشها مع المستخدم.
+
+في نهاية المحادثة، يعيد تقييمًا منظمًا، مثل:
+
+```text
+Target Word: operating system
+
+Used: Yes
+Meaning Correct: Yes
+Sentence Understandable: Yes
+Pronunciation: Acceptable
+Grammar: Minor Errors
+Result: PASS
+```
+
+والـ Backend هو الذي يستخدم هذه النتيجة لتحديث حالة الكلمة.
+
+---
+
+# 14. Listening Architecture
+
+Listening لا تحتاج إلى نظام AI صوتي معقد في الـ MVP.
+
+التدفق يكون:
+
+```text
+AI
+ ↓
+Generated Text
+ ↓
+Flutter
+ ↓
+Text-to-Speech
+ ↓
+User listens
+```
+
+أي أن AI ينشئ المحتوى النصي.
+
+ثم يقوم Flutter بتحويل النص إلى صوت باستخدام **Text-to-Speech**.
+
+وهذا يقلل التعقيد في الـ MVP ويجعل النظام أسرع في التطوير.
+
+---
+
+# 15. Reading Architecture
+
+Reading تعتمد على AI في إنشاء المحتوى، ولكن التقييم النهائي يعتمد على بيانات منظمة.
+
+التدفق:
+
+```text
+Backend
+   ↓
+Target Words
+User Level
+User Interests
+   ↓
+Python AI Service
+   ↓
+AI
+   ↓
+Story + Questions + Correct Answers
+   ↓
+Backend
+   ↓
+Flutter
+```
+
+يتم إرسال:
+
+* مستوى المستخدم.
+* مستوى الـ Skill.
+* الكلمات المستهدفة.
+* الاهتمامات.
+* التعليمات الخاصة بالمحتوى.
+
+ويعيد AI:
+
+* النص.
+* أسئلة الفهم.
+* خيارات الإجابة.
+* الإجابة الصحيحة.
+* أسئلة الكلمات.
+* الإجابات الصحيحة.
+
+ثم يقوم Backend بتخزين ما يحتاجه للتقييم والـ analytics.
+
+---
+
+# 16. Writing Architecture
+
+التدفق:
+
+```text
+Backend
+   ↓
+Target Word
+   ↓
+AI Prompt
+   ↓
+Writing Task
+   ↓
+Flutter
+   ↓
+User Sentence
+   ↓
+Backend
+   ↓
+Python AI Service
+   ↓
+Evaluation
+   ↓
+Backend
+   ↓
+Database
+```
+
+يستطيع AI تقييم:
+
+* استخدام الكلمة.
+* صحة المعنى.
+* قابلية فهم الجملة.
+* Grammar بدرجة مناسبة.
+* واقتراح صياغة طبيعية أفضل عند الحاجة.
+
+لكن لا ينبغي جعل التقييم يعتمد على perfection في Grammar.
+
+الهدف الأساسي هو **الاستخدام الصحيح للكلمة**.
+
+---
+
+# 17. Word Addition Architecture
+
+عندما يضيف المستخدم كلمة:
+
+```text
+User
+ ↓
+Flutter
+ ↓
+Backend
+ ↓
+Database / AI Service
+```
+
+المستخدم يكتب الكلمة.
+
+إذا كانت الكلمة لها أكثر من معنى، يختار المعنى المقصود.
+
+مثل:
+
+```text
+book
+
+كتاب
+حجز
+```
+
+ثم يتم إرسال الكلمة والمعنى المقصود إلى AI للحصول على مستوى الكلمة في اللغة الإنجليزية.
+
+مثل:
+
+```text
+Word: book
+Meaning: كتاب
+Level: A1
+```
+
+ثم تحفظ البيانات في PostgreSQL.
+
+وبذلك يمكن للنظام لاحقًا التمييز بين المعاني المختلفة للكلمة عند إنشاء المحتوى.
+
+---
+
+# 18. Communication Between C# and Python
+
+التواصل بين Backend وAI Service سيكون باستخدام **RESTful APIs**.
+
+مثلًا:
+
+```text
+C# Backend
+    |
+    | POST /ai/reading
+    ↓
+Python AI Service
+    |
+    | AI API
+    ↓
+AI Provider
+    |
+    ↓
+Python
+    |
+    ↓
+C# Backend
+```
+
+يجب أن تكون الـ responses منظمة وقابلة للمعالجة برمجيًا، وليس مجرد نصوص غير منظمة.
+
+مثلًا يمكن أن يرجع AI Service بيانات منطقية مثل:
+
+```json
+{
+  "result": "success",
+  "content": "...",
+  "questions": [],
+  "target_words": [],
+  "evaluations": []
+}
+```
+
+والشكل النهائي للـ contracts يتم تحديده أثناء implementation.
+
+---
+
+# 19. Authentication
+
+بما أن WordOS يعتمد على مستخدمين حقيقيين منذ الـ MVP، يجب أن يكون لكل مستخدم حساب مستقل.
+
+ويتم استخدام Authentication من خلال Backend.
+
+وبالتالي:
+
+```text
+User
+ ↓
+Login
+ ↓
+Authentication
+ ↓
+User ID
+ ↓
+Personal Data
+```
+
+كل كلمة وكل جلسة وكل نتيجة يجب أن تكون مرتبطة بالمستخدم الصحيح.
+
+وهذا ضروري لأن الهدف من الـ MVP هو تجربة التطبيق مع عدة مستخدمين، وليس مستخدمًا واحدًا فقط.
+
+---
+
+# 20. Owner / Admin Architecture
+
+يوجد نوع خاص من المستخدمين:
+
+**System Owner / Administrator**
+
+هذا الحساب يستطيع الوصول إلى لوحة المراقبة.
+
+لكن المستخدم العادي لا يستطيع الوصول إليها.
+
+التدفق:
+
+```text
+Normal User
+    ↓
+Normal Application
+
+Owner
+    ↓
+Application
+    ↓
+Admin Dashboard
+```
+
+لوحة المراقبة يجب أن تسمح بمراقبة:
+
+* عدد المستخدمين.
+* نشاط المستخدمين.
+* عدد الكلمات المضافة.
+* عدد الكلمات يوميًا.
+* عدد جلسات كل مستخدم.
+* نتائج Reading.
+* نتائج Listening.
+* نتائج Speaking.
+* نتائج Writing.
+* نتائج Spelling.
+* Weekly Scores.
+* مستويات المستخدمين.
+* تغيرات مستويات المستخدمين.
+* تغييرات الإعدادات.
+* حالات الكلمات.
+* الأخطاء.
+* الـ AI evaluations.
+* وغيرها من الـ events المهمة.
+
+---
+
+# 21. Logging Architecture
+
+كل حدث مهم في النظام يجب أن يكون قابلًا للتسجيل.
+
+مثل:
+
+```text
+User Logged In
+Word Added
+Word Level Classified
+Reading Started
+Reading Completed
+Answer Submitted
+Answer Correct
+Answer Wrong
+Listening Started
+Speaking Started
+Writing Submitted
+Skill Passed
+Skill Failed
+Level Changed
+Setting Changed
+Weekly Quiz Started
+Weekly Quiz Completed
+Word Archived
+```
+
+الهدف من Logging ليس فقط اكتشاف الأخطاء التقنية.
+
+بل **فهم سلوك الخوارزمية نفسها**.
+
+---
+
+# 22. Algorithm Validation
+
+يجب أن يكون الـ Analytics جزءًا أساسيًا من المعمارية منذ الـ MVP.
+
+نريد أن نتمكن من الإجابة على أسئلة مثل:
+
+> كم كلمة يضيف المستخدم يوميًا؟
+
+> كم جلسة يكمل؟
+
+> كم إجابة صحيحة في Reading؟
+
+> هل المستخدم ينجح في Listening أكثر أم Writing؟
+
+> كم كلمة تنتقل إلى Active؟
+
+> كم كلمة تفشل في Skill معينة؟
+
+> هل مستوى المستخدم الحالي مناسب فعلًا؟
+
+> هل الخوارزمية تجعل المستخدم ينجح مع الوقت؟
+
+وبالتالي يتم تسجيل البيانات اللازمة لإجراء هذه التحليلات.
+
+---
+
+# 23. لماذا لا نستخدم Microservices كاملة الآن؟
+
+WordOS مصمم ليكون قابلًا للتوسع، ولكن إدخال عشرات الـ Microservices في الـ MVP سيزيد التعقيد بدون فائدة حقيقية في هذه المرحلة.
+
+لذلك نعتمد:
+
+**Modular Monolith + Separate AI Service**
+
+أي:
+
+```text
+Flutter
+   ↓
+ASP.NET Core Modular Backend
+   ↓
+PostgreSQL
+
+        ↘
+       Python AI Service
+```
+
+هذا يعطي المشروع:
+
+* بساطة في التطوير.
+* سهولة Debugging.
+* سرعة في بناء MVP.
+* وضوح في Business Logic.
+* فصل AI.
+* إمكانية التوسع مستقبلًا.
+
+وفي المستقبل، إذا أصبح أحد أجزاء النظام يحتاج إلى Service مستقل، يمكن فصله دون إعادة بناء النظام بالكامل.
+
+---
+
+# 24. مبدأ قابلية التوسع
+
+يجب ألا يعتمد النظام على AI Provider واحد بشكل مباشر داخل الـ Business Logic.
+
+مثلًا لا نريد:
+
+```text
+WordOS Algorithm
+      ↓
+Specific AI Provider
+```
+
+بل:
+
+```text
+WordOS Algorithm
+      ↓
+AI Service Interface
+      ↓
+AI Provider
+```
+
+وبذلك إذا تغير مزود الذكاء الاصطناعي:
+
+```text
+Provider A
+```
+
+إلى:
+
+```text
+Provider B
+```
+
+لا يتغير جوهر WordOS.
+
+---
+
+# 25. تدفق البيانات الكامل
+
+مثال عملي لإضافة كلمة:
+
+```text
+Flutter
+   ↓
+C# Backend
+   ↓
+Validate Input
+   ↓
+Python AI Service
+   ↓
+AI
+   ↓
+Word Level + Meaning
+   ↓
+C# Backend
+   ↓
+PostgreSQL
+```
+
+مثال Reading:
+
+```text
+Flutter
+   ↓
+C# Backend
+   ↓
+Priority Engine
+   ↓
+Select Target Words
+   ↓
+Python AI Service
+   ↓
+AI
+   ↓
+Story + Questions
+   ↓
+C# Backend
+   ↓
+Flutter
+   ↓
+User Answers
+   ↓
+C# Backend
+   ↓
+Evaluation
+   ↓
+Database
+```
+
+مثال Speaking:
+
+```text
+Flutter
+   ↓
+C# Backend
+   ↓
+Target Words
+   ↓
+Python AI Service
+   ↓
+AI Conversation
+   ↓
+User Voice
+   ↓
+AI Evaluation
+   ↓
+Python
+   ↓
+C#
+   ↓
+Word State Update
+   ↓
+Database
+```
+
+---
+
+# 26. مبدأ ملكية القرار
+
+يجب أن يكون واضحًا في جميع أجزاء النظام:
+
+### Flutter
+
+مسؤول عن **Presentation**.
+
+### C# Backend
+
+مسؤول عن **Business Logic + WordOS Algorithm + State Management**.
+
+### Python
+
+مسؤول عن **AI Integration + Prompt Engineering + AI Evaluation Processing**.
+
+### AI Provider
+
+مسؤول عن **Generation / Evaluation according to supplied instructions**.
+
+### PostgreSQL
+
+مسؤولة عن **Persistent Data Storage**.
+
+### Analytics / Logging
+
+مسؤولة عن **Observability and Algorithm Validation**.
+
+---
+
+# 27. المبدأ الأهم في المعمارية
+
+WordOS يجب ألا يكون:
+
+> AI Application with some vocabulary features.
+
+بل يجب أن يكون:
+
+> **Word Learning Operating System powered by AI.**
+
+فالـ AI هو محرك مساعد لإنشاء المحتوى والتقييم، بينما **WordOS Algorithm هو النظام الذي يقرر رحلة الكلمة**.
+
+بالتالي:
+
+```text
+AI ≠ WordOS
+
+AI = Intelligence Layer
+
+WordOS = Learning System
+```
+
+وهذا الفصل هو أحد أهم القرارات المعمارية في المشروع.
+
+---
+
+# 28. النتيجة النهائية للـ Architecture
+
+المعمارية المعتمدة للـ MVP هي:
+
+```text
+                    WORDOS
+                       │
+                       ▼
+              ┌────────────────┐
+              │ Flutter Mobile │
+              │   Frontend     │
+              └───────┬────────┘
+                      │
+                 RESTful API
+                      │
+                      ▼
+          ┌─────────────────────────┐
+          │ ASP.NET Core / C#       │
+          │                         │
+          │ Authentication          │
+          │ Business Logic          │
+          │ WordOS Algorithm        │
+          │ Learning Pipeline       │
+          │ Skill Management        │
+          │ Priority Engine         │
+          │ State Management        │
+          │ Analytics               │
+          │ Logging                 │
+          └───────┬─────────┬───────┘
+                  │         │
+                  │         │ REST
+                  │         ▼
+                  │   ┌──────────────┐
+                  │   │ Python AI    │
+                  │   │ Service      │
+                  │   └──────┬───────┘
+                  │          │
+                  │          ▼
+                  │   ┌──────────────┐
+                  │   │  AI APIs     │
+                  │   └──────────────┘
+                  │
+                  ▼
+          ┌──────────────────┐
+          │    PostgreSQL    │
+          │    Persistent    │
+          │     Storage      │
+          └──────────────────┘
+
+                  │
+                  ▼
+          ┌──────────────────┐
+          │ Owner / Admin    │
+          │ Dashboard        │
+          │ Algorithm        │
+          │ Validation       │
+          └──────────────────┘
+```
+
+بهذا التصميم، يكون **C# هو قلب النظام والمنطق التجاري والخوارزمية، Python هو طبقة الذكاء الاصطناعي، Flutter هو واجهة المستخدم، وPostgreSQL هي مصدر البيانات الدائم**، مع وجود طبقة Logging وAnalytics تسمح بقياس أداء WordOS فعليًا أثناء تجربة الـ MVP.
+
+**هذه هي البنية التي يُبنى عليها باقي الـ Documents؛ وأي تفاصيل لاحقة عن الـ Data Model أو Word Lifecycle أو Learning Pipeline يجب أن تتوافق معها.**

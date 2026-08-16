@@ -1,0 +1,1098 @@
+# الوثيقة رقم 6 — Core Components
+
+## المكونات الأساسية للنظام — MVP
+
+### 1. الغرض من هذه الوثيقة
+
+تحدد هذه الوثيقة المكونات البرمجية الأساسية التي يتكون منها الـMVP، والمسؤولية الرئيسية لكل مكون، والعلاقة بين هذه المكونات.
+
+الهدف هو أن يكون لدى أي Developer أو AI Developer صورة واضحة عن **ما هي أجزاء النظام التي يجب بناؤها، وما وظيفة كل جزء، وكيف تتواصل الأجزاء مع بعضها**، دون الدخول في تفاصيل تنفيذية خاصة بالكود لم يتم اعتمادها بعد.
+
+هذه الوثيقة لا تحدد الـUI بالتفصيل ولا الـDatabase Schema بالتفصيل؛ وإنما تحدد **الوحدات المنطقية الرئيسية للنظام** التي سيُبنى عليها التنفيذ.
+
+---
+
+# 2. نظرة عامة على مكونات النظام
+
+يتكون الـMVP بشكل أساسي من المكونات التالية:
+
+1. **Flutter Mobile Application**
+2. **Authentication Component**
+3. **User & Profile Component**
+4. **Skill Management Component**
+5. **Word Management Component**
+6. **Learning Pipeline Component**
+7. **Skills Hub Component**
+8. **Skill Session Components**
+9. **Weekly Quiz Component**
+10. **AI Integration Component**
+11. **AI Evaluation Component**
+12. **Content Generation Component**
+13. **Level Management Component**
+14. **Daily Target & Scheduling Component**
+15. **Active Vocabulary Component**
+16. **Archive Component**
+17. **User Interests Component**
+18. **Configuration Component**
+19. **Persistence / Database Component**
+20. **Analytics & MVP Algorithm Validation Dashboard**
+21. **Logging & Monitoring Component**
+
+هذه المكونات لا تعني بالضرورة أن كل مكون يجب أن يكون Microservice مستقلًا.
+
+في الـMVP يفضل أن تكون البنية **Modular Monolith / Modular Backend** قدر الإمكان، بحيث تكون المكونات منفصلة منطقيًا داخل النظام، مع إمكانية فصل بعضها إلى Services مستقلة مستقبلًا إذا أثبتت الحاجة لذلك.
+
+الهدف هو تحقيق توازن بين:
+
+* سهولة التطوير.
+* وضوح المسؤوليات.
+* سهولة الاختبار.
+* عدم تعقيد الـMVP.
+* إمكانية التوسع مستقبلًا.
+
+---
+
+# 3. Flutter Mobile Application
+
+هذا هو الجزء الذي يتعامل معه المستخدم مباشرة.
+
+يتم تطوير تطبيق الـMobile باستخدام **Flutter**.
+
+مسؤولية Flutter هي:
+
+* عرض الواجهات.
+* استقبال مدخلات المستخدم.
+* إرسال Requests إلى الـBackend.
+* استقبال النتائج.
+* عرض نتائج الـAI.
+* إدارة حالة الواجهة.
+* تشغيل Text-to-Speech في Listening.
+* تسجيل الصوت وإرساله في Speaking عند الحاجة.
+* عرض حالة الكلمات والمهارات.
+* عرض الـSkills Hub.
+* عرض الـWeekly Quiz.
+* عرض إعدادات المستخدم.
+
+Flutter **لا يجب أن يحتوي على Business Logic أساسي للنظام**.
+
+بمعنى أن Flutter لا يقرر بنفسه:
+
+> هل الكلمة أصبحت Passed؟
+
+ولا:
+
+> هل حان موعد Skill معينة؟
+
+ولا:
+
+> هل المستخدم يستحق الانتقال إلى Level أعلى؟
+
+هذه القرارات يجب أن تكون في الـBackend.
+
+Flutter يعرض النتيجة التي يحددها النظام.
+
+---
+
+# 4. Authentication Component
+
+مسؤول عن دخول المستخدم إلى النظام.
+
+في الـMVP يوجد Login.
+
+ويجب أن يكون لكل مستخدم حساب مستقل حتى يتمكن النظام من حفظ:
+
+* الكلمات الخاصة به.
+* مستويات Skills الخاصة به.
+* الكلمات التي أضافها.
+* تقدم Learning Pipeline.
+* Active Vocabulary.
+* Archive.
+* نتائج الاختبارات.
+* الـWeekly Quiz.
+* الـExposure Count.
+* الاهتمامات.
+* الإعدادات.
+* النشاطات والـLogs.
+
+وجود Authentication مهم أيضًا لأن الـMVP سيُستخدم من عدة Users، وليس من مستخدم واحد فقط.
+
+---
+
+# 5. User & Profile Component
+
+يمثل المستخدم داخل النظام.
+
+يحتوي على المعلومات الأساسية التي يحتاجها النظام لتخصيص التجربة.
+
+ومن أهم المعلومات:
+
+* User ID
+* Account Information
+* User Level
+* Skill Levels
+* User Interests
+* Daily Target Configuration
+* Skill-specific Target Configuration
+* Learning Progress
+* Account Creation Date
+* Activity Information
+
+يجب أن يكون لكل مستخدم **بيانات مستقلة تمامًا** عن المستخدمين الآخرين.
+
+---
+
+# 6. Skill Management Component
+
+هذا المكون مسؤول عن إدارة مستويات المهارات الخمس.
+
+المهارات الأساسية هي:
+
+1. Reading
+2. Listening
+3. Writing
+4. Speaking
+5. Spelling
+
+ولا يشترط أن يكون المستخدم في نفس المستوى في جميع المهارات.
+
+مثال:
+
+```text
+Reading    → B2
+Listening  → B1
+Writing    → B1+
+Speaking   → A2+
+Spelling   → B1
+```
+
+كل Skill لها مستوى مستقل.
+
+كما يستطيع النظام تعديل مستوى Skill بناءً على أداء المستخدم وفق القواعد المعتمدة.
+
+ويستطيع المستخدم أيضًا تعديل مستوى Skill يدويًا من الإعدادات ضمن الحدود المسموحة.
+
+لكن يجب التفريق بين:
+
+### User-selected Level
+
+المستوى الذي اختاره المستخدم يدويًا.
+
+### System-assessed Level
+
+المستوى الذي يحدده النظام بناءً على بيانات الأداء الفعلية.
+
+لا يجب أن يؤدي تغيير المستخدم لمستواه يدويًا إلى اعتبار المستوى الجديد **System-assessed Level**.
+
+---
+
+# 7. Word Management Component
+
+هذا المكون مسؤول عن الكلمات التي يضيفها المستخدم.
+
+عملية إضافة الكلمة تكون فردية.
+
+مثال:
+
+المستخدم يكتب:
+
+> book
+
+النظام يعرض له الكلمات المحتملة والمعاني المرتبطة بها.
+
+المستخدم يختار الكلمة التي يقصدها بالضبط.
+
+بعد اختيارها، يتم إرسال الكلمة إلى AI عند الحاجة للحصول على المعلومات المطلوبة عنها، مثل:
+
+* Word Text
+* Meaning / Translation
+* English Level
+* المعلومات اللازمة لبناء المحتوى.
+
+ثم تحفظ الكلمة في قاعدة البيانات.
+
+يجب أن تكون الكلمة مرتبطة بالمستخدم الذي أضافها.
+
+---
+
+# 8. Learning Pipeline Component
+
+هذا هو أحد أهم المكونات في النظام.
+
+كل كلمة جديدة تدخل إلى:
+
+**Learning Pipeline**
+
+ولا تدخل مباشرة إلى Active Vocabulary.
+
+تمر الكلمة بالـSkills بالترتيب المعتمد:
+
+```text
+Reading
+   ↓
+Listening
+   ↓
+Writing
+   ↓
+Speaking
+   ↓
+Spelling
+   ↓
+Active Vocabulary
+```
+
+كل Skill لها حالة مستقلة.
+
+مثال:
+
+```text
+Reading    → Passed
+Listening  → Passed
+Writing    → Failed
+Speaking   → Pending
+Spelling   → Pending
+```
+
+إذا فشل المستخدم في Skill معينة، لا يعاد النظام من البداية.
+
+بل تبقى المهارات الناجحة محفوظة، ويتم التركيز على المهارة التي لم تنجح.
+
+---
+
+# 9. Skills Hub Component
+
+الـSkills Hub هو الواجهة الرئيسية التي يصل المستخدم من خلالها إلى المهارات.
+
+لا يتم عرض جميع الكلمات للمستخدم مباشرة.
+
+بدلًا من ذلك، يرى المستخدم المهارات:
+
+```text
+Reading
+Listening
+Writing
+Speaking
+Spelling
+```
+
+ويستطيع الدخول إلى أي Skill متاحة له.
+
+مثال:
+
+> المستخدم لديه عدد كبير من الكلمات التي تحتاج Reading.
+
+بدل عرض جميع الكلمات أمامه دفعة واحدة، يدخل إلى:
+
+**Reading**
+
+ثم يقوم النظام بجلب الكلمات المطلوبة لهذه الجلسة.
+
+وهذا يجعل التجربة أبسط وأقل إرهاقًا للمستخدم.
+
+---
+
+# 10. Skill Session Components
+
+كل Skill لها Session خاصة بها.
+
+## Reading Session
+
+مسؤولة عن:
+
+* إنشاء المحتوى.
+* عرض النص.
+* إبراز الكلمات المستهدفة.
+* عرض أسئلة الفهم.
+* عرض سؤال خاص بمعنى الكلمة.
+* استقبال إجابات المستخدم.
+* تحديد Passed / Failed.
+
+---
+
+## Listening Session
+
+مسؤولة عن:
+
+* إنشاء محتوى Listening.
+* استخدام Text-to-Speech.
+* تشغيل المحتوى للمستخدم.
+* توفير إمكانية إعادة الاستماع.
+* توفير سرعة أبطأ كوسيلة مساعدة.
+* طرح أسئلة comprehension.
+* طرح أسئلة عن الكلمات المستهدفة.
+* تقييم الإجابات.
+
+---
+
+## Writing Session
+
+مسؤولة عن:
+
+* عرض الكلمات المستهدفة.
+* إعطاء المستخدم Context أو Prompt.
+* استقبال الجملة التي كتبها.
+* إرسال الجملة إلى AI للتقييم.
+* تحديد صحة استخدام الكلمة.
+* إعطاء Feedback مناسب لمستوى المستخدم.
+* إرسال نتيجة التقييم إلى Backend.
+
+---
+
+## Speaking Session
+
+مسؤولة عن:
+
+* بدء المحادثة مع AI.
+* الالتزام بمسار المحادثة المحدد مسبقًا.
+* إدخال الكلمات المستهدفة داخل الحوار.
+* استقبال كلام المستخدم.
+* تقييم استخدام الكلمات.
+* تقييم المعنى.
+* تقييم وضوح النطق.
+* تقييم منطقية الجملة.
+* إرسال النتيجة النهائية للـBackend.
+
+لا يشترط الوصول إلى Grammar perfection.
+
+الهدف هو التأكد من أن المستخدم استطاع استخدام الكلمة بشكل مفهوم وطبيعي بما يكفي.
+
+---
+
+## Spelling Session
+
+مسؤولة عن اختبار كتابة الكلمة.
+
+طريقة الاختبار تختلف حسب مستوى المستخدم.
+
+المستويات الأقل يمكن أن تعتمد على:
+
+* Meaning.
+* Arabic meaning.
+* Simple definition.
+* Synonym.
+* اختيار الحروف الصحيحة.
+
+أما المستويات الأعلى فيمكن أن تعتمد أكثر على:
+
+* Definition.
+* Context.
+* Synonym.
+* English-based clues.
+
+---
+
+# 11. Weekly Quiz Component
+
+يوجد اختبار مراجعة أسبوعي.
+
+يهدف إلى مراجعة الكلمات التي أضيفت خلال الأسبوع.
+
+هذا الاختبار مختلف عن Learning Pipeline.
+
+فهو لا يغير حالة الكلمات داخل الـLearning Pipeline.
+
+كما أن نتيجته الأساسية تستخدم للمراقبة والتحليل.
+
+طريقة العمل:
+
+1. يجلب النظام الكلمات التي تمت إضافتها خلال الفترة الأسبوعية.
+2. يضع الكلمات في Quiz Queue.
+3. تظهر الكلمة للمستخدم.
+4. يختار المستخدم الإجابة.
+5. إذا كانت صحيحة، تنتقل الكلمة من الـQueue.
+6. إذا كانت خاطئة، تعاد إلى الـQueue.
+7. يستمر الاختبار حتى يتمكن المستخدم من إكمال جميع الكلمات.
+
+مثال:
+
+```text
+50 Words
+
+45 Correct
+5 Wrong
+```
+
+تخرج الـ45 كلمة الصحيحة من الدورة.
+
+أما الـ5 الخاطئة فتعود مرة أخرى حتى ينجح المستخدم فيها.
+
+الـWeekly Score يمكن تخزينه وتحليله، لكن الهدف منه داخل الـMVP هو **قياس أداء المستخدم والخوارزمية** وليس إظهار نتيجة تنافسية للمستخدم.
+
+---
+
+# 12. AI Integration Component
+
+هذا المكون مسؤول عن التواصل مع نماذج الذكاء الاصطناعي.
+
+لا يتم استدعاء AI بشكل عشوائي من Flutter.
+
+بل يمر الاتصال من خلال Backend / AI Layer.
+
+الـAI يستخدم في:
+
+* تحليل الكلمات.
+* تحديد مستوى الكلمة.
+* إنشاء Reading Content.
+* إنشاء Listening Content.
+* إنشاء الأسئلة.
+* تقييم Writing.
+* إدارة Speaking Conversation.
+* تقييم Speaking.
+* إنشاء Feedback.
+* إنشاء محتوى مناسب للمستوى.
+* استخدام User Interests عند ملاءمة السياق.
+
+---
+
+# 13. AI Evaluation Component
+
+هذا المكون مسؤول عن تحويل نتائج الـAI إلى نتائج مفهومة للنظام.
+
+مثلاً في Speaking قد يرجع AI تقييمًا يحتوي على:
+
+```text
+Word Used: true
+Meaning Correct: true
+Sentence Understandable: true
+Pronunciation: acceptable
+Overall Result: PASS
+```
+
+الـBackend يستخدم هذه النتيجة لتحديد:
+
+```text
+Passed
+```
+
+أو:
+
+```text
+Failed
+```
+
+ولا يجب أن يعتمد النظام على نص حر فقط من الـAI لاتخاذ قرارات Business Logic حساسة.
+
+يفضل أن تكون نتائج الـAI في شكل Structured Output يمكن للـBackend قراءته والتحقق منه.
+
+---
+
+# 14. Content Generation Component
+
+مسؤول عن إنشاء المحتوى التعليمي.
+
+يأخذ في الاعتبار، حسب نوع الـSkill:
+
+* Target Words
+* User Skill Level
+* User Interests
+* Word Meaning
+* Context
+* Skill Type
+* الكلمات الموجودة في Active Vocabulary عند الحاجة.
+
+يجب ألا يجبر النظام AI على استخدام كلمة إذا كان استخدامها سيجعل المحتوى غير طبيعي.
+
+الأولوية هي:
+
+**Natural Educational Content**
+
+وليس مجرد حشر الكلمات داخل النص.
+
+---
+
+# 15. Level Management Component
+
+مسؤول عن مستويات المستخدم والـSkills.
+
+المستويات المعتمدة حاليًا:
+
+```text
+A1
+A1+
+A2
+A2+
+B1
+B1+
+B2
+B2+
+C1
+C1+
+C2
+```
+
+ويتم التعامل مع كل Skill بشكل مستقل.
+
+مثال:
+
+```text
+Reading → B1+
+Listening → A2+
+Writing → B1
+Speaking → A2
+Spelling → B1+
+```
+
+يقوم النظام بمراقبة الأداء عبر جلسات متعددة.
+
+وعند تحقق شروط الترقية المعتمدة، يمكن رفع المستوى.
+
+كما أن المستوى لا يرتفع بمجرد إجابة واحدة ممتازة.
+
+يجب أن يعتمد على أداء متكرر وموثوق.
+
+---
+
+# 16. Daily Target & Scheduling Component
+
+مسؤول عن تحديد عدد الكلمات المستهدفة للمستخدم.
+
+العدد الافتراضي:
+
+**10 كلمات**
+
+لكن المستخدم يستطيع تخصيص العدد ضمن الحدود المعتمدة.
+
+كما أن العدد يمكن أن يكون مختلفًا حسب Skill.
+
+مثال:
+
+```text
+Reading    → 10
+Listening  → 10
+Writing    → 5
+Speaking   → 5
+Spelling   → 10
+```
+
+النظام لا يفترض أن جميع المستخدمين لديهم نفس القدرة على جميع المهارات.
+
+---
+
+# 17. Skill Scheduling
+
+هذا المكون يحدد متى تصبح الكلمة متاحة للـSkill التالية.
+
+الفاصل الزمني المعتمد حاليًا هو:
+
+**يومان**
+
+مثال:
+
+```text
+Day 1
+Reading Passed
+
+Day 2
+Not Available Yet
+
+Day 3
+Listening Available
+```
+
+الفاصل يجب أن يكون **Configuration** وليس رقمًا ثابتًا داخل الكود.
+
+بالتالي يمكن تغييره مستقبلًا دون إعادة بناء النظام.
+
+مثلاً:
+
+```text
+Skill Delay = 2 days
+```
+
+ويمكن لاحقًا تغييره إلى:
+
+```text
+Skill Delay = 3 days
+```
+
+دون تغيير Business Logic الأساسي.
+
+---
+
+# 18. Active Vocabulary Component
+
+عندما تنجح الكلمة في جميع الـSkills الخمس:
+
+```text
+Reading ✓
+Listening ✓
+Writing ✓
+Speaking ✓
+Spelling ✓
+```
+
+تنتقل إلى:
+
+**Active Vocabulary**
+
+الكلمة في Active تصبح متاحة للـAI لاستخدامها في المحتوى الطبيعي.
+
+يتم إرسال الكلمات المناسبة للـAI مع معلومات تساعده على تحديد الأولوية، ومن أهمها:
+
+**Exposure Count**
+
+الكلمات ذات Exposure Count الأقل تكون ذات أولوية أعلى للاستخدام.
+
+لا يوجد في الـMVP حد ثابت عام يمنع الكلمة من الوصول إلى AI بناءً على Exposure Count.
+
+الـExposure Count يستخدم أساسًا لتحديد **الأولوية**.
+
+---
+
+# 19. Archive Component
+
+Archive هي المرحلة التي تخرج فيها الكلمات التي لم تعد تحتاج إلى الاستخدام النشط المستمر.
+
+الكلمة لا تُحذف.
+
+بل تبقى محفوظة.
+
+ولا تعتمد عملية Archive على المستوى الذي اختاره المستخدم يدويًا.
+
+يجب أن يعتمد قرار الأرشفة على **System-Assessed User Level** بعد التحقق من أهلية المستخدم لهذا المستوى.
+
+مثلاً:
+
+```text
+User System Level = B1
+Word Level = A1
+```
+
+يمكن للنظام اعتبار الكلمة مرشحة للأرشفة وفق Business Rules المعتمدة.
+
+أما إذا قام المستخدم يدويًا بتغيير مستواه إلى B2، فهذا وحده لا يكفي لأرشفة الكلمات.
+
+---
+
+# 20. User Interests Component
+
+أثناء إعداد الحساب، يستطيع المستخدم تحديد اهتماماته.
+
+مثل:
+
+* Football
+* Technology
+* Business
+* Movies
+* Travel
+* Science
+* وغيرها.
+
+كما يستطيع إضافة اهتمامات مخصصة من خلال:
+
+**Others**
+
+يستخدم النظام هذه المعلومات لتحسين المحتوى.
+
+لكن الاهتمامات ليست قيدًا إلزاميًا.
+
+إذا كان استخدام اهتمام معين سيجعل المحتوى غير طبيعي، يستطيع AI إنشاء المحتوى بدون استخدامه.
+
+---
+
+# 21. Configuration Component
+
+جميع القيم التي قد تتغير نتيجة التجارب يجب ألا تكون Hard-Coded.
+
+من أمثلتها:
+
+```text
+Default Daily Target
+Minimum Daily Target
+Maximum Daily Target
+
+Skill Delay
+
+Level Thresholds
+
+Quiz Configuration
+
+AI Configuration
+
+Content Limits
+```
+
+وهذا مهم جدًا لأن الـMVP نفسه عبارة عن مرحلة **Algorithm Validation**.
+
+إذا اكتشفنا بعد تجربة 10 أو 20 مستخدمًا أن:
+
+```text
+2 days
+```
+
+سريعة جدًا، يجب أن نستطيع تعديلها إلى:
+
+```text
+3 days
+```
+
+دون إعادة بناء النظام بالكامل.
+
+---
+
+# 22. Persistence / Database Component
+
+قاعدة البيانات مسؤولة عن حفظ جميع بيانات المستخدم بشكل دائم.
+
+يجب ألا يعتمد النظام على بيانات موجودة في Memory فقط.
+
+حتى لو:
+
+* أغلق المستخدم التطبيق.
+* عاد بعد يوم.
+* عاد بعد أسبوع.
+* أعاد تشغيل التطبيق.
+* حدث Restart للـBackend.
+
+يجب أن تكون بياناته موجودة.
+
+يجب حفظ:
+
+* Users
+* Words
+* Word Meanings
+* Word Levels
+* Word States
+* Skill States
+* Skill Levels
+* Added Dates
+* Scheduled Dates
+* Exposure Count
+* Active Vocabulary
+* Archive
+* Quiz Results
+* Session Results
+* User Interests
+* User Configuration
+* AI Evaluation Results
+* Analytics Events
+* Logs
+
+ويتم استخدام قاعدة بيانات مناسبة للنظام، مع PostgreSQL كخيار أساسي مناسب للـMVP.
+
+---
+
+# 23. Analytics & MVP Algorithm Validation Dashboard
+
+هذا المكون **ليس إضافة ثانوية**.
+
+بل يعتبر جزءًا أساسيًا من الـMVP.
+
+الهدف من الـMVP ليس فقط معرفة:
+
+> هل التطبيق يعمل؟
+
+بل معرفة:
+
+> هل الخوارزمية تعمل كما توقعنا؟
+
+لذلك يجب وجود Dashboard خاصة بصاحب النظام لمراقبة المستخدمين.
+
+يستطيع صاحب النظام رؤية:
+
+### على مستوى النظام
+
+* عدد المستخدمين.
+* عدد المستخدمين النشطين.
+* متوسط عدد الكلمات المضافة يوميًا.
+* متوسط عدد الجلسات.
+* متوسط نتائج الـWeekly Quiz.
+* متوسط النجاح في كل Skill.
+* متوسط الوقت المستخدم.
+* نسبة إكمال المهام.
+* نسبة فشل الكلمات في كل Skill.
+* توزيع مستويات المستخدمين.
+* تطور المستخدمين عبر الوقت.
+
+### على مستوى User
+
+عند اختيار مستخدم معين يمكن مشاهدة:
+
+```text
+User
+↓
+Activity
+↓
+Words Added
+↓
+Reading
+↓
+Listening
+↓
+Writing
+↓
+Speaking
+↓
+Spelling
+↓
+Weekly Quiz
+↓
+Level Changes
+↓
+AI Evaluations
+↓
+Errors / Failures
+```
+
+مثلاً:
+
+```text
+Day 1
+Added: 10 words
+Reading: 8/10
+Listening: 6/8
+Writing: 5/6
+
+Day 2
+Added: 10 words
+Reading: 9/10
+...
+```
+
+وبذلك نستطيع معرفة سلوك المستخدم بشكل حقيقي.
+
+---
+
+# 24. Logging & Monitoring Component
+
+كل Event مهم يجب أن يكون قابلًا للتسجيل والتحليل.
+
+من أمثلة الأحداث:
+
+```text
+User Logged In
+User Logged Out
+
+User Added Word
+User Selected Word Meaning
+
+Reading Started
+Reading Completed
+
+Listening Started
+Listening Completed
+
+Writing Submitted
+Writing Evaluated
+
+Speaking Started
+Speaking Completed
+
+Spelling Completed
+
+Weekly Quiz Started
+Weekly Quiz Completed
+
+Level Changed
+Skill Level Changed
+
+Daily Target Changed
+
+User Interest Added
+User Interest Changed
+
+AI Request Sent
+AI Response Received
+AI Evaluation Result
+
+Word Passed
+Word Failed
+
+Word Entered Active
+Word Archived
+```
+
+ويجب تسجيل الأحداث بطريقة تسمح لاحقًا بتحليلها.
+
+---
+
+# 25. العلاقة بين المكونات
+
+التدفق العام للنظام يكون تقريبًا:
+
+```text
+Flutter Mobile App
+        ↓
+Backend API
+        ↓
+Business Logic
+        ↓
+ ┌──────┼──────────┐
+ ↓      ↓          ↓
+Word   Skills    Scheduling
+ ↓      ↓          ↓
+Learning Pipeline
+        ↓
+      AI Layer
+        ↓
+AI Provider/API
+        ↓
+AI Evaluation
+        ↓
+Business Logic
+        ↓
+Database
+        ↓
+Analytics / Monitoring
+```
+
+أما المستخدم، فيتعامل بشكل مباشر مع:
+
+```text
+Login
+   ↓
+Placement Test
+   ↓
+Profile / Interests
+   ↓
+Skills Hub
+   ├── Reading
+   ├── Listening
+   ├── Writing
+   ├── Speaking
+   └── Spelling
+   ↓
+Weekly Quiz
+   ↓
+Settings
+```
+
+---
+
+# 26. مبدأ فصل المسؤوليات
+
+يجب الالتزام بمبدأ واضح أثناء التطوير:
+
+### Flutter
+
+مسؤول عن:
+
+**Presentation + User Interaction**
+
+### Backend / C#
+
+مسؤول عن:
+
+**Business Logic + Rules + State + Scheduling + Persistence Coordination**
+
+### AI Layer / Python
+
+مسؤولة عن:
+
+**AI Integration + Prompts + AI-specific Processing + AI Evaluation**
+
+### Database
+
+مسؤولة عن:
+
+**Persistent Data Storage**
+
+### Analytics
+
+مسؤولة عن:
+
+**Measurement + Monitoring + Algorithm Validation**
+
+---
+
+# 27. قاعدة مهمة في الـMVP
+
+لا يجب وضع Business Rules داخل الـFlutter.
+
+مثلاً لا يجب أن يحتوي Flutter على منطق مثل:
+
+```text
+if days >= 2
+    unlock Listening
+```
+
+ولا:
+
+```text
+if score >= 85
+    promote user
+```
+
+ولا:
+
+```text
+if all skills passed
+    move word to Active
+```
+
+هذه القرارات يجب أن تكون في Backend.
+
+Flutter يحصل على حالة مثل:
+
+```text
+Listening: Available
+```
+
+أو:
+
+```text
+Listening: Locked
+```
+
+ويعرضها للمستخدم.
+
+وهذا يجعل النظام أسهل في التطوير والتعديل والاختبار.
+
+---
+
+# 28. قابلية التوسع
+
+يجب بناء المكونات بطريقة تسمح بإضافة Features مستقبلية دون إعادة بناء النظام من الصفر.
+
+لكن في الوقت نفسه، لا يتم تحويل كل Component إلى Microservice مستقل في الـMVP.
+
+البنية المقترحة:
+
+**Modular Backend**
+
+بحيث تكون المكونات منفصلة منطقيًا:
+
+```text
+Auth
+Users
+Words
+Skills
+Learning
+Scheduling
+AI
+Analytics
+Configuration
+```
+
+ثم إذا أصبح أحد المكونات يحتاج إلى التوسع بشكل مستقل، يمكن فصله لاحقًا إلى Service مستقل.
+
+بهذا نحصل على:
+
+**Simple enough for MVP + Structured enough for future growth.**
+
+---
+
+# 29. المبدأ النهائي للمكونات
+
+جميع مكونات النظام يجب أن تخدم الفكرة الأساسية للتطبيق:
+
+> **الكلمة ليست مجرد عنصر في قائمة؛ بل كيان يمر برحلة تعليمية كاملة حتى يثبت المستخدم قدرته على فهمها واستخدامها.**
+
+لذلك يجب أن يعرف النظام في أي لحظة:
+
+```text
+من هو المستخدم؟
+ما هي الكلمة؟
+ما مستوى الكلمة؟
+ما مستوى المستخدم؟
+ما مستوى كل Skill؟
+ما الذي نجح فيه المستخدم؟
+ما الذي فشل فيه؟
+متى أصبحت الكلمة متاحة؟
+ما هي Skill التالية؟
+كم مرة تم استخدام الكلمة؟
+هل هي Active؟
+هل أصبحت مرشحة للـArchive؟
+وكيف كان أداء المستخدم والخوارزمية؟
+```
+
+وهذه المعلومات هي الأساس الذي ستُبنى عليه بقية الوثائق، خصوصًا **Data Model، Word Lifecycle، Learning Pipeline، AI Integration، State Management، وMVP Acceptance Criteria**.

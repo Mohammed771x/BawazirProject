@@ -1,0 +1,12 @@
+# الأسرار — لا تُودَع في Git إطلاقًا
+.env
+.env.*
+!.env.example
+
+# بيئة بايثون
+.venv/
+__pycache__/
+*.pyc
+
+# ملفات نظام macOS
+.DS_Store

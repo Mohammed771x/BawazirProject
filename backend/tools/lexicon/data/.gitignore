@@ -1,0 +1,4 @@
+# Raw datasets are NEVER committed — they are large, externally licensed, and
+# reproducible from `import.sh`. Only the scripts belong in Git.
+*
+!.gitignore
