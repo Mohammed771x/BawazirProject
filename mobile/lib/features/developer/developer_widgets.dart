@@ -17,6 +17,7 @@ class MetricTile extends StatelessWidget {
     required this.value,
     this.caption,
     this.tone,
+    this.onTap,
   });
 
   final String label;
@@ -24,12 +25,16 @@ class MetricTile extends StatelessWidget {
   final String? caption;
   final Color? tone;
 
+  /// Makes the figure a way in to whatever it counts.
+  final VoidCallback? onTap;
+
   @override
   Widget build(BuildContext context) {
     // Every line is single-line-and-clipped on purpose: these tiles live in a
     // fixed-aspect-ratio grid, so a label or caption that wraps would overflow
     // the cell rather than grow it.
     return AppCard(
+      onTap: onTap,
       padding: const EdgeInsets.all(AppSpacing.sm),
       // The Column fills the cell (not MainAxisSize.min) so the Flexible value
       // actually has room to shrink into; with a min-sized column the three

@@ -3,15 +3,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/models/enums.dart';
+import '../core/storage/preferences_providers.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/register_screen.dart';
 import '../features/auth/session_controller.dart';
 import '../features/developer/developer_screen.dart';
 import '../features/developer/developer_user_screen.dart';
+import '../features/developer/developer_placement_screen.dart';
+import '../features/developer/developer_words_screen.dart';
 import '../features/hub/app_shell.dart';
 import '../features/hub/hub_screen.dart';
 import '../features/onboarding/interests_screen.dart';
 import '../features/onboarding/placement_screen.dart';
+import '../features/onboarding/welcome_onboarding_screen.dart';
 import '../features/review/weekly_review_screen.dart';
 import '../features/session/session_screen.dart';
 import '../features/settings/settings_screen.dart';
@@ -23,6 +27,7 @@ class Routes {
   const Routes._();
 
   static const splash = '/splash';
+  static const onboarding = '/onboarding';
   static const login = '/login';
   static const register = '/register';
   static const interests = '/interests';
@@ -35,6 +40,11 @@ class Routes {
   static const developer = '/developer';
 
   static String developerUser(String id) => '/developer/users/$id';
+  static String developerUserWords(String id, {String? state}) =>
+      '/developer/users/$id/words${state == null ? '' : '?state=$state'}';
+  static String developerWord(String wordId) => '/developer/words/$wordId';
+  static String developerPlacement(String id) =>
+      '/developer/users/$id/placement';
 
   static String word(String id) => '/word/$id';
   static String session(SkillType skill) =>
@@ -65,8 +75,21 @@ final routerProvider = Provider<GoRouter>((ref) {
       final isAuthRoute = path == Routes.login || path == Routes.register;
 
       if (!session.isSignedIn) {
+        // A first-time learner is shown what WordOS is before being asked for
+        // anything. Once seen, this installation never shows it again — the
+        // flag is on the device, so it survives before there is an account to
+        // attach it to.
+        final seenOnboarding = ref.read(appPreferencesProvider).onboardingSeen;
+
+        if (!seenOnboarding) {
+          return path == Routes.onboarding ? null : Routes.onboarding;
+        }
+
         return isAuthRoute ? null : Routes.login;
       }
+
+      // A signed-in learner has no business back in the product tour.
+      if (path == Routes.onboarding) return Routes.hub;
 
       // The Owner area is a separate space, not a section of Settings. This
       // guard is UX, not security — the API refuses these calls for a
@@ -95,6 +118,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: Routes.splash,
         builder: (_, _) => const _SplashScreen(),
+      ),
+      GoRoute(
+        path: Routes.onboarding,
+        builder: (_, _) => const WelcomeOnboardingScreen(),
       ),
       GoRoute(path: Routes.login, builder: (_, _) => const LoginScreen()),
       GoRoute(path: Routes.register, builder: (_, _) => const RegisterScreen()),
@@ -152,6 +179,34 @@ final routerProvider = Provider<GoRouter>((ref) {
             parentNavigatorKey: _rootKey,
             builder: (_, state) =>
                 DeveloperUserScreen(userId: state.pathParameters['id']!),
+            routes: [
+              GoRoute(
+                path: 'placement',
+                parentNavigatorKey: _rootKey,
+                builder: (_, state) => DeveloperPlacementScreen(
+                  userId: state.pathParameters['id']!,
+                ),
+              ),
+              GoRoute(
+                path: 'words',
+                parentNavigatorKey: _rootKey,
+                builder: (_, state) => DeveloperWordsScreen(
+                  userId: state.pathParameters['id']!,
+                  // Absent means every word, whatever state it is in.
+                  state: state.uri.queryParameters['state'] == null
+                      ? null
+                      : WordState.fromWire(
+                          state.uri.queryParameters['state']),
+                ),
+              ),
+            ],
+          ),
+          GoRoute(
+            path: 'words/:wordId',
+            parentNavigatorKey: _rootKey,
+            builder: (_, state) => DeveloperWordJourneyScreen(
+              wordId: state.pathParameters['wordId']!,
+            ),
           ),
         ],
       ),

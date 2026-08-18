@@ -77,7 +77,9 @@ class TargetWord(BaseModel):
 class ContentRequest(BaseModel):
     level: str = Field(max_length=8)
     interests: list[str] = Field(default_factory=list, max_length=20)
-    words: list[TargetWord] = Field(min_length=1, max_length=15)
+    # Empty is legitimate: a practice passage has no vocabulary attached to it
+    # (Part 2 §5). Still bounded above, so a request cannot inflate the prompt.
+    words: list[TargetWord] = Field(default_factory=list, max_length=15)
     listening: bool = False
     comprehension_count: int = Field(default=5, ge=1, le=10)
     # Active vocabulary to re-encounter, not to test. Bounded like every other
@@ -98,14 +100,36 @@ class ComprehensionQuestion(BaseModel):
     distractors: list[str]
 
 
+class GlossaryEntry(BaseModel):
+    """One word of the passage, with the meaning it carries *there*.
+
+    Produced while the passage is being written, because that is when the
+    model knows which sense it meant. A dictionary consulted afterwards can
+    only offer every sense the word has ever had.
+    """
+
+    word: str
+    meaning_ar: str
+    part_of_speech: str
+
+
 class ContentResponse(BaseModel):
     text: str
     sentences: list[str]
     comprehension: list[ComprehensionQuestion]
     contexts: list[WordContext]
+    glossary: list[GlossaryEntry] = []
     prompt_version: str
     model: str
     tokens: int
+
+
+class RelevelRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+    from_level: str = Field(max_length=8)
+    to_level: str = Field(max_length=8)
+    words: list[TargetWord] = Field(default_factory=list, max_length=15)
+    comprehension_count: int = Field(default=5, ge=1, le=10)
 
 
 class WritingRequest(BaseModel):
@@ -114,6 +138,9 @@ class WritingRequest(BaseModel):
     definition: str = Field(default="", max_length=1024)
     level: str = Field(max_length=8)
     sentence: str = Field(min_length=1, max_length=2000)
+    # The language the learner reads the app in. Only the feedback follows it;
+    # the sentence they wrote and the word they used are untouched (ADR-035).
+    feedback_language: str = Field(default="ar", max_length=8)
 
 
 class WritingResponse(BaseModel):
@@ -161,6 +188,7 @@ class SpeakingEvalRequest(BaseModel):
     level: str = Field(max_length=8)
     words: list[EvalTargetWord] = Field(min_length=1, max_length=15)
     transcript: list[TranscriptTurn] = Field(min_length=1, max_length=60)
+    feedback_language: str = Field(default="ar", max_length=8)
 
 
 class SpeakingWordObservation(BaseModel):
@@ -178,6 +206,41 @@ class SpeakingWordObservation(BaseModel):
     major_grammar_problem: bool
     evidence: str = ""
     feedback: str = ""
+
+
+class PlacementAnswerIn(BaseModel):
+    item_id: str = Field(max_length=64)
+    level: str = Field(max_length=8)
+    prompt: str = Field(max_length=2000)
+    answer: str = Field(default="", max_length=4000)
+
+
+class PlacementEvalRequest(BaseModel):
+    skill: str = Field(max_length=16)
+    answers: list[PlacementAnswerIn] = Field(min_length=1, max_length=10)
+
+
+class PlacementAnswerRating(BaseModel):
+    """What the model thought of one answer — never the learner's final band.
+
+    The backend combines these into a level with its own estimator and its own
+    confidence rules (rule R2). `score` is partial credit in [0, 1], which is
+    what that estimator actually consumes.
+    """
+
+    item_id: str
+    estimated_level: str
+    score: float
+    evidence: str = ""
+
+
+class PlacementEvalResponse(BaseModel):
+    answers: list[PlacementAnswerRating]
+    overall_level: str
+    summary: str
+    prompt_version: str
+    model: str
+    tokens: int
 
 
 class SpeakingEvalResponse(BaseModel):
@@ -216,6 +279,19 @@ def generate_content(request: ContentRequest) -> ContentResponse:
     )
 
     payload = _generate_json(prompt, prompts.READING_SCHEMA)
+    return _shape_content(payload, prompts.READING_PROMPT_VERSION, started)
+
+
+def _shape_content(
+    payload: dict,
+    prompt_version: str,
+    started: float,
+) -> ContentResponse:
+    """Turns a raw generation payload into the response both callers return.
+
+    Shared by a fresh passage and a re-told one: they differ in the prompt, not
+    in the shape of what comes back.
+    """
     sentences = [s.strip() for s in payload.get("sentences", []) if s.strip()]
 
     if not sentences:
@@ -260,20 +336,61 @@ def generate_content(request: ContentRequest) -> ContentResponse:
     elapsed = int((time.monotonic() - started) * 1000)
     tokens = _last_tokens
     log.info(
-        "content level=%s words=%d listening=%s questions=%d tokens=%d %dms",
-        request.level, len(request.words), request.listening,
-        len(questions), tokens, elapsed,
+        "content prompt=%s sentences=%d questions=%d tokens=%d %dms",
+        prompt_version, len(sentences), len(questions), tokens, elapsed,
     )
+
+    # Deduplicated on the surface form: the model sometimes lists a word once
+    # per occurrence, and the client only ever needs one entry per spelling.
+    glossary: list[GlossaryEntry] = []
+    seen: set[str] = set()
+    for entry in payload.get("glossary", []):
+        word = str(entry.get("word", "")).strip()
+        meaning = str(entry.get("meaning_ar", "")).strip()
+        if not word or not meaning or word.lower() in seen:
+            continue
+        seen.add(word.lower())
+        glossary.append(GlossaryEntry(
+            word=word,
+            meaning_ar=meaning,
+            part_of_speech=str(entry.get("part_of_speech") or "other"),
+        ))
 
     return ContentResponse(
         text=" ".join(sentences),
         sentences=sentences,
         comprehension=questions,
         contexts=contexts,
-        prompt_version=prompts.READING_PROMPT_VERSION,
+        glossary=glossary,
+        prompt_version=prompt_version,
         model=SETTINGS.gemini_model,
         tokens=tokens,
     )
+
+
+@app.post(
+    "/ai/content/relevel",
+    response_model=ContentResponse,
+    dependencies=[Depends(require_service_token)],
+)
+def relevel_content(request: RelevelRequest) -> ContentResponse:
+    """Re-tells an existing passage at a different level.
+
+    Same story, different language. The learner asked for this because the text
+    was too hard or too easy, not because they wanted a different subject.
+    """
+    started = time.monotonic()
+
+    prompt = prompts.relevel_prompt(
+        text=request.text,
+        from_level=request.from_level,
+        to_level=request.to_level,
+        words=[w.model_dump() for w in request.words],
+        comprehension_count=request.comprehension_count,
+    )
+
+    payload = _generate_json(prompt, prompts.READING_SCHEMA)
+    return _shape_content(payload, prompts.RELEVEL_PROMPT_VERSION, started)
 
 
 @app.post(
@@ -293,6 +410,7 @@ def evaluate_writing(request: WritingRequest) -> WritingResponse:
             definition=request.definition,
             level=request.level,
             sentence=request.sentence,
+            feedback_language=request.feedback_language,
         ),
         prompts.WRITING_SCHEMA,
         temperature=0.2,
@@ -415,6 +533,7 @@ def speaking_evaluate(request: SpeakingEvalRequest) -> SpeakingEvalResponse:
             level=request.level,
             words=[w.model_dump() for w in request.words],
             transcript=[t.model_dump() for t in request.transcript],
+            feedback_language=request.feedback_language,
         ),
         prompts.SPEAKING_EVAL_SCHEMA,
         # Low temperature: this is a judgement, and the same conversation should
@@ -454,4 +573,64 @@ def speaking_evaluate(request: SpeakingEvalRequest) -> SpeakingEvalResponse:
         prompt_version=prompts.SPEAKING_EVAL_PROMPT_VERSION,
         model=SETTINGS.gemini_model,
         tokens=_last_tokens,
+    )
+
+
+@app.post(
+    "/ai/placement/evaluate",
+    response_model=PlacementEvalResponse,
+    dependencies=[Depends(require_service_token)],
+)
+def placement_evaluate(request: PlacementEvalRequest) -> PlacementEvalResponse:
+    """Rates the productive half of the placement test.
+
+    Reading and Listening are not here on purpose: their answers are compared
+    with a known key, so a model would add cost, latency and disagreement to a
+    question that already has a right answer.
+
+    Speaking and Writing have no key. Until now they were scored on length and
+    lexical variety, which cannot tell a short fluent answer from a padded weak
+    one — the gap this closes.
+    """
+    started = time.monotonic()
+
+    payload = _generate_json(
+        prompts.placement_eval_prompt(
+            skill=request.skill,
+            answers=[a.model_dump() for a in request.answers],
+        ),
+        prompts.PLACEMENT_EVAL_SCHEMA,
+        # A placement result should not depend on the evening it was taken.
+        temperature=0.1,
+    )
+
+    rated = {
+        str(a.get("item_id", "")).strip(): a
+        for a in payload.get("answers", [])
+    }
+
+    # Answered per requested item, not per returned row: a model that drops an
+    # item must not make that item vanish from the learner's evidence.
+    ratings = []
+    for answer in request.answers:
+        row = rated.get(answer.item_id, {})
+        ratings.append(PlacementAnswerRating(
+            item_id=answer.item_id,
+            estimated_level=str(row.get("estimated_level") or answer.level),
+            score=max(0.0, min(1.0, float(row.get("score") or 0))),
+            evidence=str(row.get("evidence") or ""),
+        ))
+
+    log.info(
+        "placement eval skill=%s items=%d in %.2fs",
+        request.skill, len(ratings), time.monotonic() - started,
+    )
+
+    return PlacementEvalResponse(
+        answers=ratings,
+        overall_level=str(payload.get("overall_level") or ""),
+        summary=str(payload.get("summary") or ""),
+        prompt_version=prompts.PLACEMENT_EVAL_PROMPT_VERSION,
+        model=SETTINGS.gemini_model,
+        tokens=payload.get("_tokens", 0),
     )

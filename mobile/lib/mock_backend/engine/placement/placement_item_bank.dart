@@ -24,6 +24,16 @@ class PlacementItemBank {
     SkillType.writing,
   ];
 
+  /// One item by id, for reading an answer back after the fact.
+  static BankItem? byId(String id) {
+    for (final skill in SkillType.values) {
+      for (final item in forSkill(skill)) {
+        if (item.id == id) return item;
+      }
+    }
+    return null;
+  }
+
   static List<BankItem> forSkill(SkillType skill) => switch (skill) {
         SkillType.reading => reading,
         SkillType.listening => listening,
@@ -293,7 +303,7 @@ class PlacementItemBank {
       id: 'sp_a1_1',
       skill: SkillType.speaking,
       level: CefrLevel.a1,
-      type: PlacementItemType.freeText,
+      type: PlacementItemType.spoken,
       prompt: 'Introduce yourself in one or two sentences. '
           'Say your name and where you live.',
       expectedWords: 8,
@@ -302,7 +312,7 @@ class PlacementItemBank {
       id: 'sp_a2_1',
       skill: SkillType.speaking,
       level: CefrLevel.a2,
-      type: PlacementItemType.freeText,
+      type: PlacementItemType.spoken,
       prompt: 'Describe what you did yesterday. Use two or three sentences.',
       expectedWords: 16,
     ),
@@ -310,7 +320,7 @@ class PlacementItemBank {
       id: 'sp_b1_1',
       skill: SkillType.speaking,
       level: CefrLevel.b1,
-      type: PlacementItemType.freeText,
+      type: PlacementItemType.spoken,
       prompt: 'Someone asks: "Could you explain what you are studying and why '
           'you chose it?" Answer them.',
       expectedWords: 28,
@@ -319,7 +329,7 @@ class PlacementItemBank {
       id: 'sp_b2_1',
       skill: SkillType.speaking,
       level: CefrLevel.b2,
-      type: PlacementItemType.freeText,
+      type: PlacementItemType.spoken,
       prompt: 'Some people learn better alone, others in a group. Give your '
           'view and one reason for it.',
       expectedWords: 40,
@@ -328,7 +338,7 @@ class PlacementItemBank {
       id: 'sp_c1_1',
       skill: SkillType.speaking,
       level: CefrLevel.c1,
-      type: PlacementItemType.freeText,
+      type: PlacementItemType.spoken,
       prompt: 'A colleague proposes a plan you partly disagree with. Explain '
           'which part you accept, which you do not, and why.',
       expectedWords: 55,
@@ -473,5 +483,10 @@ class BankItem {
   /// by the offline fallback scorer, never by the AI evaluator.
   final int expectedWords;
 
-  bool get isFreeText => type == PlacementItemType.freeText;
+  /// Anything the learner produces rather than selects — typed or spoken.
+  ///
+  /// Spoken items have no options, so treating them as multiple choice makes
+  /// every "pick a wrong option" path throw.
+  bool get isFreeText =>
+      type == PlacementItemType.freeText || type == PlacementItemType.spoken;
 }

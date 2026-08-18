@@ -15,6 +15,8 @@ namespace WordOs.Api.Tests;
 public class PlacementApiTests(PostgresFixture db) : IAsyncLifetime
 {
     private ApiFactory? _factory;
+
+    private StubAiContentService Ai => _factory!.Ai;
     private HttpClient? _client;
 
     public Task InitializeAsync()
@@ -224,7 +226,12 @@ public class PlacementApiTests(PostgresFixture db) : IAsyncLifetime
         Assert.InRange(asked, 12, 22);
 
         var levels = result.GetProperty("levels").EnumerateArray().ToList();
-        Assert.Equal(5, levels.Count);
+
+        // Four, not five: Spelling is measured but is not a primary skill the
+        // learner is shown (§13, §21).
+        Assert.Equal(4, levels.Count);
+        Assert.DoesNotContain(levels,
+            l => l.GetProperty("skill").GetString() == "SPELLING");
 
         // A strong run places at B1 or above on every levelled skill.
         foreach (var level in levels.Where(
@@ -267,6 +274,54 @@ public class PlacementApiTests(PostgresFixture db) : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Every_answer_is_stored_as_evidence_not_just_the_final_level()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+
+        var (result, _) = await PlayAsync(_ => true);
+
+        await using var context = db.CreateContext();
+        var session = await context.PlacementSessions
+            .Include(p => p.Answers)
+            .Where(p => p.UserId == userId)
+            .OrderByDescending(p => p.StartedAt)
+            .FirstAsync();
+
+        // §27: a historical result stays interpretable only if the instrument
+        // that produced it is recorded alongside it.
+        Assert.Equal(PlacementVersion.Current, session.TestVersion);
+        Assert.Equal(session.TestVersion,
+            result.GetProperty("testVersion").GetInt32());
+
+        // §26: the underlying evidence, not only the level.
+        Assert.NotEmpty(session.Answers);
+        Assert.All(session.Answers, a =>
+        {
+            Assert.NotEqual(string.Empty, a.ItemId);
+            // The band the item was authored for — a correct answer means
+            // nothing without knowing how hard the question was.
+            Assert.True(a.Level.Rank() >= CefrLevel.A1.Rank());
+        });
+
+        // What the learner actually produced, kept for the analytics layer.
+        var produced = session.Answers.Where(a => a.RawAnswer != null).ToList();
+        Assert.NotEmpty(produced);
+
+        // Grammar is recorded as grammar, even though it scores into Writing —
+        // otherwise the evidence could never be re-examined as grammar.
+        var grammar = session.Answers
+            .Where(a => a.Domain == PlacementDomain.Grammar)
+            .ToList();
+
+        if (grammar.Count > 0)
+        {
+            Assert.All(grammar,
+                a => Assert.Equal(SkillType.Speaking, a.AlsoEvidenceFor));
+        }
+    }
+
+    [SkippableFact]
     public async Task Spelling_is_measured_but_never_levelled()
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);
@@ -274,11 +329,9 @@ public class PlacementApiTests(PostgresFixture db) : IAsyncLifetime
 
         var (result, _) = await PlayAsync(_ => true);
 
-        var spelling = result.GetProperty("levels").EnumerateArray()
-            .Single(l => l.GetProperty("skill").GetString() == "SPELLING");
-
-        Assert.Equal(JsonValueKind.Null,
-            spelling.GetProperty("systemAssessedLevel").ValueKind);
+        // Measured, stored, and used — but never presented as a fifth level.
+        Assert.DoesNotContain(result.GetProperty("levels").EnumerateArray(),
+            l => l.GetProperty("skill").GetString() == "SPELLING");
 
         var diagnostic = result.GetProperty("spelling");
         Assert.True(diagnostic.GetProperty("itemsAnswered").GetInt32() > 0);
@@ -314,8 +367,14 @@ public class PlacementApiTests(PostgresFixture db) : IAsyncLifetime
         var flip = false;
         var (result, _) = await PlayAsync(_ => flip = !flip);
 
+        // The exact words are copy and will change; what must not change is
+        // that a shaky result admits it rather than presenting itself as final.
         var summary = result.GetProperty("summary").GetString()!;
-        Assert.Contains("provisional", summary);
+        Assert.True(
+            summary.Contains("rough", StringComparison.OrdinalIgnoreCase) ||
+            summary.Contains("settle", StringComparison.OrdinalIgnoreCase) ||
+            summary.Contains("provisional", StringComparison.OrdinalIgnoreCase),
+            $"a low-confidence result should say so — got: {summary}");
 
         // A level is still assigned — we never refuse to place a learner.
         Assert.All(result.GetProperty("levels").EnumerateArray()
@@ -407,5 +466,147 @@ public class PlacementApiTests(PostgresFixture db) : IAsyncLifetime
             new { itemId, answer = new string('a', 10_000) });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task A_spoken_item_is_marked_spoken_so_the_client_shows_a_microphone()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // Walk the whole test collecting what each item claimed to be.
+        var start = await Client.PostAsync("/api/placement/start", null);
+        start.EnsureSuccessStatusCode();
+        var step = await start.Content.ReadFromJsonAsync<JsonElement>();
+        var sessionId = step.GetProperty("sessionId").GetGuid();
+
+        var types = new List<(string Skill, string Type)>();
+        var guard = 0;
+
+        while (!step.GetProperty("isComplete").GetBoolean() && guard++ < 80)
+        {
+            var item = step.GetProperty("item");
+            types.Add((item.GetProperty("skill").GetString()!,
+                       item.GetProperty("type").GetString()!));
+
+            var options = item.GetProperty("options").EnumerateArray().ToList();
+            var answer = options.Count > 0
+                ? options[0].GetString()!
+                : "I usually study in the evening because it is quieter then.";
+
+            var response = await Client.PostAsJsonAsync(
+                $"/api/placement/{sessionId}/answer",
+                new { itemId = item.GetProperty("id").GetString(), answer });
+            response.EnsureSuccessStatusCode();
+            step = await response.Content.ReadFromJsonAsync<JsonElement>();
+        }
+
+        var speaking = types.Where(t => t.Skill == "SPEAKING").ToList();
+        Assert.NotEmpty(speaking);
+
+        // Every Speaking item must say SPOKEN. Reported as FREE_TEXT the client
+        // renders a text box, which measures writing and files it under
+        // Speaking — the one thing a placement test must never do (§17).
+        Assert.All(speaking, t => Assert.Equal("SPOKEN", t.Type));
+
+        // And the distinction is real: Writing still asks for text.
+        Assert.DoesNotContain(types, t => t.Skill == "WRITING" && t.Type == "SPOKEN");
+    }
+
+    // ── Who scores what ──────────────────────────────────────────────────────
+
+    [SkippableFact]
+    public async Task Speaking_and_writing_are_scored_by_the_AI_and_nothing_else_is()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+
+        await PlayAsync(_ => true);
+
+        // One call per productive skill, at the end — not one per answer
+        // during the test, which would put a round-trip between every question
+        // and the next.
+        Assert.Equal(2, Ai.PlacementEvaluations);
+
+        await using var context = db.CreateContext();
+        var answers = await context.PlacementAnswers
+            .Where(a => context.PlacementSessions
+                .Any(s => s.Id == a.SessionId && s.UserId == userId))
+            .ToListAsync();
+
+        // Reading and Listening have an answer key, so they are matched against
+        // it: a correct answer is exactly 1, and no model was consulted.
+        Assert.All(
+            answers.Where(a => a.Skill is SkillType.Reading or SkillType.Listening),
+            a =>
+            {
+                Assert.True(a.Score is 0 or 1, $"{a.ItemId} scored {a.Score}");
+                Assert.Null(a.AiEstimatedLevel);
+            });
+
+        // Speaking and Writing have no key *when they are produced language*,
+        // and there the AI's rating is what stands. Grammar items are filed
+        // under Writing but are multiple-choice — they have a key, so they are
+        // matched against it like any other keyed item and never sent.
+        Assert.All(
+            answers.Where(a => a.Skill is SkillType.Speaking or SkillType.Writing
+                               && a.Domain != PlacementDomain.Grammar),
+            a => Assert.NotNull(a.AiEstimatedLevel));
+
+        Assert.All(
+            answers.Where(a => a.Domain == PlacementDomain.Grammar),
+            a => Assert.Null(a.AiEstimatedLevel));
+    }
+
+    [SkippableFact]
+    public async Task The_AIs_rating_moves_the_productive_bands()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        // The same learner, the same substantial answers, the same correct
+        // multiple-choice — only the model's opinion of the produced language
+        // differs. Whatever else feeds these bands (grammar items are evidence
+        // for both), the AI's rating has to be able to move them.
+        await SignInAsync();
+        Ai.PlacementScore = 1;
+        var (strong, _) = await PlayAsync(_ => true);
+
+        await SignInAsync();
+        Ai.PlacementScore = 0;
+        var (weak, _) = await PlayAsync(_ => true);
+
+        foreach (var skill in new[] { "SPEAKING", "WRITING" })
+        {
+            var high = BandOf(strong, skill);
+            var low = BandOf(weak, skill);
+
+            Assert.True(low.Rank() < high.Rank(),
+                $"{skill}: rating every produced answer 0 placed at {low}, "
+                + $"rating them 1 placed at {high} — the AI's judgement is not "
+                + "reaching the band");
+        }
+    }
+
+    private static CefrLevel BandOf(JsonElement result, string skill) =>
+        CefrLevelExtensions.TryFromWire(
+            result.GetProperty("levels").EnumerateArray()
+                .First(l => l.GetProperty("skill").GetString() == skill)
+                .GetProperty("systemAssessedLevel").GetString())!.Value;
+
+    [SkippableFact]
+    public async Task A_placement_still_finishes_when_the_AI_is_down()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        Ai.Fail = true;
+
+        var (result, _) = await PlayAsync(_ => true);
+
+        // Degraded, not broken: the offline scores recorded during the test
+        // stand, and the learner is still placed rather than stranded on the
+        // last question of onboarding.
+        Assert.All(result.GetProperty("levels").EnumerateArray(),
+            l => Assert.NotEqual(JsonValueKind.Null,
+                l.GetProperty("systemAssessedLevel").ValueKind));
     }
 }

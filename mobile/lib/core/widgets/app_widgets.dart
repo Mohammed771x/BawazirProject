@@ -323,25 +323,75 @@ class StepProgressBar extends StatelessWidget {
   }
 }
 
+/// English content, laid out left-to-right whatever the interface language.
+///
+/// The learning content is English; the interface may be Arabic. Without this
+/// the passage inherits the app's RTL direction and every line is right-aligned
+/// and read from the wrong end — the text is still legible, and still wrong.
+///
+/// Wrap English *content*: passages, words, example sentences. Not interface
+/// copy, which should follow the interface.
+class EnglishText extends StatelessWidget {
+  const EnglishText(this.data, {super.key, this.style, this.textAlign});
+
+  final String data;
+  final TextStyle? style;
+  final TextAlign? textAlign;
+
+  @override
+  Widget build(BuildContext context) => Directionality(
+        textDirection: TextDirection.ltr,
+        child: Text(data, style: style, textAlign: textAlign ?? TextAlign.left),
+      );
+}
+
 class LevelBadge extends StatelessWidget {
-  const LevelBadge({super.key, required this.label, this.color});
+  const LevelBadge({
+    super.key,
+    required this.label,
+    this.color,
+    this.size,
+    this.trailing,
+  });
 
   final String label;
   final Color? color;
 
+  /// Font size. The default suits a badge beside body text; a badge that is
+  /// itself a control needs to be readable at a glance.
+  final double? size;
+
+  /// An icon after the label — a chevron, when the badge can be tapped.
+  final IconData? trailing;
+
   @override
   Widget build(BuildContext context) {
     final c = color ?? context.colors.primary;
+    final style = context.text.labelSmall
+        ?.copyWith(color: c, fontWeight: FontWeight.w700, fontSize: size);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: EdgeInsets.symmetric(
+        horizontal: trailing == null ? 8 : 10,
+        vertical: size == null ? 3 : 5,
+      ),
       decoration: BoxDecoration(
         color: c.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(999),
       ),
-      child: Text(
-        label,
-        style: context.text.labelSmall
-            ?.copyWith(color: c, fontWeight: FontWeight.w700),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // The band is always Latin, whatever the interface language.
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: Text(label, style: style),
+          ),
+          if (trailing != null) ...[
+            const SizedBox(width: 2),
+            Icon(trailing, size: (size ?? 12) + 4, color: c),
+          ],
+        ],
       ),
     );
   }

@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/router.dart';
+
 import '../../core/l10n/app_strings.dart';
 import '../../core/theme/app_tokens.dart';
+import 'country_code_field.dart';
 import 'auth_scaffold.dart';
 import 'session_controller.dart';
 
@@ -19,12 +22,18 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
   final _name = TextEditingController();
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _phone = TextEditingController();
+
+  // Yemen first: it is where most current learners are, and a sensible default
+  // beats an empty selector.
+  CallingCode _country = kCallingCodes.first;
 
   @override
   void dispose() {
     _name.dispose();
     _email.dispose();
     _password.dispose();
+    _phone.dispose();
     super.dispose();
   }
 
@@ -34,6 +43,8 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
           _email.text.trim(),
           _password.text,
           _name.text.trim(),
+          phoneCountryCode: _country.dialCode,
+          phoneNumber: _phone.text.trim(),
         );
   }
 
@@ -69,6 +80,14 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 ),
                 validator: (v) =>
                     (v == null || !v.contains('@')) ? s.emailRequired : null,
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              CountryCodeField(
+                selected: _country,
+                onCountryChanged: (c) => setState(() => _country = c),
+                controller: _phone,
+                label: s.phoneNumber,
+                arabic: s.locale.languageCode == 'ar',
               ),
               const SizedBox(height: AppSpacing.sm),
               TextFormField(
@@ -121,7 +140,16 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
             TextButton(
               onPressed: () {
                 ref.read(sessionProvider.notifier).clearError();
-                if (context.canPop()) context.pop();
+                // Popping alone is not enough: a learner who arrived from the
+                // product tour has nothing behind them, and the link silently
+                // did nothing at all. Going to the route always works, whether
+                // this screen was pushed or landed on directly.
+                // `go`, not `pop`. Sign-in and register are peers, not a
+                // screen and its child: popping only works when register was
+                // pushed from login, and did nothing at all for a learner who
+                // arrived from the product tour. Replacing the location works
+                // from either.
+                context.go(Routes.login);
               },
               child: Text(s.signIn),
             ),

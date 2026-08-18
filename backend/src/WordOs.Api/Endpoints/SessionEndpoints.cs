@@ -8,7 +8,9 @@ using WordOs.Application.Words;
 using WordOs.Domain.Common;
 using WordOs.Domain.Levels;
 using WordOs.Domain.Sessions;
+using WordOs.Domain.Users;
 using WordOs.Domain.Words;
+using WordOs.Infrastructure.Ai;
 using WordOs.Infrastructure.Persistence;
 
 namespace WordOs.Api.Endpoints;
@@ -58,6 +60,9 @@ public static class SessionEndpoints
             .RequireRateLimiting(RateLimitPolicies.Expensive);
         group.MapPost("/{id:guid}/speaking/turn", SpeakingAsync)
             .RequireRateLimiting(RateLimitPolicies.Expensive);
+        group.MapPost("/{id:guid}/warmup/answer", WarmupAnswerAsync);
+        group.MapPost("/{id:guid}/level", ChangeLevelAsync)
+            .RequireRateLimiting(RateLimitPolicies.Expensive);
         group.MapPost("/{id:guid}/complete", CompleteAsync);
         group.MapPost("/{id:guid}/abandon", AbandonAsync);
         group.MapGet("/{id:guid}", ResumeAsync);
@@ -65,10 +70,251 @@ public static class SessionEndpoints
         return app;
     }
 
+    public sealed record ChangeLevelRequest(
+        [property: Required, MaxLength(8)] string Level);
+
+    /// <summary>One rung of the spelling hint ladder, on the wire.</summary>
+    private sealed record HintWire(string Kind, string Text);
+
+    /// <summary>One glossary row on the wire.</summary>
+    private sealed record GlossaryWire(
+        string Word,
+        string Meaning,
+        string PartOfSpeech);
+
+    private static string? GlossaryJson(GeneratedContent content) =>
+        content.Glossary is null || content.Glossary.Count == 0
+            ? null
+            : JsonSerializer.Serialize(content.Glossary
+                .Select(g => new GlossaryWire(g.Word, g.Meaning, g.PartOfSpeech))
+                .ToList());
+
+    public sealed record WarmupAnswerRequest(
+        [property: Required] Guid WordId,
+        [property: Required, MaxLength(256)] string Answer);
+
+    /// <summary>
+    /// Marks one warm-up answer. Records nothing.
+    /// </summary>
+    /// <remarks>
+    /// The marking is here because the client must never hold the answer key —
+    /// the same reason every other answer is marked here. What is different is
+    /// that nothing is written: no attempt, no event, no level. A learner who
+    /// misses a word meets it again at the end of the loop and keeps going
+    /// until they have them all, and none of it reaches their record.
+    ///
+    /// It is a warm-up, not a test. Its only job is that nobody walks into a
+    /// conversation about words they cannot recall.
+    /// </remarks>
+    private static async Task<IResult> WarmupAnswerAsync(
+        Guid id,
+        WarmupAnswerRequest request,
+        ClaimsPrincipal principal,
+        WordOsDbContext db,
+        CancellationToken ct)
+    {
+        if (!MiniValidator.TryValidate(request, out var errors))
+            return Results.ValidationProblem(errors);
+
+        var (session, error) = await LoadSessionAsync(id, principal, db, ct);
+        if (error is not null) return error;
+
+        if (session!.Skill != SkillType.Speaking)
+        {
+            return Problems.BadRequest(
+                "NO_WARMUP", "Only a speaking session has a warm-up.");
+        }
+
+        // Scoped to the caller's own word, from the session that belongs to
+        // them — a word id in a request is never trusted on its own.
+        var word = await db.Words.FirstOrDefaultAsync(
+            w => w.Id == request.WordId && w.UserId == session.UserId, ct);
+
+        if (word is null)
+            return Problems.NotFound("WORD_NOT_FOUND", "Word not found.");
+
+        return Results.Ok(new
+        {
+            wordId = word.Id,
+            isCorrect = string.Equals(
+                request.Answer.Trim(), word.Meaning.Trim(), StringComparison.Ordinal),
+            correctAnswer = word.Meaning,
+        });
+    }
+
+    // ── Changing the level of a passage ──────────────────────────────────────
+
+    /// <summary>
+    /// Re-tells this session's passage at a different CEFR level.
+    /// </summary>
+    /// <remarks>
+    /// The same story in different language, not a new one on a similar topic
+    /// — a learner who says "this is too hard" has already invested in this
+    /// text, and swapping the story reads as though the app ignored them.
+    ///
+    /// Only before the questions begin. Afterwards the items they cleared would
+    /// be about sentences that no longer exist, and their answers would vanish.
+    ///
+    /// The choice sticks. It is the same setting the learner can change in
+    /// Settings, so changing it here writes it there too — a preference that
+    /// silently reverted next session would be worse than no control at all,
+    /// and a learner who has told us twice that B2 is too hard should not have
+    /// to keep saying it.
+    ///
+    /// What it does <b>not</b> touch is the validated level, which is earned
+    /// from performance and is the only thing allowed to drive progression and
+    /// archiving (rule R6). A level a learner sets by tapping is a preference,
+    /// not evidence.
+    /// </remarks>
+    private static async Task<IResult> ChangeLevelAsync(
+        Guid id,
+        ChangeLevelRequest request,
+        ClaimsPrincipal principal,
+        WordOsDbContext db,
+        IAiContentService ai,
+        WordOsConfiguration config,
+        TimeProvider clock,
+        CancellationToken ct)
+    {
+        if (!MiniValidator.TryValidate(request, out var errors))
+            return Results.ValidationProblem(errors);
+
+        var (session, error) = await LoadSessionAsync(id, principal, db, ct);
+        if (error is not null) return error;
+
+        if (session!.Skill is not (SkillType.Reading or SkillType.Listening
+            or SkillType.Speaking))
+        {
+            return Problems.BadRequest(
+                "LEVEL_NOT_ADJUSTABLE",
+                "This session has no level to change.");
+        }
+
+        // A conversation has no passage to re-tell: the level is what the next
+        // turn is generated at, so changing it takes effect on the very next
+        // thing the tutor says. Reading and Listening have a text in front of
+        // the learner, so theirs is locked once the questions begin.
+        var isConversation = session.Skill == SkillType.Speaking;
+
+        if (!isConversation && !session.CanChangeLevel)
+        {
+            return Problems.Conflict(
+                "SESSION_STARTED",
+                "The level cannot change once the questions have begun.");
+        }
+
+        var level = CefrLevelExtensions.TryFromWire(request.Level);
+        if (level is null)
+            return Problems.BadRequest("INVALID_LEVEL", "Unknown level.");
+
+        if (!isConversation && string.IsNullOrWhiteSpace(session.ContentText))
+            return Problems.Conflict("NO_CONTENT", "This session has no passage.");
+
+        var wordIds = session.Items
+            .Where(i => i.WordId is not null)
+            .Select(i => i.WordId!.Value)
+            .Distinct()
+            .ToList();
+
+        var words = await db.Words
+            .Where(w => wordIds.Contains(w.Id))
+            .ToListAsync(ct);
+
+        // ── The conversation case: set the level, say nothing new ─────────
+        if (isConversation)
+        {
+            RecordLevelChoice(db, user: await db.Users
+                .Include(u => u.SkillLevels)
+                .FirstAsync(u => u.Id == session.UserId, ct),
+                skill: session.Skill, level: level.Value, now: clock.GetUtcNow());
+
+            session.SetLevel(level.Value);
+            await db.SaveChangesAsync(ct);
+
+            return Results.Ok(ToSessionResponse(session, await db.Words
+                .Where(w => w.UserId == session.UserId
+                            && w.State == WordState.Learning
+                            && w.CurrentSkill == session.Skill)
+                .ToListAsync(ct)));
+        }
+
+        GeneratedContent content;
+        try
+        {
+            content = await ai.RelevelContentAsync(new RelevelRequest(
+                session.ContentText!,
+                session.LevelUsed,
+                level.Value,
+                words.Select(w => new AiTargetWord(
+                    w.Text, w.Meaning, w.DefinitionEn, w.PartOfSpeech)).ToList(),
+                config.ComprehensionQuestionCount), ct);
+        }
+        catch (Exception e) when (e is AiServiceException or HttpRequestException
+                                      or TaskCanceledException)
+        {
+            // The passage they are reading stays exactly as it is. A fallback
+            // re-telling would be worse than the text they asked to improve.
+            return Problems.Unavailable(
+                "RELEVEL_UNAVAILABLE",
+                "The passage could not be rewritten just now. Try again.");
+        }
+
+        RecordLevelChoice(db, user: await db.Users
+            .Include(u => u.SkillLevels)
+            .FirstAsync(u => u.Id == session.UserId, ct),
+            skill: session.Skill, level: level.Value, now: clock.GetUtcNow());
+
+        session.ReplaceContent(
+            level.Value, content.Text, GlossaryJson(content));
+
+        SessionContentBuilder.BuildComprehensionItems(
+            session, content, words,
+            session.Skill == SkillType.Listening, Random.Shared);
+
+        session.RecordAiCall(
+            content.PromptVersion, content.Model, content.Tokens);
+
+        await db.SaveChangesAsync(ct);
+
+        return Results.Ok(ToSessionResponse(session, words));
+    }
+
+    /// <summary>
+    /// Writes the learner's chosen difficulty where Settings reads it.
+    /// </summary>
+    /// <remarks>
+    /// The same field the Settings control writes, because it is the same
+    /// decision: a preference that reverted next session would be worse than
+    /// no control at all. It moves <b>only</b> the user-selected level; the
+    /// validated one is earned from performance and is the only thing allowed
+    /// to drive progression and archiving (rule R6).
+    ///
+    /// Spelling carries no band of its own (ADR-008) and is left alone.
+    /// </remarks>
+    private static void RecordLevelChoice(
+        WordOsDbContext db,
+        User user,
+        SkillType skill,
+        CefrLevel level,
+        DateTimeOffset now)
+    {
+        var skillLevel = user.LevelFor(skill);
+        if (!skillLevel.CarriesCefrLevel) return;
+
+        var previous = skillLevel.UserSelectedLevel;
+        skillLevel.SetUserSelectedLevel(level);
+
+        db.LevelChanges.Add(LevelChangeRecord.Create(
+            user.Id, skill, previous, level,
+            LevelChangeType.UserManualChange, now,
+            reason: "changed during a session"));
+    }
+
     // ── Start ────────────────────────────────────────────────────────────────
 
     private static async Task<IResult> StartAsync(
         string skill,
+        bool? practice,
         ClaimsPrincipal principal,
         WordOsDbContext db,
         IAiContentService ai,
@@ -132,7 +378,15 @@ public static class SessionEndpoints
             .Take(level.DailyTargetWords)
             .ToList();
 
-        if (due.Count == 0)
+        // Practice keeps a learner reading on a day when the pipeline is empty
+        // (Part 2 §5). It is offered only for the two skills that make sense
+        // without vocabulary — a speaking or spelling session with no words is
+        // not an activity, it is an empty screen — and it is always the
+        // learner's choice, never a silent substitution for what they asked for.
+        var isPractice = practice == true
+                         && skillType is SkillType.Reading or SkillType.Listening;
+
+        if (due.Count == 0 && !isPractice)
         {
             return Problems.Conflict(
                 "NO_WORDS_DUE", "No words are due for this skill yet.");
@@ -145,7 +399,8 @@ public static class SessionEndpoints
                            ?? user.LevelFor(SkillType.Reading).UserSelectedLevel
                            ?? CefrLevel.B1;
 
-        var session = SkillSession.Start(userId.Value, skillType, contentLevel, now);
+        var session = SkillSession.Start(
+            userId.Value, skillType, contentLevel, now, isPractice);
         var random = Random.Shared;
 
         // Active vocabulary to re-encounter, least-met first (rule R8). Loaded
@@ -174,7 +429,8 @@ public static class SessionEndpoints
 
                 session.SetContent(
                     content.Text, content.PromptVersion, content.Model,
-                    content.Tokens, content.FromFallback);
+                    content.Tokens, content.FromFallback,
+                    GlossaryJson(content));
 
                 SessionContentBuilder.BuildComprehensionItems(
                     session, content, due, listening, random);
@@ -189,9 +445,34 @@ public static class SessionEndpoints
                 break;
 
             case SkillType.Spelling:
+            {
+                // Synonyms come out of the lexicon we already have. A WordNet
+                // gloss belongs to the synset, not the word, so every lemma
+                // sharing a definition *is* a synonym — "bottom", "rear" and
+                // "backside" carry one identical gloss between them. A B1 clue
+                // uses one instead of a definition written above the learner's
+                // level (Part 2 §39).
+                var definitions = due.Select(w => w.DefinitionEn).ToList();
+                var lemmas = await db.LexiconEntries
+                    .Where(l => definitions.Contains(l.DefinitionEn))
+                    .OrderBy(l => l.FrequencyRank)
+                    .Select(l => new { l.DefinitionEn, l.PartOfSpeech, l.Text })
+                    .ToListAsync(ct);
+
+                var synonyms = due
+                    .Select(w => (w.Id, Synonym: lemmas.FirstOrDefault(l =>
+                        l.DefinitionEn == w.DefinitionEn &&
+                        l.PartOfSpeech == w.PartOfSpeech &&
+                        !string.Equals(l.Text, w.Text,
+                            StringComparison.OrdinalIgnoreCase))?.Text))
+                    .Where(x => x.Synonym is not null && x.Synonym.Length > 0)
+                    .ToDictionary(x => x.Id, x => x.Synonym!);
+
                 SessionContentBuilder.BuildSpellingItems(
-                    session, due, contentLevel, level.SpellingSupportMode, random);
+                    session, due, contentLevel, level.SpellingSupportMode,
+                    random, synonyms);
                 break;
+            }
 
             case SkillType.Speaking:
             {
@@ -218,6 +499,10 @@ public static class SessionEndpoints
         }
 
         db.SkillSessions.Add(session);
+        db.ActivityEvents.Add(ActivityEvent.Record(
+            userId.Value,
+            isPractice ? ActivityType.PracticeStarted : ActivityType.SessionStarted,
+            now, skillType, session.Id));
 
         foreach (var word in due) word.RecordSkillStarted(skillType, now);
 
@@ -296,6 +581,7 @@ public static class SessionEndpoints
         Guid id,
         AnswerRequest request,
         ClaimsPrincipal principal,
+        HttpRequest http,
         WordOsDbContext db,
         IAiContentService ai,
         WordOsConfiguration config,
@@ -325,7 +611,10 @@ public static class SessionEndpoints
 
         var observation = await ai.EvaluateWritingAsync(new WritingEvaluationRequest(
             word.Text, word.Meaning, word.DefinitionEn,
-            session.LevelUsed, sentence), ct);
+            session.LevelUsed, sentence,
+            // The feedback is the app talking to the learner, so it is written
+            // in the language they read the app in (ADR-035).
+            LearnerLanguage.From(http)), ct);
 
         if (observation.FromFallback) session.MarkFallbackUsed();
         session.RecordAiCall(
@@ -450,6 +739,7 @@ public static class SessionEndpoints
     private static async Task<IResult> CompleteAsync(
         Guid id,
         ClaimsPrincipal principal,
+        HttpRequest http,
         WordOsDbContext db,
         IAiContentService ai,
         LevelEngine levels,
@@ -505,7 +795,8 @@ public static class SessionEndpoints
                             .ToList(),
                         transcript
                             .Select(t => new SpeakingTranscriptTurn(t.FromAi, t.Text))
-                            .ToList()),
+                            .ToList(),
+                        LearnerLanguage.From(http)),
                     ct);
 
                 if (evaluation.FromFallback) session.MarkFallbackUsed();
@@ -571,11 +862,17 @@ public static class SessionEndpoints
             .FirstAsync(u => u.Id == session.UserId, ct);
 
         var level = user.LevelFor(session.Skill);
-        level.RecordSession(accuracy);
+
+        // A practice session is evidence of nothing (Part 2 §5). It owns no
+        // words, so no word can pass or fail; and it must not reach the level
+        // engine either, because a promotion archives Active vocabulary — which
+        // would let an activity the learner chose *instead of* their pipeline
+        // quietly change it.
+        if (!session.IsPractice) level.RecordSession(accuracy);
 
         // With fresh evidence in hand, ask whether the validated level moves —
         // and if it rose, whether any Active words have been outgrown.
-        var decision = levels.Evaluate(level);
+        var decision = session.IsPractice ? null : levels.Evaluate(level);
         if (decision is not null)
         {
             levels.Apply(level, decision);
@@ -600,12 +897,19 @@ public static class SessionEndpoints
         }
 
         session.Complete(now);
+        db.ActivityEvents.Add(ActivityEvent.Record(
+            session.UserId,
+            session.IsPractice
+                ? ActivityType.PracticeCompleted
+                : ActivityType.SessionCompleted,
+            now, session.Skill, session.Id));
         await db.SaveChangesAsync(ct);
 
         return Results.Ok(new
         {
             sessionId = session.Id,
             skill = session.Skill.ToWire(),
+            isPractice = session.IsPractice,
             comprehension = new
             {
                 correct = comprehension.Count(i => i.FirstAttemptCorrect == true),
@@ -816,11 +1120,40 @@ public static class SessionEndpoints
         id = session.Id,
         skill = session.Skill.ToWire(),
         levelUsed = session.LevelUsed.ToWire(),
+        // The client says so on screen: a learner should never be unsure
+        // whether what they just did counted (§5).
+        isPractice = session.IsPractice,
         content = session.ContentText is null ? null : new
         {
             text = session.ContentText,
             // Listening hides the transcript until the test is over.
             revealTextAfterTest = session.Skill == SkillType.Listening,
+            // Every word of the passage with the meaning it carries here, so
+            // a tap answers instantly and answers about *this* sentence.
+            glossary = session.GlossaryJson is null
+                ? null
+                : JsonSerializer.Deserialize<List<GlossaryWire>>(
+                    session.GlossaryJson),
+            // Whether the learner may still re-tell this passage at another
+            // level: only before they have answered anything.
+            canChangeLevel = session.CanChangeLevel,
+            // Where the session's own words sit inside the generated text, so
+            // the client can mark them without searching for them itself
+            // (Part 2 §16, rule R1). Ordered and non-overlapping, because the
+            // renderer walks them in one pass.
+            targetSpans = words
+                .SelectMany(w => ActiveWordReuseDetector
+                    .Locate(session.ContentText, w.Text)
+                    .Select(span => new
+                    {
+                        wordId = w.Id,
+                        start = span.Start,
+                        // Length, not an end offset — the wire contract and the
+                        // client model have always spoken in lengths.
+                        length = span.End - span.Start,
+                    }))
+                .OrderBy(s => s.start)
+                .ToList(),
         },
         targetWords = words.Select(w => new
         {
@@ -828,12 +1161,32 @@ public static class SessionEndpoints
             text = w.Text,
             meaning = w.Meaning,
         }).ToList(),
+        // The warm-up Speaking opens with: each word, four meanings, shuffled
+        // here (rule R7). The right answer is deliberately absent — the client
+        // asks, it does not mark.
+        //
+        // Empty when the session has no words, which is the whole of §7: a
+        // learner with nothing due walks straight into the conversation.
+        warmup = session.Skill != SkillType.Speaking
+            ? null
+            : SessionContentBuilder.BuildWarmup(words, Random.Shared)
+                .Select(w => new
+                {
+                    wordId = w.WordId,
+                    text = w.Text,
+                    options = w.Options,
+                })
+                .ToList(),
         items = session.Items.Select(i => new
         {
             id = i.Id,
             type = i.Type.ToWire(),
             wordId = i.WordId,
             prompt = i.Prompt,
+            // The instruction as a key, so the client can say it in the
+            // learner's own language. Null for anything written for this
+            // session — content is not translated (ADR-035).
+            promptKey = i.PromptKey?.ToWire(),
             // Already shuffled server-side (rule R7). The correct answer is
             // deliberately absent.
             options = JsonSerializer.Deserialize<List<string>>(i.OptionsJson),
@@ -843,11 +1196,16 @@ public static class SessionEndpoints
             audioText = i.AudioText,
             clue = i.Clue,
             clueKind = i.ClueKind?.ToWire(),
+            // The whole ladder, easiest last. The client reveals one rung per
+            // press; what each rung says was decided here, from the learner's
+            // level and what the lexicon holds (rule R1).
+            hints = i.HintsJson is null
+                ? null
+                : JsonSerializer.Deserialize<List<HintWire>>(i.HintsJson),
             letters = i.LettersJson is null
                 ? null
                 : JsonSerializer.Deserialize<List<string>>(i.LettersJson),
             inputMode = i.InputMode?.ToWire(),
-            hint = i.Hint,
         }).ToList(),
         conversation = session.TranscriptJson is null ? null : new
         {

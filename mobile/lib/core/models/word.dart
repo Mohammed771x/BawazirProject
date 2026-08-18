@@ -54,6 +54,37 @@ class WordCandidate {
       };
 }
 
+/// What a word tapped inside a passage turns out to be (Part 2 §17).
+///
+/// [matchedText] is the spelling the lexicon actually answered on, which is not
+/// always what was tapped: the passage says "researching", the entry says
+/// "research". Showing both is the difference between a definition and a
+/// non-sequitur.
+///
+/// An empty [senses] list is an ordinary answer, not a failure — proper nouns
+/// and numbers appear in generated text and simply have no entry.
+class WordDefinition {
+  const WordDefinition({
+    required this.query,
+    required this.matchedText,
+    required this.senses,
+  });
+
+  final String query;
+  final String? matchedText;
+  final List<WordCandidate> senses;
+
+  bool get isEmpty => senses.isEmpty;
+
+  factory WordDefinition.fromJson(Map<String, dynamic> json) => WordDefinition(
+        query: json['query'] as String? ?? '',
+        matchedText: json['matchedText'] as String?,
+        senses: (json['senses'] as List<dynamic>? ?? [])
+            .map((e) => WordCandidate.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
 class WordSkillState {
   const WordSkillState({
     required this.skill,
@@ -218,20 +249,35 @@ class WordDetail {
 }
 
 class WordPage {
-  const WordPage({required this.items, required this.total});
+  const WordPage({
+    required this.items,
+    required this.total,
+    this.page = 0,
+    this.hasMore = false,
+  });
 
   final List<Word> items;
+
+  /// How many words match, not how many are on this page — the count the
+  /// learner is shown.
   final int total;
+
+  final int page;
+  final bool hasMore;
 
   factory WordPage.fromJson(Map<String, dynamic> json) => WordPage(
         items: (json['items'] as List<dynamic>? ?? const [])
             .map((e) => Word.fromJson(e as Map<String, dynamic>))
             .toList(),
         total: (json['total'] as num?)?.toInt() ?? 0,
+        page: (json['page'] as num?)?.toInt() ?? 0,
+        hasMore: json['hasMore'] as bool? ?? false,
       );
 
   Map<String, dynamic> toJson() => {
         'items': items.map((e) => e.toJson()).toList(),
         'total': total,
+        'page': page,
+        'hasMore': hasMore,
       };
 }

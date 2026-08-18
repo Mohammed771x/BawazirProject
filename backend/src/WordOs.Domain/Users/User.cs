@@ -25,6 +25,23 @@ public class User
     public string DisplayName { get; private set; } = string.Empty;
 
     /// <summary>
+    /// The country calling code, digits only and without the plus — "967",
+    /// "966", "91".
+    /// </summary>
+    /// <remarks>
+    /// Stored apart from <see cref="PhoneNumber"/> rather than glued into one
+    /// string: the two answer different questions. The calling code says which
+    /// country a learner is in — which is a real analytics dimension and a real
+    /// formatting input — and recovering it from a concatenated string means
+    /// guessing where the prefix ends, which is ambiguous
+    /// (+1 vs +1-242, +7 vs +76).
+    /// </remarks>
+    public string? PhoneCountryCode { get; private set; }
+
+    /// <summary>The national number, digits only, without the calling code.</summary>
+    public string? PhoneNumber { get; private set; }
+
+    /// <summary>
     /// Set at seed time only. There is deliberately no client-reachable path to
     /// becoming an <see cref="UserRole.Owner"/> — registration always creates a
     /// <see cref="UserRole.User"/> (docs/07-SECURITY.md §3).
@@ -52,7 +69,9 @@ public class User
         string displayName,
         WordOsConfiguration config,
         DateTimeOffset now,
-        UserRole role = UserRole.User)
+        UserRole role = UserRole.User,
+        string? phoneCountryCode = null,
+        string? phoneNumber = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(email);
         ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
@@ -61,9 +80,12 @@ public class User
         {
             Email = email.Trim().ToLowerInvariant(),
             PasswordHash = passwordHash,
+            // Names are not restricted to Latin letters. "أحمد سعيد" is a name.
             DisplayName = string.IsNullOrWhiteSpace(displayName)
                 ? "Learner"
                 : displayName.Trim(),
+            PhoneCountryCode = Digits(phoneCountryCode),
+            PhoneNumber = Digits(phoneNumber),
             Role = role,
             CreatedAt = now,
         };
@@ -75,6 +97,17 @@ public class User
         }
 
         return user;
+    }
+
+    /// <summary>
+    /// Keeps only the digits, so "+967", "967" and "(967)" all store the same
+    /// thing and a lookup by country code is a plain equality test.
+    /// </summary>
+    private static string? Digits(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var digits = new string(value.Where(char.IsDigit).ToArray());
+        return digits.Length == 0 ? null : digits;
     }
 
     public SkillLevel LevelFor(SkillType skill) =>

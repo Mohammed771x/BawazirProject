@@ -133,14 +133,22 @@ void main() {
 
     // ── Spelling: the same clue and input mode ───────────────────────────
     await openSkill(tester, 'Spelling');
-    final clue = visibleText(tester).firstWhere(hasArabic, orElse: () => '');
+    // The clue is the longest Arabic string on screen — the meaning, rather
+    // than a target-word chip that also renders in Arabic. Taking "the first
+    // Arabic text" made this flaky, because which element comes first is a
+    // layout detail rather than a property of the session.
+    final arabicBefore = visibleText(tester).where(hasArabic).toList();
+    expect(arabicBefore, isNotEmpty, reason: 'spelling shows an Arabic clue');
+
+    final clue = arabicBefore.reduce((a, b) => b.length > a.length ? b : a);
     final tilesBefore = liveLetterTiles(tester).evaluate().length;
 
     await relaunch(tester, store);
     await openSkill(tester, 'Spelling');
 
     expect(visibleText(tester).any((t) => t == clue), isTrue,
-        reason: 'the same spelling clue should come back');
+        reason: 'the same spelling clue should come back. '
+            'Before: $arabicBefore  After: ${visibleText(tester).where(hasArabic)}');
     expect(liveLetterTiles(tester).evaluate().length, equals(tilesBefore),
         reason: 'the same tiles, in the same shuffle — regenerating them would '
             'be a different task');

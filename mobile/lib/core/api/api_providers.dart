@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../mock_backend/mock_wordos_api.dart';
+import '../storage/preferences_providers.dart';
 import '../storage/token_store.dart';
 import 'http_wordos_api.dart';
 import 'wordos_api.dart';
@@ -43,12 +44,19 @@ class AppEnvironment {
   }
 
   /// A private-network address — `192.168.x.x`, `10.x.x.x`, `172.16–31.x.x`,
-  /// or a `.local` name.
+  /// `169.254.x.x`, or a `.local` name.
   ///
   /// Used **only** to allow a debug build on a physical device to reach a
   /// backend running on the developer's own Mac. A phone cannot reach the Mac's
   /// loopback address, so testing on real hardware would otherwise require
   /// either TLS on a development machine or turning the check off.
+  ///
+  /// `169.254/16` is link-local: the address a phone and a Mac give themselves
+  /// over the USB cable when there is no router between them. It is included
+  /// because it is the *narrowest* of these ranges — by definition it cannot be
+  /// routed off the physical link, so it reaches less far than a home network
+  /// does — and because a cable is the one path that works when the phone and
+  /// the Mac are not on the same Wi-Fi.
   bool get isPrivateNetwork {
     final host = Uri.tryParse(baseUrl)?.host.toLowerCase() ?? '';
     if (host.endsWith('.local')) return true;
@@ -62,6 +70,7 @@ class AppEnvironment {
       [10, _, _, _] => true,
       [192, 168, _, _] => true,
       [172, final second?, _, _] when second >= 16 && second <= 31 => true,
+      [169, 254, _, _] => true,
       _ => false,
     };
   }
@@ -100,6 +109,9 @@ final wordOsApiProvider = Provider<WordOsApi>((ref) {
     baseUrl: env.baseUrl,
     tokenReader: () => tokens.token,
     refreshTokenReader: () => tokens.refreshToken,
+    // Read at call time, not captured: a learner who changes the language in
+    // Settings gets their next feedback in the new one.
+    languageReader: () => ref.read(appPreferencesProvider).locale.languageCode,
     // The rotated pair is persisted here, in the store that owns it — the
     // networking layer never touches the keystore.
     onRefreshed: (token, refresh) => tokens.save(token, refreshToken: refresh),

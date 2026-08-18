@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_tokens.dart';
+import '../../core/widgets/brand.dart';
 
 /// Shared visual frame for the sign-in and sign-up screens.
 ///
@@ -46,7 +47,7 @@ class AuthScaffold extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const _BrandMark(),
+                    const WordOsBrand(),
                     SizedBox(height: gap),
                     Text(title, style: context.text.headlineMedium),
                     const SizedBox(height: AppSpacing.xs),
@@ -65,44 +66,6 @@ class AuthScaffold extends StatelessWidget {
           },
         ),
       ),
-    );
-  }
-}
-
-class _BrandMark extends StatelessWidget {
-  const _BrandMark();
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                context.colors.primary,
-                context.palette.skillListening,
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: const BorderRadius.all(AppRadii.md),
-          ),
-          alignment: Alignment.center,
-          child: const Text(
-            'W',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
-        const SizedBox(width: AppSpacing.sm),
-        Text('WordOS', style: context.text.titleLarge),
-      ],
     );
   }
 }

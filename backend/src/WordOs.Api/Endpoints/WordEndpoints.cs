@@ -1,7 +1,10 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using WordOs.Application.Lexicon;
 using WordOs.Domain.Common;
+using WordOs.Domain.Lexicon;
+using WordOs.Domain.Users;
 using WordOs.Domain.Words;
 using WordOs.Infrastructure.Persistence;
 
@@ -65,6 +68,9 @@ public static class WordEndpoints
         group.MapGet("/lookup", LookupAsync)
             .RequireRateLimiting(RateLimitPolicies.Lookup);
 
+        group.MapGet("/define", DefineAsync)
+            .RequireRateLimiting(RateLimitPolicies.Lookup);
+
         group.MapPost("", AddAsync);
         group.MapGet("", ListAsync);
         group.MapGet("/{id:guid}", DetailAsync);
@@ -73,33 +79,101 @@ public static class WordEndpoints
     }
 
     /// <summary>
-    /// Prefix search over the lexicon.
+    /// Search over the lexicon, in either language.
     /// </summary>
     /// <remarks>
     /// Typing <c>bo</c> returns every sense whose word starts with those
     /// letters, each carrying the word, its CEFR level and the Arabic meaning
     /// of <i>that sense</i>.
     ///
-    /// The result set is bounded and a minimum query length is required, so the
-    /// endpoint cannot be walked to dump the lexicon
-    /// (docs/07-SECURITY.md §6).
+    /// Three things make it answer more than a plain prefix does:
+    ///
+    /// * <b>Arabic in, English out.</b> A query written in Arabic searches the
+    ///   meanings instead of the spellings, so <c>يذهب</c> finds <c>go</c>
+    ///   (ADR-034). Both sides are folded to one unvocalised form first,
+    ///   because the glosses carry diacritics and nobody types them.
+    /// * <b>Inflections.</b> When nothing starts with what was typed, the
+    ///   surface form is resolved the way the reading screen resolves a tapped
+    ///   word, so <c>went</c> finds <c>go</c> rather than nothing at all.
+    /// * <b>One-letter words.</b> <c>a</c> and <c>I</c> are words; they are
+    ///   matched exactly rather than as a prefix, which is what keeps a single
+    ///   letter from returning a page of the dictionary.
+    ///
+    /// The result set is bounded and the query length is capped, so the
+    /// endpoint cannot be walked to dump the lexicon (docs/07-SECURITY.md §6).
     /// </remarks>
     private static async Task<IResult> LookupAsync(
         string? q,
         WordOsDbContext db,
         CancellationToken ct)
     {
-        var query = (q ?? string.Empty).Trim().ToLowerInvariant();
+        // Control characters are stripped rather than searched for: PostgreSQL
+        // refuses a NUL byte in a text value, and a pasted one is a crash, not
+        // a query.
+        var raw = SearchTerm.Clean(q);
 
-        if (query.Length < 2)
-            return Results.Ok(Array.Empty<WordCandidateResponse>());
-        if (query.Length > 64)
+        if (raw.Length == 0) return Results.Ok(Array.Empty<WordCandidateResponse>());
+        if (raw.Length > 64)
             return Problems.BadRequest("QUERY_TOO_LONG", "Search term is too long.");
 
-        // Parameterised by EF Core — the query never becomes SQL text.
-        var matches = await db.LexiconEntries
-            .Where(l => l.TextNormalized.StartsWith(query))
-            .OrderBy(l => l.FrequencyRank)
+        if (ArabicText.ContainsArabic(raw))
+            return Results.Ok(await SearchByMeaningAsync(raw, db, ct));
+
+        var query = raw.ToLowerInvariant();
+
+        // A single letter is a word, not a prefix: "a" and "I" must be
+        // addable, and matching them as prefixes would return the dictionary.
+        if (query.Length == 1)
+        {
+            return Results.Ok(await ProjectAsync(
+                db.LexiconEntries.Where(l => l.TextNormalized == query), 25, ct));
+        }
+
+        var matches = await ProjectAsync(
+            db.LexiconEntries.Where(l => l.TextNormalized.StartsWith(query)),
+            25, ct);
+
+        if (matches.Count > 0) return Results.Ok(matches);
+
+        // Nothing starts with it. The learner may simply have typed the word as
+        // they met it — "went", "studies", "running" — so the base forms are
+        // tried before giving up. The exact spelling was already tried above.
+        foreach (var candidate in SurfaceForms.CandidatesFor(query).Skip(1))
+        {
+            var resolved = await ProjectAsync(
+                db.LexiconEntries.Where(l => l.TextNormalized == candidate), 25, ct);
+
+            if (resolved.Count > 0) return Results.Ok(resolved);
+        }
+
+        return Results.Ok(Array.Empty<WordCandidateResponse>());
+    }
+
+    /// <summary>
+    /// The English words whose Arabic meaning matches what was typed.
+    /// </summary>
+    /// <remarks>
+    /// Ordered by how close the match is before how common the word is: a gloss
+    /// that <i>is</i> the query outranks one that merely contains it, so
+    /// <c>ذهب</c> offers the verb before "18-karat gold".
+    /// </remarks>
+    private static async Task<List<WordCandidateResponse>> SearchByMeaningAsync(
+        string raw,
+        WordOsDbContext db,
+        CancellationToken ct)
+    {
+        var term = ArabicText.Normalize(raw);
+        if (term.Length < 2) return [];
+
+        // EF parameterises both; the term never becomes SQL text. The wildcards
+        // are escaped so a learner typing % or _ searches for those characters.
+        var contains = $"%{term.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_")}%";
+
+        return await db.LexiconEntries
+            .Where(l => EF.Functions.Like(l.MeaningArNormalized, contains, "\\"))
+            .OrderBy(l => l.MeaningArNormalized == term ? 0
+                : l.MeaningArNormalized.StartsWith(term) ? 1 : 2)
+            .ThenBy(l => l.FrequencyRank)
             .ThenBy(l => l.TextNormalized)
             .ThenBy(l => l.SenseId)
             .Take(25)
@@ -108,8 +182,83 @@ public static class WordEndpoints
                 l.CefrLevel != null ? l.CefrLevel.Value.ToWire() : null,
                 false))
             .ToListAsync(ct);
+    }
 
-        return Results.Ok(matches);
+    /// <summary>The wire shape, ordered the way autocomplete wants it.</summary>
+    private static Task<List<WordCandidateResponse>> ProjectAsync(
+        IQueryable<LexiconEntry> query,
+        int take,
+        CancellationToken ct) =>
+        query
+            .OrderBy(l => l.FrequencyRank)
+            .ThenBy(l => l.TextNormalized)
+            .ThenBy(l => l.SenseId)
+            .Take(take)
+            .Select(l => new WordCandidateResponse(
+                l.SenseId, l.Text, l.MeaningAr, l.DefinitionEn, l.PartOfSpeech,
+                l.CefrLevel != null ? l.CefrLevel.Value.ToWire() : null,
+                false))
+            .ToListAsync(ct);
+
+    /// <summary>
+    /// Exact lookup of a word as it appears in a passage.
+    /// </summary>
+    /// <remarks>
+    /// The reading screen lets a learner tap any word to see what it means
+    /// (Part 2 §17). That word arrives inflected — <c>researching</c>,
+    /// <c>studies</c> — so the spelling is resolved here, against the lexicon,
+    /// rather than guessed at on the device (rule R1).
+    ///
+    /// <c>matchedText</c> tells the client which spelling actually answered, so
+    /// the sheet can say "researching → research" instead of silently showing a
+    /// different word's definition.
+    ///
+    /// Senses come back for the resolved word only: this is a definition, not a
+    /// search, and it must not become a second way to walk the lexicon.
+    /// </remarks>
+    private static async Task<IResult> DefineAsync(
+        string? w,
+        WordOsDbContext db,
+        CancellationToken ct)
+    {
+        var word = SearchTerm.Clean(w);
+        if (word.Length is 0 or > 64)
+            return Problems.BadRequest("BAD_WORD", "Provide a single word.");
+
+        foreach (var candidate in SurfaceForms.CandidatesFor(word))
+        {
+            var senses = await db.LexiconEntries
+                .Where(l => l.TextNormalized == candidate)
+                .OrderBy(l => l.FrequencyRank)
+                .ThenBy(l => l.SenseId)
+                .Take(6)
+                .Select(l => new WordCandidateResponse(
+                    l.SenseId, l.Text, l.MeaningAr, l.DefinitionEn,
+                    l.PartOfSpeech,
+                    l.CefrLevel != null ? l.CefrLevel.Value.ToWire() : null,
+                    false))
+                .ToListAsync(ct);
+
+            if (senses.Count > 0)
+            {
+                return Results.Ok(new
+                {
+                    query = word,
+                    matchedText = senses[0].Text,
+                    senses,
+                });
+            }
+        }
+
+        // A name, a number, or a word the lexicon does not carry. Answering
+        // 200-with-nothing rather than 404 keeps this a normal outcome for the
+        // client: the word can still be pronounced, it just has no entry.
+        return Results.Ok(new
+        {
+            query = word,
+            matchedText = (string?)null,
+            senses = Array.Empty<WordCandidateResponse>(),
+        });
     }
 
     /// <summary>
@@ -170,6 +319,9 @@ public static class WordEndpoints
             clock.GetUtcNow());
 
         db.Words.Add(word);
+        db.ActivityEvents.Add(ActivityEvent.Record(
+            userId.Value, ActivityType.WordAdded, clock.GetUtcNow(),
+            entityId: word.Id));
         await db.SaveChangesAsync(ct);
 
         return Results.Ok(ToResponse(word));
@@ -177,12 +329,24 @@ public static class WordEndpoints
 
     private static async Task<IResult> ListAsync(
         string? state,
+        string? q,
+        // Nullable so the parameters are genuinely optional: a minimal API
+        // rejects a missing non-nullable query value outright, which would
+        // make `/api/words` itself a 400.
+        int? page,
+        int? pageSize,
         ClaimsPrincipal principal,
         WordOsDbContext db,
         CancellationToken ct)
     {
         var userId = principal.UserId();
         if (userId is null) return Results.Unauthorized();
+
+        // A learner with a thousand words must not receive a thousand rows
+        // (Part 3 §37); a client asking for an absurd page size does not get
+        // to decide otherwise.
+        var pageIndex = Math.Max(0, page ?? 0);
+        var size = pageSize is null or <= 0 ? 50 : Math.Min(pageSize.Value, 100);
 
         // Always scoped to the caller's own id from the token. A word id or
         // user id from the request is never trusted (docs/07-SECURITY.md §4).
@@ -199,15 +363,41 @@ public static class WordEndpoints
             query = query.Where(w => w.State == parsed);
         }
 
+        // Searching your own vocabulary (Part 2 §46) — over the word and its
+        // meaning, because a learner looking for "بحث" is looking for the same
+        // row as one typing "research". Parameterised by EF Core; the term
+        // never becomes SQL text.
+        var term = SearchTerm.Clean(q);
+        if (term.Length > 0)
+        {
+            if (term.Length > 64)
+            {
+                return Problems.BadRequest(
+                    "QUERY_TOO_LONG", "Search term is too long.");
+            }
+
+            query = query.Where(w =>
+                EF.Functions.ILike(w.Text, $"%{term}%") ||
+                w.Meaning.Contains(term));
+        }
+
+        // Counted before paging: the client shows "12 words", not "12 on this
+        // page", and needs to know whether there is more to fetch.
+        var total = await query.CountAsync(ct);
+
         var items = await query
             .OrderByDescending(w => w.AddedAt)
-            .Take(500)
+            .Skip(pageIndex * size)
+            .Take(size)
             .ToListAsync(ct);
 
         return Results.Ok(new
         {
             items = items.Select(ToResponse).ToList(),
-            total = items.Count,
+            total,
+            page = pageIndex,
+            pageSize = size,
+            hasMore = (pageIndex + 1) * size < total,
         });
     }
 

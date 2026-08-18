@@ -25,7 +25,16 @@ cd backend/tools/lexicon
 cd ../..
 dotnet run --project tools/lexicon/importer -- tools/lexicon/data --dry-run
 dotnet run --project tools/lexicon/importer -- tools/lexicon/data
+
+# Just the authored closed-class words — no corpus, no parse, ~0.2s
+dotnet run --project tools/lexicon/importer -- --closed-class-only
 ```
+
+WordNet carries only content words, so `is`, `are`, `what`, `the` and every
+other pronoun, article, auxiliary, preposition and conjunction are written by
+hand in `importer/FunctionWords.cs` and imported alongside the join (ADR-033).
+Those classes are closed, so the list is finite; edit it and re-run with
+`--closed-class-only`.
 
 `--dry-run` parses and joins but writes nothing — use it to check the join
 report before touching the database.
@@ -43,6 +52,7 @@ consecutive runs both end at 175,611 rows.
 | Octanove Vocabulary Profile | 1.0 | C1/C2 bands | CC BY-SA 4.0 |
 | [Open English WordNet](https://en-word.net/) | 2025 | Senses, synsets, definitions | CC BY 4.0 |
 | [Arabic WordNet](https://github.com/Salah-Sal/arabic-wordnet-v4) | 4.0/4.1 | Arabic meaning per synset | CC BY 4.0 |
+| `importer/FunctionWords.cs` | — | The 167 closed-class words WordNet has no entries for | Written here |
 
 Versions are **pinned**, not `latest`: a silent upstream change would alter
 learners' vocabulary levels, and the lexicon must be rebuildable byte-for-byte.

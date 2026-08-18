@@ -391,4 +391,136 @@ public class OnboardingAndHubTests(PostgresFixture db) : IAsyncLifetime
 
         Assert.Equal(0, hub.GetProperty("vocabulary").GetProperty("learning").GetInt32());
     }
+
+    // ── Tapping a word inside a passage (Part 2 §17) ──────────────────────────
+
+    /// <summary>Seeds a lexicon sense without adding it to anyone's pipeline.</summary>
+    private async Task SeedLexiconAsync(string text, string meaning)
+    {
+        await using var context = db.CreateContext();
+        context.LexiconEntries.Add(LexiconEntry.Create(
+            $"def-{Guid.NewGuid():N}", text, text, "v", $"to {text}", meaning,
+            CefrLevel.B1, 1, "en=oewn;ar=awn", DateTimeOffset.UtcNow));
+        await context.SaveChangesAsync();
+    }
+
+    [SkippableFact]
+    public async Task An_inflected_word_from_a_passage_resolves_to_its_entry()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await SeedLexiconAsync("research", "بحث علمي");
+
+        // What the learner tapped is what the passage contained, inflections
+        // and all. Resolving it is the server's job, not the client's (R1).
+        var body = await Client.GetFromJsonAsync<JsonElement>(
+            "/api/words/define?w=Researching");
+
+        Assert.Equal("research", body.GetProperty("matchedText").GetString());
+        var senses = body.GetProperty("senses");
+        Assert.True(senses.GetArrayLength() > 0);
+        Assert.Equal("بحث علمي", senses[0].GetProperty("meaning").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_word_with_no_entry_answers_normally_rather_than_failing()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // Names and numbers appear in generated passages. Tapping one is not an
+        // error — the word simply has no dictionary entry, and the client still
+        // has something to pronounce.
+        var response = await Client.GetAsync("/api/words/define?w=Zyzzyx");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("matchedText").ValueKind);
+        Assert.Equal(0, body.GetProperty("senses").GetArrayLength());
+    }
+
+    [SkippableFact]
+    public async Task Define_requires_a_signed_in_learner()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        using var anonymous = _factory!.CreateClient();
+        var response = await anonymous.GetAsync("/api/words/define?w=research");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    // ── My Words: search and pagination (Part 2 §46, Part 3 §37) ─────────────
+
+    [SkippableFact]
+    public async Task Words_can_be_searched_by_spelling_or_by_meaning()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research");
+        await AddWordAsync("evidence");
+
+        // Both rows carry the same seeded Arabic meaning, so the English term
+        // is what separates them — and the Arabic term is what finds both.
+        var byText = await Client.GetFromJsonAsync<JsonElement>(
+            "/api/words?q=resea");
+        Assert.Equal(1, byText.GetProperty("total").GetInt32());
+        Assert.Equal("research",
+            byText.GetProperty("items")[0].GetProperty("text").GetString());
+
+        var byMeaning = await Client.GetFromJsonAsync<JsonElement>(
+            "/api/words?q=" + Uri.EscapeDataString("بحث"));
+        Assert.Equal(2, byMeaning.GetProperty("total").GetInt32());
+    }
+
+    [SkippableFact]
+    public async Task A_search_only_ever_returns_the_callers_own_words()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research");
+
+        await SignInAsync(); // a different learner
+        var results = await Client.GetFromJsonAsync<JsonElement>(
+            "/api/words?q=research");
+
+        Assert.Equal(0, results.GetProperty("total").GetInt32());
+    }
+
+    [SkippableFact]
+    public async Task The_word_list_is_paged_and_reports_the_full_total()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        for (var i = 0; i < 5; i++) await AddWordAsync($"word{i}");
+
+        var first = await Client.GetFromJsonAsync<JsonElement>(
+            "/api/words?page=0&pageSize=2");
+
+        // `total` counts the matches, not the page — a learner is told they
+        // have five words, and the client knows to ask for more (Part 3 §37).
+        Assert.Equal(5, first.GetProperty("total").GetInt32());
+        Assert.Equal(2, first.GetProperty("items").GetArrayLength());
+        Assert.True(first.GetProperty("hasMore").GetBoolean());
+
+        var last = await Client.GetFromJsonAsync<JsonElement>(
+            "/api/words?page=2&pageSize=2");
+        Assert.Single(last.GetProperty("items").EnumerateArray());
+        Assert.False(last.GetProperty("hasMore").GetBoolean());
+    }
+
+    [SkippableFact]
+    public async Task A_client_cannot_ask_for_an_unbounded_page()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research");
+
+        // The page size is the server's decision; "give me everything" is how
+        // a listing endpoint becomes a denial-of-service lever.
+        var response = await Client.GetFromJsonAsync<JsonElement>(
+            "/api/words?pageSize=100000");
+
+        Assert.True(response.GetProperty("pageSize").GetInt32() <= 100);
+    }
 }

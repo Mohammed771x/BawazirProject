@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Options;
 using System.Threading.RateLimiting;
@@ -215,7 +216,37 @@ builder.Services.AddProblemDetails();
 
 var app = builder.Build();
 
-app.UseExceptionHandler();
+// A malformed query or route value is the caller's mistake, not the server's.
+// ASP.NET raises it as an exception *after* the endpoint filter chain, so
+// without this every `?days=abc` — anything typed into a numeric field, or any
+// stale link — answered 500 and was logged as a server fault.
+app.UseExceptionHandler(new ExceptionHandlerOptions
+{
+    ExceptionHandler = async context =>
+    {
+        var feature = context.Features.Get<IExceptionHandlerFeature>();
+
+        var (status, code, message) = feature?.Error switch
+        {
+            BadHttpRequestException => (
+                StatusCodes.Status400BadRequest,
+                "INVALID_PARAMETER",
+                "One of the values in that request could not be read."),
+            _ => (
+                StatusCodes.Status500InternalServerError,
+                "INTERNAL_ERROR",
+                // Deliberately says nothing about what failed: the details are
+                // in the log, where an attacker cannot read them
+                // (docs/07-SECURITY.md §8).
+                "Something went wrong. Please try again."),
+        };
+
+        context.Response.StatusCode = status;
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(
+            new { error = new { code, message } });
+    },
+});
 
 // HSTS and HTTPS redirection outside development, where the local backend runs
 // on plain loopback.

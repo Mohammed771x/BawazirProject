@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../app/router.dart';
 import '../../core/api/api_providers.dart';
 import '../../core/api/wordos_api.dart';
 import '../../core/l10n/app_strings.dart';
@@ -11,10 +13,10 @@ import '../../core/theme/skill_visuals.dart';
 import '../../core/widgets/app_widgets.dart';
 import 'developer_widgets.dart';
 
-final adminUserDetailProvider =
-    FutureProvider.autoDispose.family<AdminUserDetail, String>(
-  (ref, userId) => ref.watch(wordOsApiProvider).adminUserDetail(userId),
-);
+final adminUserDetailProvider = FutureProvider.autoDispose
+    .family<AdminUserDetail, String>(
+      (ref, userId) => ref.watch(wordOsApiProvider).adminUserDetail(userId),
+    );
 
 /// One learner's complete journey (`MVP Core.txt` §58–59, Core Components §23).
 class DeveloperUserScreen extends ConsumerWidget {
@@ -28,7 +30,9 @@ class DeveloperUserScreen extends ConsumerWidget {
     final detail = ref.watch(adminUserDetailProvider(userId));
 
     return Scaffold(
-      appBar: AppBar(title: Text(detail.valueOrNull?.summary.displayName ?? '')),
+      appBar: AppBar(
+        title: Text(detail.valueOrNull?.summary.displayName ?? ''),
+      ),
       body: detail.when(
         loading: () => BusyView(message: s.loading),
         error: (e, _) => ErrorView(
@@ -106,9 +110,38 @@ class _Body extends ConsumerWidget {
           crossAxisSpacing: AppSpacing.xs,
           mainAxisSpacing: AppSpacing.xs,
           children: [
-            MetricTile(label: s.learning, value: '${detail.wordsLearning}'),
-            MetricTile(label: s.active, value: '${detail.wordsActive}'),
-            MetricTile(label: s.archived, value: '${detail.wordsArchived}'),
+            // Each count opens the words behind it (Part 3): a figure the Owner
+            // cannot drill into is a number they have to take on trust.
+            MetricTile(
+              label: s.learning,
+              value: '${detail.wordsLearning}',
+              onTap: () => context.push(
+                Routes.developerUserWords(
+                  detail.summary.id,
+                  state: WordState.learning.wire,
+                ),
+              ),
+            ),
+            MetricTile(
+              label: s.active,
+              value: '${detail.wordsActive}',
+              onTap: () => context.push(
+                Routes.developerUserWords(
+                  detail.summary.id,
+                  state: WordState.active.wire,
+                ),
+              ),
+            ),
+            MetricTile(
+              label: s.archived,
+              value: '${detail.wordsArchived}',
+              onTap: () => context.push(
+                Routes.developerUserWords(
+                  detail.summary.id,
+                  state: WordState.archived.wire,
+                ),
+              ),
+            ),
             MetricTile(label: s.devToday, value: '${detail.wordsAddedToday}'),
             MetricTile(
               label: s.devThisWeek,
@@ -124,6 +157,24 @@ class _Body extends ConsumerWidget {
 
         // ── Levels ──────────────────────────────────────────────────────────
         SectionHeader(title: s.skillLevels, subtitle: s.devLevelsHint),
+        // The way in to the evidence: a level is a conclusion, and the Owner
+        // should always be one tap from what produced it (Part 3).
+        AppCard(
+          onTap: () =>
+              context.push(Routes.developerPlacement(detail.summary.id)),
+          color: context.palette.subtleSurface,
+          child: Row(
+            children: [
+              Icon(Icons.fact_check_outlined,
+                  size: 18,
+                  color: context.colors.onSurface.withValues(alpha: 0.7)),
+              const SizedBox(width: AppSpacing.xs),
+              Expanded(child: Text(s.devPlacementEvidence)),
+              const Icon(Icons.chevron_right_rounded),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
         for (final level in detail.levels) ...[
           AppCard(
             child: Row(
@@ -196,8 +247,9 @@ class _Body extends ConsumerWidget {
                             stat.wordsFailed,
                           ),
                           style: context.text.labelSmall?.copyWith(
-                            color: context.colors.onSurface
-                                .withValues(alpha: 0.65),
+                            color: context.colors.onSurface.withValues(
+                              alpha: 0.65,
+                            ),
                           ),
                         ),
                       ),
@@ -206,8 +258,8 @@ class _Body extends ConsumerWidget {
                         color: stat.wordsAttempted == 0
                             ? context.colors.onSurface.withValues(alpha: 0.4)
                             : stat.passRate >= 0.7
-                                ? context.palette.success
-                                : context.palette.danger,
+                            ? context.palette.success
+                            : context.palette.danger,
                       ),
                     ],
                   ),
@@ -265,37 +317,47 @@ class _Body extends ConsumerWidget {
               : Column(
                   children: [
                     for (final mistake in detail.mistakes)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(mistake.text,
-                                      style: context.text.titleSmall),
-                                  Text(
-                                    mistake.meaning,
-                                    style: context.text.labelSmall?.copyWith(
-                                      color: context.colors.onSurface
-                                          .withValues(alpha: 0.6),
+                      // Tappable: "this word keeps failing" is the start of a
+                      // question, and the journey behind it is the answer.
+                      InkWell(
+                        onTap: () =>
+                            context.push(Routes.developerWord(mistake.wordId)),
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      mistake.text,
+                                      style: context.text.titleSmall,
                                     ),
-                                  ),
-                                ],
+                                    Text(
+                                      mistake.meaning,
+                                      style: context.text.labelSmall?.copyWith(
+                                        color: context.colors.onSurface
+                                            .withValues(alpha: 0.6),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                            StatusPill(
-                              label: s.skillName(mistake.skill),
-                              color:
-                                  SkillVisuals.color(context, mistake.skill),
-                            ),
-                            const SizedBox(width: AppSpacing.xs),
-                            StatusPill(
-                              label: '×${mistake.attempts}',
-                              color: context.palette.danger,
-                            ),
-                          ],
+                              StatusPill(
+                                label: s.skillName(mistake.skill),
+                                color: SkillVisuals.color(
+                                  context,
+                                  mistake.skill,
+                                ),
+                              ),
+                              const SizedBox(width: AppSpacing.xs),
+                              StatusPill(
+                                label: '×${mistake.attempts}',
+                                color: context.palette.danger,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                   ],
@@ -326,8 +388,9 @@ class _Body extends ConsumerWidget {
                         Text(
                           s.devManualChanges(detail.manualLevelChanges),
                           style: context.text.labelSmall?.copyWith(
-                            color:
-                                context.colors.onSurface.withValues(alpha: 0.6),
+                            color: context.colors.onSurface.withValues(
+                              alpha: 0.6,
+                            ),
                           ),
                         ),
                       ],
@@ -356,15 +419,18 @@ class _Body extends ConsumerWidget {
                             // Manual and validated changes are never conflated
                             // — the difference is the signal (rule R6).
                             StatusPill(
-                              label: change.changeType ==
+                              label:
+                                  change.changeType ==
                                       LevelChangeType.systemValidated
                                   ? s.systemLevel
                                   : s.yourLevel,
-                              color: change.changeType ==
+                              color:
+                                  change.changeType ==
                                       LevelChangeType.systemValidated
                                   ? context.palette.success
-                                  : context.colors.onSurface
-                                      .withValues(alpha: 0.45),
+                                  : context.colors.onSurface.withValues(
+                                      alpha: 0.45,
+                                    ),
                             ),
                           ],
                         ),
@@ -384,10 +450,7 @@ class _Body extends ConsumerWidget {
                   runSpacing: AppSpacing.xs,
                   children: [
                     for (final word in detail.masteredWords)
-                      StatusPill(
-                        label: word,
-                        color: context.palette.success,
-                      ),
+                      StatusPill(label: word, color: context.palette.success),
                   ],
                 ),
         ),
@@ -447,10 +510,7 @@ class _LevelChip extends StatelessWidget {
             color: context.colors.onSurface.withValues(alpha: 0.5),
           ),
         ),
-        Text(
-          value,
-          style: context.text.titleSmall?.copyWith(color: color),
-        ),
+        Text(value, style: context.text.titleSmall?.copyWith(color: color)),
       ],
     );
   }

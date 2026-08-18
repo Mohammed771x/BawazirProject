@@ -21,6 +21,9 @@ class AddWordScreen extends ConsumerStatefulWidget {
 }
 
 class _AddWordScreenState extends ConsumerState<AddWordScreen> {
+  /// Copy for the async paths, which have no build context to read it from.
+  AppStrings get _strings => ref.read(stringsProvider);
+
   final _controller = TextEditingController();
   Timer? _debounce;
 
@@ -63,7 +66,7 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
             results.any((c) => !c.isSpellingSuggestion) ? null : value.trim();
       });
     } on ApiException catch (e) {
-      if (mounted) _snack(e.message);
+      if (mounted) _snack(_strings.apiError(e.code, e.message));
     } finally {
       if (mounted) setState(() => _searching = false);
     }
@@ -90,7 +93,7 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
         });
       }
     } on ApiException catch (e) {
-      if (mounted) _snack(e.message);
+      if (mounted) _snack(_strings.apiError(e.code, e.message));
     } finally {
       if (mounted) setState(() => _saving = false);
     }

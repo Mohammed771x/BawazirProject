@@ -52,12 +52,17 @@ Future<void> bootFreshLearner(
   await settle(tester);
 
   // By position: the label lives in the field's decoration, and the form is
-  // name → email → password.
+  // name → email → phone → password. The phone field arrived with the country
+  // selector, which is why the password is index 3 rather than 2.
   final fields = find.byType(TextFormField);
+  expect(fields, findsNWidgets(4),
+      reason: 'registration collects name, email, phone and password');
+
   await tester.enterText(fields.at(0), 'Layla');
   await tester.enterText(
       fields.at(1), '$prefix-${DateTime.now().millisecondsSinceEpoch}@wordos.test');
-  await tester.enterText(fields.at(2), testPassword);
+  await tester.enterText(fields.at(2), '777123456');
+  await tester.enterText(fields.at(3), testPassword);
   await tester.pump(const Duration(milliseconds: 100));
 
   await tapAny(tester, ['Create account']);
@@ -86,8 +91,44 @@ Future<void> completePlacement(WidgetTester tester) async {
   await tapAny(tester, ['Start', 'Start test', 'Begin']);
   await settle(tester);
 
+  // Speaking items must ask to be *spoken* (§17). On a simulator there is no
+  // microphone, so the field falls back to typing and says so — either the mic
+  // itself or that notice proves the item arrived as a spoken one rather than
+  // as an ordinary writing box.
+  var sawSpokenItem = false;
+
   for (var i = 0; i < 40; i++) {
     if (find.text('Start learning').evaluate().isNotEmpty) break;
+
+    // A spoken item asks the microphone whether it exists before deciding what
+    // to render, so there is a moment with neither options nor a field.
+    await waitFor(
+        tester,
+        () =>
+            find.byType(OptionTile).evaluate().isNotEmpty ||
+            find.byType(TextField).evaluate().isNotEmpty ||
+            // A spoken item has neither until the learner chooses how to
+            // answer — waiting only for the other two timed out on it.
+            find.bySemanticsLabel('microphone').evaluate().isNotEmpty ||
+            find.text('Start learning').evaluate().isNotEmpty,
+        total: const Duration(seconds: 20));
+
+    if (find.text('Start learning').evaluate().isNotEmpty) break;
+
+    // A spoken item is recognisable either by its microphone or by the notice
+    // a device that cannot listen shows instead.
+    if (find.bySemanticsLabel('microphone').evaluate().isNotEmpty ||
+        visibleText(tester).any((t) =>
+            t.contains('type your answer') || t.contains('microphone'))) {
+      sawSpokenItem = true;
+
+      // A simulator's recogniser initialises but hears nothing, so these runs
+      // take the same escape hatch a real learner has when the microphone is
+      // not working for them. (The microphone itself is push-to-talk now: tap
+      // to start, tap again when finished — nothing ends the turn on silence.)
+      await tapAnyIfPresent(tester, ['Type instead']);
+      await settle(tester);
+    }
 
     final options = find.byType(OptionTile);
     if (options.evaluate().isNotEmpty) {
@@ -107,6 +148,11 @@ Future<void> completePlacement(WidgetTester tester) async {
     if (!await tapAnyIfPresent(tester, ['Next'])) break;
     await settle(tester);
   }
+
+  expect(sawSpokenItem, isTrue,
+      reason: 'the placement test must ask Speaking out loud, not in a text '
+          'box (§17) — no spoken item was offered');
+  debugPrint('✓ PLACEMENT · a spoken item was offered');
 
   await tapAny(tester, ['Start learning']);
   await settle(tester);
@@ -169,6 +215,40 @@ Future<void> openSkill(WidgetTester tester, String skill) async {
           'Visible: ${visibleText(tester)}');
   await tapAny(tester, [skill]);
   await settle(tester, total: const Duration(seconds: 120));
+
+  // Speaking opens on a warm-up: each word, four meanings, answered until they
+  // are all right. Only then does the tutor speak.
+  await clearSpeakingWarmup(tester);
+}
+
+/// Answers the Speaking warm-up until it is done.
+///
+/// The right answer is the meaning the learner chose when they added the word,
+/// which a journey legitimately knows — they picked it a few steps ago.
+Future<void> clearSpeakingWarmup(WidgetTester tester, {String? meaning}) async {
+  var attempt = 0;
+
+  for (var guard = 0; guard < 24; guard++) {
+    await settle(tester, total: const Duration(seconds: 30));
+
+    final options = find.byType(OptionTile);
+    if (options.evaluate().isEmpty) return;
+
+    // With the meaning to hand, answer it. Without, work through the options
+    // in turn: they do not reshuffle between attempts, so tapping the first
+    // one repeatedly would miss the same way forever.
+    final Finder target;
+    if (meaning != null && find.text(meaning).evaluate().isNotEmpty) {
+      target = find.text(meaning).last;
+    } else {
+      target = options.at(attempt % options.evaluate().length);
+      attempt++;
+    }
+
+    await tester.ensureVisible(target);
+    await tester.tap(target);
+    await settle(tester, total: const Duration(seconds: 20));
+  }
 }
 
 /// Answers every remaining question.

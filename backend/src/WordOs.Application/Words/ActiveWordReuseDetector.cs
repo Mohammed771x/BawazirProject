@@ -70,6 +70,38 @@ public static class ActiveWordReuseDetector
         }
     }
 
+    /// <summary>
+    /// Every place a word occurs in <paramref name="text"/>, as
+    /// <c>(start, end)</c> offsets.
+    /// </summary>
+    /// <remarks>
+    /// The reading screen underlines the session's words inside the generated
+    /// passage (Part 2 §16) and must not offer their meaning when tapped (§19).
+    /// Both need to know *where* the words are, and finding that out is the
+    /// server's job — a client scanning for its own target words would go
+    /// wrong on exactly the inflected forms this matcher exists to handle.
+    /// </remarks>
+    public static IReadOnlyList<(int Start, int End)> Locate(
+        string? text, string word)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(word))
+            return [];
+
+        try
+        {
+            return Regex.Matches(text, PatternFor(word),
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                    MatchTimeout)
+                .Select(m => (m.Index, m.Index + m.Length))
+                .ToList();
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // The passage still reads; it just loses its underlines.
+            return [];
+        }
+    }
+
     private static string PatternFor(string word)
     {
         var parts = word.Split(' ', StringSplitOptions.RemoveEmptyEntries)

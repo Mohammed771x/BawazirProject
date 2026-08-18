@@ -41,6 +41,8 @@ class MockWordOsApi implements WordOsApi {
     required String email,
     required String password,
     required String displayName,
+    String? phoneCountryCode,
+    String? phoneNumber,
   }) =>
       _delay(() => engine.register(email, password, displayName));
 
@@ -92,20 +94,39 @@ class MockWordOsApi implements WordOsApi {
       _delay(() => engine.lookup(query), const Duration(milliseconds: 220));
 
   @override
+  Future<WordDefinition> defineWord(String word) =>
+      _delay(() => engine.define(word), const Duration(milliseconds: 180));
+
+  @override
   Future<Word> addWord(WordCandidate candidate) =>
       _delay(() => engine.addWord(_user, candidate), _aiLatency);
 
   @override
-  Future<WordPage> words({WordState? state, int page = 0}) =>
-      _delay(() => engine.words(_user, state));
+  Future<WordPage> words({WordState? state, int page = 0, String? query}) =>
+      _delay(() => engine.words(_user, state, query: query));
 
   @override
   Future<WordDetail> wordDetail(String wordId) =>
       _delay(() => engine.wordDetail(_user, wordId));
 
   @override
-  Future<SkillSession> startSession(SkillType skill) =>
-      _delay(() => engine.startSession(_user, skill), _aiLatency);
+  Future<SkillSession> startSession(SkillType skill, {bool practice = false}) =>
+      _delay(
+          () => engine.startSession(_user, skill, practice: practice),
+          _aiLatency);
+
+  @override
+  Future<SkillSession> changeSessionLevel(String sessionId, CefrLevel level) =>
+      _delay(() => engine.changeSessionLevel(_user, sessionId, level),
+          _aiLatency);
+
+  @override
+  Future<WarmupResult> answerWarmup({
+    required String sessionId,
+    required String wordId,
+    required String answer,
+  }) =>
+      _delay(() => engine.answerWarmup(_user, sessionId, wordId, answer));
 
   @override
   Future<SkillSession> resumeSession(String sessionId) =>
@@ -191,12 +212,30 @@ class MockWordOsApi implements WordOsApi {
   // The role check happens inside the engine, not here — see [MockAdmin].
 
   @override
-  Future<AdminOverview> adminOverview() =>
-      _delay(() => engine.adminOverview(_user));
+  Future<AdminOverview> adminOverview({int? days}) =>
+      _delay(() => engine.adminOverview(_user, days: days));
 
   @override
-  Future<List<AdminUserSummary>> adminUsers() =>
-      _delay(() => engine.adminUsers(_user));
+  Future<AdminUserPage> adminUsers({String? query, int? days, int page = 0}) =>
+      _delay(() => engine.adminUsers(_user, query: query, days: days));
+
+  @override
+  Future<AdminWordPage> adminUserWords(
+    String userId, {
+    WordState? state,
+    String? query,
+    int page = 0,
+  }) =>
+      _delay(() =>
+          engine.adminUserWords(_user, userId, state: state, query: query));
+
+  @override
+  Future<AdminWordJourney> adminWordJourney(String wordId) =>
+      _delay(() => engine.adminWordJourney(_user, wordId));
+
+  @override
+  Future<PlacementEvidence> adminPlacementEvidence(String userId) =>
+      _delay(() => engine.adminPlacementEvidence(_user, userId));
 
   @override
   Future<AdminUserDetail> adminUserDetail(String userId) =>

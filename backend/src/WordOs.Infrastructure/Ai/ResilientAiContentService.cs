@@ -106,7 +106,62 @@ public sealed class ResilientAiContentService(
         }
     }
 
+    public async Task<PlacementEvaluation> EvaluatePlacementAsync(
+        PlacementEvaluationRequest request,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            return await inner.EvaluatePlacementAsync(request, ct);
+        }
+        catch (Exception e) when (e is AiServiceException or HttpRequestException
+                                      or TaskCanceledException)
+        {
+            // A placement must still finish when the AI is down. The heuristic
+            // scores already recorded during the test stand, and the result is
+            // marked as scored offline so the Owner can see why a band looks
+            // odd — degraded, not broken.
+            logger.LogWarning(e, "AI placement evaluation failed; using fallback");
+            return FallbackPlacementEvaluation(request);
+        }
+    }
+
+    public async Task<GeneratedContent> RelevelContentAsync(
+        RelevelRequest request,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            return await inner.RelevelContentAsync(request, ct);
+        }
+        catch (Exception e) when (e is AiServiceException or HttpRequestException
+                                      or TaskCanceledException)
+        {
+            // The passage the learner is already reading stays as it is. A
+            // fallback re-telling would hand them a worse text than the one
+            // they asked to improve, which is the opposite of the request.
+            logger.LogWarning(e, "AI re-level failed; keeping the passage");
+            throw;
+        }
+    }
+
     // ── Fallbacks ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// No ratings at all — deliberately.
+    /// </summary>
+    /// <remarks>
+    /// The caller keeps the scores the offline scorer already produced during
+    /// the test. Inventing numbers here would silently replace real evidence
+    /// with a constant, which is worse than admitting the AI was unavailable.
+    /// </remarks>
+    private static PlacementEvaluation FallbackPlacementEvaluation(
+        PlacementEvaluationRequest request) =>
+        new(
+            Answers: [],
+            OverallLevel: null,
+            Summary: string.Empty,
+            FromFallback: true);
 
     private static GeneratedContent FallbackContent(ContentRequest request)
     {
@@ -146,11 +201,18 @@ public sealed class ResilientAiContentService(
                 ["They left the room", "They argued", "They went home"]),
             new("What happened at the end of the lesson?", "They reviewed the new terms",
                 ["They started a test", "They watched a film", "They cancelled the class"]),
-            new("How many new terms were introduced?",
+        };
+
+        // Only meaningful when there were terms: on a practice session (§5) the
+        // answer would be "0", and "None" among the distractors would be just
+        // as correct.
+        if (request.Words.Count > 0)
+        {
+            questions.Add(new("How many new terms were introduced?",
                 request.Words.Count.ToString(),
                 [(request.Words.Count + 3).ToString(),
-                 (request.Words.Count + 7).ToString(), "None"]),
-        };
+                 (request.Words.Count + 7).ToString(), "None"]));
+        }
 
         return new GeneratedContent(
             Text: string.Join(' ', sentences),

@@ -226,12 +226,58 @@ public class ImportedLexiconTests : IAsyncLifetime
     {
         Skip.IfNot(_skipReason is null, _skipReason);
 
+        // Two provenances, and a row must declare one of them: joined from the
+        // three datasets, or authored here because no dataset carries it
+        // (ADR-033 — WordNet has no pronouns, articles or auxiliaries).
         var missing = await Db.LexiconEntries
-            .CountAsync(l => !l.SourceFlags.Contains("en=oewn")
-                             || !l.SourceFlags.Contains("ar=awn")
-                             || !l.SourceFlags.Contains("cefr="));
+            .CountAsync(l => !l.SourceFlags.Contains("wordos-closed-class")
+                             && (!l.SourceFlags.Contains("en=oewn")
+                                 || !l.SourceFlags.Contains("ar=awn")
+                                 || !l.SourceFlags.Contains("cefr=")));
 
         Assert.Equal(0, missing);
+    }
+
+    [SkippableTheory]
+    // The words a learner reported not being able to add, and the classes they
+    // stand for: auxiliary, question word, article, preposition, conjunction,
+    // pronoun (ADR-033).
+    [InlineData("is", "aux")]
+    [InlineData("are", "aux")]
+    [InlineData("what", "pron")]
+    [InlineData("the", "det")]
+    [InlineData("with", "prep")]
+    [InlineData("because", "conj")]
+    [InlineData("they", "pron")]
+    [InlineData("can", "modal")]
+    public async Task The_closed_class_words_are_in_the_lexicon(
+        string word, string pos)
+    {
+        Skip.IfNot(_skipReason is null, _skipReason);
+
+        var entry = await Db.LexiconEntries.FirstOrDefaultAsync(
+            l => l.TextNormalized == word && l.PartOfSpeech == pos);
+
+        Assert.NotNull(entry);
+        Assert.False(string.IsNullOrWhiteSpace(entry!.MeaningAr));
+        Assert.False(string.IsNullOrWhiteSpace(entry.DefinitionEn));
+        Assert.NotNull(entry.CefrLevel);
+
+        // Ahead of every WordNet sense, so the homograph cannot bury it.
+        Assert.Equal(-1, entry.FrequencyRank);
+    }
+
+    [SkippableFact]
+    public async Task Every_arabic_gloss_has_a_searchable_form()
+    {
+        Skip.IfNot(_skipReason is null, _skipReason);
+
+        // Searching in Arabic is a match against the folded column; a row that
+        // never got one is a word no Arabic speaker can find (ADR-034).
+        var unsearchable = await Db.LexiconEntries
+            .CountAsync(l => l.MeaningArNormalized == "");
+
+        Assert.Equal(0, unsearchable);
     }
 
     [SkippableFact]

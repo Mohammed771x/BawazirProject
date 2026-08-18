@@ -289,12 +289,119 @@ public static class PlacementItemBank
             AudioText = "To be fair to him, he did flag the risk early. What he did not do, and this is where the criticism lands, was insist on it once the decision had gone the other way.",
             ExpectedWords = 0,
         },
+
+        // ── Grammar ──────────────────────────────────────────────────────────
+        //
+        // Measured, never displayed. Grammar is the clearest single signal of
+        // production ability, so §19 asks for it as supporting evidence for the
+        // two skills a learner is otherwise judged on from very few prompts:
+        // Speaking (six items) and Writing. Each of these is scored into
+        // Writing and echoed into Speaking via `AlsoEvidenceFor`.
+        new()
+        {
+            Id = "gr_a1_1",
+            Skill = SkillType.Writing,
+            Domain = PlacementDomain.Grammar,
+            AlsoEvidenceFor = SkillType.Speaking,
+            Level = CefrLevel.A1,
+            Prompt = "She ___ to school every day.",
+            Options = ["go", "goes", "going", "gone"],
+            CorrectAnswer = "goes",
+        },
+        new()
+        {
+            Id = "gr_a1_2",
+            Skill = SkillType.Writing,
+            Domain = PlacementDomain.Grammar,
+            AlsoEvidenceFor = SkillType.Speaking,
+            Level = CefrLevel.A1,
+            Prompt = "There ___ two books on the table.",
+            Options = ["is", "are", "be", "was"],
+            CorrectAnswer = "are",
+        },
+        new()
+        {
+            Id = "gr_a2_1",
+            Skill = SkillType.Writing,
+            Domain = PlacementDomain.Grammar,
+            AlsoEvidenceFor = SkillType.Speaking,
+            Level = CefrLevel.A2,
+            Prompt = "I ___ my keys yesterday, so I could not open the door.",
+            Options = ["lose", "lost", "have lost", "was losing"],
+            CorrectAnswer = "lost",
+        },
+        new()
+        {
+            Id = "gr_a2_2",
+            Skill = SkillType.Writing,
+            Domain = PlacementDomain.Grammar,
+            AlsoEvidenceFor = SkillType.Speaking,
+            Level = CefrLevel.A2,
+            Prompt = "This bag is ___ than that one.",
+            Options = ["heavy", "heavier", "heaviest", "more heavy"],
+            CorrectAnswer = "heavier",
+        },
+        new()
+        {
+            Id = "gr_b1_1",
+            Skill = SkillType.Writing,
+            Domain = PlacementDomain.Grammar,
+            AlsoEvidenceFor = SkillType.Speaking,
+            Level = CefrLevel.B1,
+            Prompt = "If I ___ more time, I would learn another language.",
+            Options = ["have", "had", "will have", "am having"],
+            CorrectAnswer = "had",
+        },
+        new()
+        {
+            Id = "gr_b1_2",
+            Skill = SkillType.Writing,
+            Domain = PlacementDomain.Grammar,
+            AlsoEvidenceFor = SkillType.Speaking,
+            Level = CefrLevel.B1,
+            Prompt = "The report ___ by the team last week.",
+            Options = ["wrote", "has wrote", "was written", "is writing"],
+            CorrectAnswer = "was written",
+        },
+        new()
+        {
+            Id = "gr_b2_1",
+            Skill = SkillType.Writing,
+            Domain = PlacementDomain.Grammar,
+            AlsoEvidenceFor = SkillType.Speaking,
+            Level = CefrLevel.B2,
+            Prompt = "She suggested ___ the meeting until Monday.",
+            Options = ["to postpone", "postponing", "postpone", "postponed"],
+            CorrectAnswer = "postponing",
+        },
+        new()
+        {
+            Id = "gr_b2_2",
+            Skill = SkillType.Writing,
+            Domain = PlacementDomain.Grammar,
+            AlsoEvidenceFor = SkillType.Speaking,
+            Level = CefrLevel.B2,
+            Prompt = "Hardly ___ the train when it started to rain.",
+            Options = ["we had left", "had we left", "we left", "did we leave"],
+            CorrectAnswer = "had we left",
+        },
+        new()
+        {
+            Id = "gr_c1_1",
+            Skill = SkillType.Writing,
+            Domain = PlacementDomain.Grammar,
+            AlsoEvidenceFor = SkillType.Speaking,
+            Level = CefrLevel.C1,
+            Prompt = "___ for the delay, the shipment would have arrived on time.",
+            Options = ["If it was not", "Were it not", "Had not it", "If not it"],
+            CorrectAnswer = "Were it not",
+        },
         new()
         {
             Id = "sp_a1_1",
             Skill = SkillType.Speaking,
             Level = CefrLevel.A1,
-            Type = PlacementItemType.FreeText,
+            Type = PlacementItemType.Spoken,
             Prompt = "Introduce yourself in one or two sentences. Say your name and where you live.",
             Options = [],
             CorrectAnswer = null,
@@ -307,7 +414,7 @@ public static class PlacementItemBank
             Id = "sp_a2_1",
             Skill = SkillType.Speaking,
             Level = CefrLevel.A2,
-            Type = PlacementItemType.FreeText,
+            Type = PlacementItemType.Spoken,
             Prompt = "Describe what you did yesterday. Use two or three sentences.",
             Options = [],
             CorrectAnswer = null,
@@ -320,7 +427,7 @@ public static class PlacementItemBank
             Id = "sp_b1_1",
             Skill = SkillType.Speaking,
             Level = CefrLevel.B1,
-            Type = PlacementItemType.FreeText,
+            Type = PlacementItemType.Spoken,
             Prompt = "Someone asks: \"Could you explain what you are studying and why you chose it?\" Answer them.",
             Options = [],
             CorrectAnswer = null,
@@ -333,7 +440,7 @@ public static class PlacementItemBank
             Id = "sp_b2_1",
             Skill = SkillType.Speaking,
             Level = CefrLevel.B2,
-            Type = PlacementItemType.FreeText,
+            Type = PlacementItemType.Spoken,
             Prompt = "Some people learn better alone, others in a group. Give your view and one reason for it.",
             Options = [],
             CorrectAnswer = null,
@@ -346,7 +453,7 @@ public static class PlacementItemBank
             Id = "sp_c1_1",
             Skill = SkillType.Speaking,
             Level = CefrLevel.C1,
-            Type = PlacementItemType.FreeText,
+            Type = PlacementItemType.Spoken,
             Prompt = "A colleague proposes a plan you partly disagree with. Explain which part you accept, which you do not, and why.",
             Options = [],
             CorrectAnswer = null,
@@ -504,6 +611,37 @@ public enum PlacementItemType
 {
     MultipleChoice,
     FreeText,
+
+    /// <summary>
+    /// Answered out loud: the prompt is spoken, the learner replies by voice,
+    /// and the transcript is what reaches the server.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="FreeText"/> on purpose. Speaking and Writing are
+    /// different skills and must be tested differently (§17) — showing a text
+    /// box for a speaking item measures writing and calls it speech.
+    /// </remarks>
+    Spoken,
+}
+
+/// <summary>
+/// What a placement item actually measures.
+/// </summary>
+/// <remarks>
+/// Deliberately not <see cref="SkillType"/>. The four skills a learner sees are
+/// Reading, Listening, Speaking and Writing; Grammar and Spelling are measured
+/// too, but as *evidence* feeding those four rather than as levels of their own
+/// (§13, §19, §20). Keeping the two vocabularies apart is what stops "we
+/// measured it" from turning into "we must display it".
+/// </remarks>
+public enum PlacementDomain
+{
+    Reading,
+    Listening,
+    Speaking,
+    Writing,
+    Spelling,
+    Grammar,
 }
 
 /// <summary>
@@ -521,6 +659,24 @@ public sealed record BankItem
 
     /// <summary>The CEFR band the item was authored for.</summary>
     public required CefrLevel Level { get; init; }
+
+    /// <summary>
+    /// What this item measures. Defaults to the item's own skill; grammar and
+    /// spelling items set it explicitly, because what they measure is not what
+    /// they score into.
+    /// </summary>
+    public PlacementDomain? Domain { get; init; }
+
+    /// <summary>
+    /// A second skill this item is evidence for.
+    /// </summary>
+    /// <remarks>
+    /// Grammar is the reason this exists: §19 asks for it to strengthen
+    /// <b>both</b> Speaking and Writing, which no single-skill field can express.
+    /// The response is emitted for both skills, so a learner with solid grammar
+    /// is not placed low in production skills on the strength of two prompts.
+    /// </remarks>
+    public SkillType? AlsoEvidenceFor { get; init; }
 
     public PlacementItemType Type { get; init; } = PlacementItemType.MultipleChoice;
 
@@ -541,5 +697,18 @@ public sealed record BankItem
     /// </summary>
     public int ExpectedWords { get; init; }
 
-    public bool IsFreeText => Type == PlacementItemType.FreeText;
+    /// <summary>Anything the learner produces rather than selects.</summary>
+    public bool IsFreeText =>
+        Type is PlacementItemType.FreeText or PlacementItemType.Spoken;
+
+    public bool IsSpoken => Type == PlacementItemType.Spoken;
+
+    public PlacementDomain MeasuredDomain => Domain ?? Skill switch
+    {
+        SkillType.Reading => PlacementDomain.Reading,
+        SkillType.Listening => PlacementDomain.Listening,
+        SkillType.Speaking => PlacementDomain.Speaking,
+        SkillType.Writing => PlacementDomain.Writing,
+        _ => PlacementDomain.Spelling,
+    };
 }

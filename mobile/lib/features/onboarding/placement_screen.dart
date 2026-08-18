@@ -3,10 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_providers.dart';
 import '../../core/api/wordos_api.dart';
-import '../../core/audio/tts_service.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
+import '../../core/audio/speech_provider.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../core/widgets/speaker_button.dart';
+import 'spoken_answer_field.dart';
 import '../../core/theme/skill_visuals.dart';
 import '../../core/widgets/app_widgets.dart';
 import '../auth/session_controller.dart';
@@ -53,7 +55,7 @@ class _PlacementScreenState extends ConsumerState<PlacementScreen> {
       if (mounted) {
         setState(() {
           _phase = _Phase.error;
-          _errorMessage = e.message;
+          _errorMessage = ref.read(stringsProvider).apiError(e.code, e.message);
         });
       }
     } finally {
@@ -273,6 +275,14 @@ class _QuestionView extends ConsumerWidget {
                       enabled: !busy,
                       onTap: () => onAnswer(option),
                     )
+                // Speaking is spoken (§17). A text box here would measure
+                // writing and record the result as speech.
+                else if (item.type == PlacementItemType.spoken)
+                  SpokenAnswerField(
+                    transcript: answer,
+                    enabled: !busy,
+                    onTranscript: onAnswer,
+                  )
                 else
                   TextField(
                     controller: freeText,
@@ -315,21 +325,27 @@ class _AudioPlayer extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(stringsProvider);
-    final tts = ref.watch(ttsServiceProvider);
+
+    // The shared control: one tap plays, the next stops, and the icon follows
+    // the real playback state rather than a local flag (§10).
     return AppCard(
       color: context.palette.subtleSurface,
       child: Row(
         children: [
-          IconButton.filled(
-            onPressed: () => tts.speak(text),
-            icon: const Icon(Icons.play_arrow_rounded),
+          Expanded(
+            child: SpeechPlayButton(
+              id: 'placement:$text',
+              text: text,
+              playLabel: s.playAudio,
+              stopLabel: s.stopAudio,
+            ),
           ),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(child: Text(s.playAudio, style: context.text.titleSmall)),
-          TextButton.icon(
-            onPressed: () => tts.speak(text, slow: true),
-            icon: const Icon(Icons.slow_motion_video_rounded, size: 18),
-            label: Text(s.slowSpeed),
+          const SizedBox(width: AppSpacing.xs),
+          SpeakerButton(
+            id: 'placement-slow:$text',
+            text: text,
+            rate: SpeechRate.slow,
+            tooltip: s.slowSpeed,
           ),
         ],
       ),
@@ -354,16 +370,25 @@ class _ResultView extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: AppSpacing.lg),
-                Icon(Icons.verified_rounded,
-                    size: 48, color: context.palette.success),
+                Icon(Icons.explore_outlined,
+                    size: 48, color: context.colors.primary),
                 const SizedBox(height: AppSpacing.md),
                 Text(s.placementResultTitle,
                     style: context.text.headlineSmall),
                 const SizedBox(height: AppSpacing.xs),
+                // Said before the bands, not after: by the time a learner has
+                // read "A1" they have already decided what it means about them.
+                Text(
+                  s.placementEstimateNote,
+                  style: context.text.bodyMedium?.copyWith(
+                    color: context.colors.onSurface.withValues(alpha: 0.75),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.sm),
                 Text(
                   result.summary,
-                  style: context.text.bodyMedium?.copyWith(
-                    color: context.colors.onSurface.withValues(alpha: 0.65),
+                  style: context.text.bodySmall?.copyWith(
+                    color: context.colors.onSurface.withValues(alpha: 0.6),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.lg),

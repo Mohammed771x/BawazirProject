@@ -36,24 +36,64 @@ public class PlacementSession
     /// </summary>
     public int FallbackScoredCount { get; private set; }
 
+    /// <summary>
+    /// Which version of the placement content and algorithm produced this run.
+    /// </summary>
+    /// <remarks>
+    /// Stored so a historical result stays interpretable after the test changes
+    /// (§27). Without it, comparing a learner placed under v1 with one placed
+    /// under v2 silently compares two different instruments.
+    /// </remarks>
+    public int TestVersion { get; private set; } = PlacementVersion.Current;
+
     public IReadOnlyList<PlacementAnswer> Answers => _answers;
 
     public static PlacementSession Start(Guid userId, DateTimeOffset now) =>
         new() { UserId = userId, StartedAt = now };
 
-    public IReadOnlyList<PlacementResponse> ToResponses() =>
-        _answers
-            .Select(a => new PlacementResponse(a.ItemId, a.Skill, a.Difficulty, a.Score))
-            .ToList();
+    /// <summary>
+    /// The evidence the ability estimator sees.
+    /// </summary>
+    /// <remarks>
+    /// A grammar item appears <b>twice</b> — once for the skill it scores into
+    /// and once for the skill it also supports (§19). Speaking is judged from
+    /// very few prompts, and grammar is the clearest cross-cutting signal of
+    /// production ability, so letting it inform both is what makes those
+    /// estimates defensible rather than a guess from two answers.
+    /// </remarks>
+    public IReadOnlyList<PlacementResponse> ToResponses()
+    {
+        var responses = new List<PlacementResponse>();
+
+        foreach (var answer in _answers)
+        {
+            responses.Add(new PlacementResponse(
+                answer.ItemId, answer.Skill, answer.Difficulty, answer.Score));
+
+            if (answer.AlsoEvidenceFor is { } second)
+            {
+                responses.Add(new PlacementResponse(
+                    $"{answer.ItemId}:{second.ToWire()}",
+                    second,
+                    answer.Difficulty,
+                    answer.Score));
+            }
+        }
+
+        return responses;
+    }
 
     public PlacementAnswer RecordAnswer(
         BankItem item,
         double difficulty,
         double score,
         DateTimeOffset now,
-        bool scoredByFallback)
+        bool scoredByFallback,
+        string? rawAnswer = null,
+        string? evaluationJson = null)
     {
-        var answer = PlacementAnswer.Create(Id, item, difficulty, score, now);
+        var answer = PlacementAnswer.Create(
+            Id, item, difficulty, score, now, rawAnswer, evaluationJson);
         _answers.Add(answer);
         if (scoredByFallback) FallbackScoredCount++;
         return answer;
@@ -90,19 +130,86 @@ public class PlacementAnswer
 
     public DateTimeOffset AnsweredAt { get; private set; }
 
+    /// <summary>The CEFR band the item was authored for.</summary>
+    public CefrLevel Level { get; private set; }
+
+    /// <summary>What the item measures — grammar and spelling included.</summary>
+    public PlacementDomain Domain { get; private set; }
+
+    /// <summary>A second skill this answer is evidence for, if any.</summary>
+    public SkillType? AlsoEvidenceFor { get; private set; }
+
+    /// <summary>The band the AI thought this answer showed, if it rated it.</summary>
+    public CefrLevel? AiEstimatedLevel { get; private set; }
+
+    /// <summary>
+    /// What the learner actually said or wrote.
+    /// </summary>
+    /// <remarks>
+    /// Kept for the analytics layer (§26): a level on its own cannot be
+    /// re-examined, and the transcript of a spoken answer is the most useful
+    /// record this test produces. Never returned to the learner.
+    /// </remarks>
+    public string? RawAnswer { get; private set; }
+
+    /// <summary>The AI evaluation, as returned, for free responses.</summary>
+    public string? EvaluationJson { get; private set; }
+
+    /// <summary>
+    /// Replaces the offline score with the AI's judgement of the same answer.
+    /// </summary>
+    /// <remarks>
+    /// Only Speaking and Writing reach this: they have no answer key, so the
+    /// score recorded during the test was a length-and-variety heuristic
+    /// standing in until the whole set could be read together.
+    ///
+    /// The evidence is kept alongside, because a band that surprises the Owner
+    /// should be answerable with what the learner actually said.
+    /// </remarks>
+    public void ApplyAiRating(double score, CefrLevel? estimatedLevel, string evidence)
+    {
+        Score = Math.Clamp(score, 0, 1);
+        AiEstimatedLevel = estimatedLevel;
+        EvaluationJson = evidence;
+    }
+
     internal static PlacementAnswer Create(
         Guid sessionId,
         BankItem item,
         double difficulty,
         double score,
-        DateTimeOffset now) =>
+        DateTimeOffset now,
+        string? rawAnswer,
+        string? evaluationJson) =>
         new()
         {
             SessionId = sessionId,
             ItemId = item.Id,
             Skill = item.Skill,
+            Level = item.Level,
+            Domain = item.MeasuredDomain,
+            AlsoEvidenceFor = item.AlsoEvidenceFor,
             Difficulty = difficulty,
             Score = score,
             AnsweredAt = now,
+            // Only production items carry a raw answer; storing the letter a
+            // learner tapped on a multiple-choice item is noise.
+            RawAnswer = item.IsFreeText ? rawAnswer : null,
+            EvaluationJson = evaluationJson,
         };
+}
+
+/// <summary>
+/// The version of the placement instrument.
+/// </summary>
+/// <remarks>
+/// Bumped whenever the item bank or the scoring changes in a way that makes old
+/// results incomparable — which is the whole reason it is recorded (§27).
+///
+/// v2 (2026-08-17): Speaking answered by voice rather than typed, nine grammar
+/// items added as evidence for Speaking and Writing, per-answer evidence stored.
+/// </remarks>
+public static class PlacementVersion
+{
+    public const int Current = 2;
 }

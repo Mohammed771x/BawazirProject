@@ -1,142 +1,150 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:speech_to_text/speech_to_text.dart';
 
-/// Speech recognition for the Speaking session.
+import 'speech_provider.dart';
+
+/// The one place spoken English comes from.
 ///
-/// The learner talks; this turns it into the text the backend already knows how
-/// to handle. Nothing here judges anything — the transcript is sent to the
-/// server exactly as recognised, and the evaluation happens there
-/// (rule R1, rule R2).
+/// Every speaker button, every listening player, every tutor turn goes through
+/// this service — so play/stop behaves identically everywhere and there is a
+/// single thing to improve when the voice provider changes.
 ///
-/// **Pronunciation is deliberately not assessed anywhere in WordOS.** What comes
-/// back from a recogniser is a best guess, so a "mispronunciation" is
-/// indistinguishable from a recognition error — scoring it would punish the
-/// learner for their microphone and their accent.
+/// It owns two facts the UI needs and cannot derive for itself:
 ///
-/// Like [TtsService], every platform call is guarded. A device with no
-/// microphone permission, no recogniser, or (commonly) the iOS Simulator must
-/// degrade to typing rather than trap the learner in a session they cannot
-/// finish.
-class SpeechService {
-  SpeechService({SpeechToText? speech}) : _speech = speech ?? SpeechToText();
-
-  final SpeechToText _speech;
-
-  bool _initialised = false;
-  bool _available = false;
-  bool _listening = false;
-
-  bool get isListening => _listening;
-
-  /// False when this device cannot listen at all — no permission, no
-  /// recogniser, or a simulator. The UI offers typing instead.
-  bool get isAvailable => _available;
-
-  /// Asks for permission and checks a recogniser exists.
-  ///
-  /// Called before the first listen rather than at construction, so the
-  /// permission prompt appears when the learner opens a Speaking session and
-  /// can see why it is being asked.
-  Future<bool> initialise() async {
-    if (_initialised) return _available;
-    _initialised = true;
-
-    try {
-      _available = await _speech
-          .initialize(
-            onError: (_) => _listening = false,
-            onStatus: (status) {
-              if (status == 'done' || status == 'notListening') {
-                _listening = false;
-              }
-            },
-          )
-          .timeout(const Duration(seconds: 10), onTimeout: () => false);
-    } catch (_) {
-      // No plugin, no permission, no recogniser — all the same to the caller.
-      _available = false;
-    }
-    return _available;
+/// * **what is speaking**, identified by an [utteranceId] the caller chooses,
+///   so one speaker button can show "playing" while every other stays idle;
+/// * **when it stops**, whether that was the end of the sentence, another
+///   utterance taking over, or the learner tapping again.
+///
+/// Only one utterance ever plays. Starting a new one stops the old one first —
+/// two voices talking over each other is never what anyone wanted.
+class SpeechService extends ChangeNotifier {
+  SpeechService({SpeechProvider? provider})
+      : _provider = provider ?? DeviceSpeechProvider() {
+    _provider.onComplete = _handleComplete;
   }
 
-  /// Listens until the learner stops talking, and returns what they said.
+  final SpeechProvider _provider;
+
+  String? _utteranceId;
+  Completer<void>? _utterance;
+
+  /// What is speaking right now, or null when nothing is.
+  String? get utteranceId => _utteranceId;
+
+  bool get isSpeaking => _utteranceId != null;
+
+  /// True when [id] is the utterance currently playing.
   ///
-  /// The stop is automatic: [pauseFor] silence ends the turn, so the learner
-  /// never presses anything. [listenFor] is the hard ceiling that stops an open
-  /// microphone running forever if the silence detector never fires.
+  /// This is what a speaker button binds to, so its icon can never disagree
+  /// with what the speakers are actually doing.
+  bool isSpeakingId(String id) => _utteranceId == id;
+
+  bool get isAvailable => _provider.isAvailable;
+
+  String? get voiceDescription => _provider.voiceDescription;
+
+  Future<void> initialise() => _provider.initialise();
+
+  /// Speaks [text], or stops it if that same utterance is already playing.
   ///
-  /// Returns null when nothing usable was heard, which the caller treats as
-  /// "ask again" rather than as an answer.
-  Future<String?> listenOnce({
-    Duration pauseFor = const Duration(seconds: 3),
-    Duration listenFor = const Duration(seconds: 45),
+  /// The behaviour §10 asks for: first tap plays, second tap stops immediately
+  /// rather than making the learner wait out the sentence.
+  Future<void> toggle(
+    String id,
+    String text, {
+    SpeechRate rate = SpeechRate.normal,
   }) async {
-    if (!await initialise()) return null;
-
-    final completer = Completer<String?>();
-    var best = '';
-
-    try {
-      _listening = true;
-      await _speech.listen(
-        onResult: (result) {
-          if (result.recognizedWords.isNotEmpty) best = result.recognizedWords;
-          if (result.finalResult && !completer.isCompleted) {
-            completer.complete(best.trim().isEmpty ? null : best.trim());
-          }
-        },
-        listenOptions: SpeechListenOptions(
-          pauseFor: pauseFor,
-          listenFor: listenFor,
-          localeId: 'en_US',
-          // Partial results are what make the learner's words appear as they
-          // speak; without them the screen looks frozen for the whole turn.
-          partialResults: true,
-          cancelOnError: true,
-          // Dictation keeps the microphone open through natural pauses instead
-          // of ending the turn at the first comma.
-          listenMode: ListenMode.dictation,
-        ),
-      );
-
-      // The hard ceiling. `listenFor` should end it first; this is the backstop
-      // for a recogniser that stops reporting.
-      final heard = await completer.future.timeout(
-        listenFor + const Duration(seconds: 5),
-        onTimeout: () => best.trim().isEmpty ? null : best.trim(),
-      );
-
-      return heard;
-    } catch (_) {
-      return null;
-    } finally {
-      _listening = false;
+    if (_utteranceId == id) {
       await stop();
+      return;
+    }
+    await speak(id, text, rate: rate);
+  }
+
+  /// Starts an utterance, replacing anything already speaking.
+  Future<bool> speak(
+    String id,
+    String text, {
+    SpeechRate rate = SpeechRate.normal,
+  }) async {
+    await stop();
+
+    _utteranceId = id;
+    notifyListeners();
+
+    final started = await _provider.speak(text, rate: rate);
+    if (!started) {
+      // Nothing is playing, so the UI must not claim otherwise.
+      _utteranceId = null;
+      notifyListeners();
+    }
+    return started;
+  }
+
+  /// Speaks and returns only once the voice has actually stopped.
+  ///
+  /// Used by the hands-free conversation, where the microphone must open on
+  /// completion rather than after a guessed delay — a guess either cuts the
+  /// tutor off or records its own voice.
+  ///
+  /// The wait is bounded: a platform that never reports completion would
+  /// otherwise hang the conversation for good.
+  Future<bool> speakToCompletion(
+    String id,
+    String text, {
+    SpeechRate rate = SpeechRate.normal,
+  }) async {
+    final started = await speak(id, text, rate: rate);
+    if (!started) return false;
+
+    final completer = _utterance = Completer<void>();
+    try {
+      await completer.future.timeout(
+        // Roughly reading speed, with a floor for short replies.
+        Duration(seconds: 8 + (text.length ~/ 10)),
+      );
+      return true;
+    } on TimeoutException {
+      await stop();
+      return true;
+    } finally {
+      _utterance = null;
     }
   }
 
   Future<void> stop() async {
-    try {
-      await _speech.stop();
-    } catch (_) {
-      // Nothing useful to do; the turn is over either way.
+    if (_utteranceId == null) return;
+
+    await _provider.stop();
+    _handleComplete();
+  }
+
+  void _handleComplete() {
+    final pending = _utterance;
+    if (pending != null && !pending.isCompleted) pending.complete();
+
+    if (_utteranceId != null) {
+      _utteranceId = null;
+      notifyListeners();
     }
   }
 
-  Future<void> cancel() async {
-    try {
-      await _speech.cancel();
-    } catch (_) {
-      // Ignore.
-    }
-    _listening = false;
+  @override
+  void dispose() {
+    _provider.onComplete = null;
+    unawaited(_provider.dispose());
+    super.dispose();
   }
 }
 
-final speechServiceProvider = Provider<SpeechService>((ref) {
-  final service = SpeechService();
-  ref.onDispose(service.cancel);
-  return service;
-});
+/// App-wide. One voice, one playback state, one thing to replace later.
+///
+/// No `ref.onDispose` here: `ChangeNotifierProvider` already disposes the
+/// notifier it creates, and registering it a second time disposes it twice —
+/// which `ChangeNotifier` asserts against.
+final speechServiceProvider = ChangeNotifierProvider<SpeechService>(
+  (ref) => SpeechService(),
+);

@@ -98,13 +98,17 @@ void main() {
               orElse: () => null);
       expect(prompt, isNotNull, reason: 'a review word should be on screen');
 
+      // Selecting *is* the whole interaction now: the review evaluates and
+      // moves on by itself (§9–12). The only button left is the one that ends
+      // the session, so the learner chooses when to see their result.
       await tester.tap(find.text(meanings[prompt]!).last);
       await tester.pumpAndSettle();
 
       final finish = find.widgetWithText(FilledButton, 'Finish');
-      final next = find.widgetWithText(FilledButton, 'Next');
-      await tester.tap(finish.evaluate().isNotEmpty ? finish : next);
-      await tester.pumpAndSettle();
+      if (finish.evaluate().isNotEmpty) {
+        await tester.tap(finish);
+        await tester.pumpAndSettle();
+      }
     }
 
     expect(find.text('Weekly score'), findsOneWidget);

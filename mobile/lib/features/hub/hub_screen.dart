@@ -117,16 +117,18 @@ class _DailyProgressCard extends ConsumerWidget {
               Expanded(
                 child: Text(s.todayProgress, style: context.text.titleSmall),
               ),
+              // The count of words added today, not a quota (§1). "10 / 0"
+              // read as a target the learner had already overshot, which is
+              // both wrong and discouraging; the daily target is a session-size
+              // cap the backend applies, never something to score them against.
               Text(
-                '${progress.wordsAddedToday} / ${progress.dailyTarget}',
-                style: context.text.titleMedium?.copyWith(
+                '${progress.wordsAddedToday}',
+                style: context.text.headlineSmall?.copyWith(
                   color: context.colors.primary,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: AppSpacing.sm),
-          StepProgressBar(value: progress.ratio),
         ],
       ),
     );
@@ -144,8 +146,15 @@ class _SkillCardTile extends ConsumerWidget {
     final color = SkillVisuals.color(context, card.skill);
     final isReady = card.availability == SkillAvailability.available;
 
+    // Reading and Listening stay open even with nothing due: the session screen
+    // offers a practice passage instead of a closed door (Part 2 §5). The other
+    // three are about the words themselves, so with no words there is nothing
+    // on the far side of the tap.
+    final canPractise =
+        card.skill == SkillType.reading || card.skill == SkillType.listening;
+
     return AppCard(
-      onTap: isReady
+      onTap: isReady || canPractise
           ? () async {
               await context.push(Routes.session(card.skill));
               ref.invalidate(hubProvider);

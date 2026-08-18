@@ -85,6 +85,39 @@ void main() {
       }
     });
 
+    test('a private address is a debug-only exception, and covers the cable',
+        () {
+      // Testing on real hardware needs *some* way in: a phone cannot reach the
+      // Mac's loopback. `169.254` is the address the two give themselves over
+      // the USB cable when no router is involved, and it is the narrowest of
+      // these ranges — it cannot be routed off the physical link.
+      for (final host in [
+        '192.168.1.35', '10.0.0.4', '172.20.1.9', '169.254.210.154',
+        'macbook.local',
+      ]) {
+        final env = AppEnvironment(
+          useMockBackend: false,
+          baseUrl: 'http://$host:5199/api',
+        );
+
+        expect(env.isPrivateNetwork, isTrue, reason: '$host is private');
+        // The exception is gated on the build being a debug build, which a
+        // test run is. A release build sends tokens over TLS or not at all.
+        expect(env.assertTransportIsSafe, returnsNormally);
+      }
+
+      // And nothing else gets in on the same reasoning.
+      for (final host in ['8.8.8.8', '172.32.0.1', 'api.wordos.app']) {
+        final env = AppEnvironment(
+          useMockBackend: false,
+          baseUrl: 'http://$host:5199/api',
+        );
+
+        expect(env.isPrivateNetwork, isFalse, reason: '$host is not private');
+        expect(env.assertTransportIsSafe, throwsA(isA<StateError>()));
+      }
+    });
+
     test('the mock backend bypasses the check, since nothing leaves the device',
         () {
       const env = AppEnvironment(

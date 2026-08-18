@@ -102,8 +102,11 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
         foreach (var path in new[]
                  {
                      "/api/me", "/api/words?state=LEARNING",
-                     "/api/words/lookup?q=bo", "/api/admin/overview",
-                     "/api/admin/users",
+                     "/api/words/lookup?q=bo", "/api/words/define?w=research",
+                     "/api/admin/overview", "/api/admin/users",
+                     $"/api/admin/users/{Guid.NewGuid()}/words",
+                     $"/api/admin/users/{Guid.NewGuid()}/placement",
+                     $"/api/admin/words/{Guid.NewGuid()}",
                  })
         {
             var response = await Client.GetAsync(path);
@@ -238,6 +241,12 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
                      "/api/admin/overview",
                      "/api/admin/users",
                      $"/api/admin/users/{Guid.NewGuid()}",
+                     // The Part 3 views. Every one of them is a route a
+                     // learner could guess, so every one is checked here
+                     // rather than trusted to the group policy alone.
+                     $"/api/admin/users/{Guid.NewGuid()}/words",
+                     $"/api/admin/users/{Guid.NewGuid()}/placement",
+                     $"/api/admin/words/{Guid.NewGuid()}",
                  })
         {
             var response = await Client.GetAsync(path);
@@ -483,10 +492,116 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
         var (token, _) = await RegisterAsync();
         Authenticate(token);
 
+        var senseId = $"sec-{Guid.NewGuid():N}";
+        await using (var context = db.CreateContext())
+        {
+            context.LexiconEntries.Add(LexiconEntry.Create(
+                senseId, $"b{Guid.NewGuid():N}"[..10], "b", "n",
+                "a long word", "كلمة", CefrLevel.B1, 1,
+                "en=wordos-test;ar=wordos-test", DateTimeOffset.UtcNow));
+            await context.SaveChangesAsync();
+        }
+
         var response = await Client.GetFromJsonAsync<JsonElement>(
             "/api/words/lookup?q=b");
 
-        Assert.Equal(0, response.GetArrayLength());
+        // One letter matches a one-letter word and nothing else. "a" and "I"
+        // are words and must be addable, but a single letter must never return
+        // everything that starts with it — that is a dictionary dump.
+        Assert.DoesNotContain(
+            response.EnumerateArray(),
+            r => r.GetProperty("senseId").GetString() == senseId);
+    }
+
+    // ── Hostile input ───────────────────────────────────────────────────────
+
+    [SkippableTheory]
+    // The number is typed in by hand in the Owner's dashboard, so it arrives as
+    // whatever was typed. Large ones used to overflow the date arithmetic and
+    // answer 500, which emptied the dashboard the Owner was looking at.
+    [InlineData("999999999")]
+    [InlineData("2147483647")]
+    [InlineData("-5")]
+    [InlineData("0")]
+    public async Task Any_reporting_window_a_keyboard_can_produce_is_answered(
+        string days)
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        var token = await RegisterOwnerAsync();
+        Authenticate(token);
+
+        foreach (var path in new[] { "/api/admin/overview", "/api/admin/users" })
+        {
+            var response = await Client.GetAsync($"{path}?days={days}");
+
+            Assert.True(response.IsSuccessStatusCode,
+                $"{path}?days={days} answered {(int)response.StatusCode}");
+        }
+    }
+
+    [SkippableTheory]
+    // A value that cannot be bound is the caller's mistake. ASP.NET raises it
+    // as an exception after the endpoint filters, so without handling it every
+    // mistyped query answered 500 and was logged as a server fault.
+    [InlineData("/api/admin/overview?days=abc")]
+    [InlineData("/api/admin/overview?days=3.5")]
+    [InlineData("/api/words?page=x&pageSize=20")]
+    public async Task An_unreadable_query_value_is_refused_not_a_server_error(
+        string path)
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        var token = await RegisterOwnerAsync();
+        Authenticate(token);
+
+        var response = await Client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        // Outside Development the framework answers the binding failure itself,
+        // with an empty body; inside it, it throws and the handler shapes the
+        // response. Either way the caller gets a refusal — what matters is that
+        // neither path is a 500.
+        var body = await response.Content.ReadAsStringAsync();
+        if (body.Length > 0)
+        {
+            var json = JsonSerializer.Deserialize<JsonElement>(body);
+            Assert.Equal("INVALID_PARAMETER",
+                json.GetProperty("error").GetProperty("code").GetString());
+        }
+    }
+
+    [SkippableTheory]
+    // Control characters arrive from a paste or a broken client. PostgreSQL
+    // refuses a NUL byte inside a text value outright, so one pasted character
+    // was a 500 — never an injection risk, since the query is parameterised,
+    // but a crash all the same.
+    [InlineData("ab\u0000cd")]
+    [InlineData("re\u0007search")]
+    [InlineData("\u0001\u0002")]
+    public async Task Control_characters_in_a_search_term_are_stripped(
+        string term)
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        var (token, _) = await RegisterAsync();
+        Authenticate(token);
+
+        foreach (var path in new[]
+                 {
+                     "/api/words/lookup?q=" + Uri.EscapeDataString(term),
+                     "/api/words/define?w=" + Uri.EscapeDataString(term),
+                     "/api/words?page=0&pageSize=20&q=" + Uri.EscapeDataString(term),
+                 })
+        {
+            var response = await Client.GetAsync(path);
+
+            Assert.True(
+                response.IsSuccessStatusCode ||
+                response.StatusCode == HttpStatusCode.BadRequest,
+                $"{path} answered {(int)response.StatusCode}");
+        }
     }
 
     // ── Error responses ─────────────────────────────────────────────────────

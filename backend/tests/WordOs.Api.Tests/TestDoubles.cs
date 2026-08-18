@@ -1,4 +1,5 @@
 using WordOs.Application.Abstractions;
+using WordOs.Domain.Common;
 
 namespace WordOs.Api.Tests;
 
@@ -88,6 +89,18 @@ public sealed class StubAiContentService : IAiContentService
                 [$"wrong-{i}-a", $"wrong-{i}-b", $"wrong-{i}-c"]))
             .ToList();
 
+        // A word of the passage with the meaning it carries *there* — the
+        // real generator returns one of these per content word.
+        var glossary = new List<GlossaryEntry>
+        {
+            new("class", "حصة دراسية", "noun"),
+            new("began", "بدأ", "verb"),
+            new("bright", "مشرق", "adjective"),
+        };
+
+        glossary.AddRange(request.Words.Select(w =>
+            new GlossaryEntry(w.Text, w.Meaning, w.PartOfSpeech)));
+
         return Task.FromResult(new GeneratedContent(
             Text: string.Join(' ', sentences),
             Sentences: sentences,
@@ -96,13 +109,26 @@ public sealed class StubAiContentService : IAiContentService
             PromptVersion: "stub-v1",
             Model: "stub",
             Tokens: 0,
-            FromFallback: false));
+            FromFallback: false,
+            Glossary: glossary));
     }
+
+    /// <summary>
+    /// The language the last evaluation was asked to write its feedback in.
+    /// </summary>
+    /// <remarks>
+    /// Recorded because the header that carries it crosses four layers before
+    /// it reaches the prompt, and every one of them is a place it could be
+    /// dropped silently (ADR-035).
+    /// </remarks>
+    public string? LastFeedbackLanguage { get; private set; }
 
     public Task<WritingObservation> EvaluateWritingAsync(
         WritingEvaluationRequest request,
         CancellationToken ct = default)
     {
+        LastFeedbackLanguage = request.FeedbackLanguage;
+
         if (Fail) throw new WordOs.Infrastructure.Ai.AiServiceException("stub outage");
 
         var used = request.Sentence.Contains(
@@ -116,7 +142,9 @@ public sealed class StubAiContentService : IAiContentService
             UsageCorrect: used,
             Understandable: request.Sentence.Split(' ').Length >= 3,
             GrammarNote: "missing article",
-            Feedback: "stub feedback",
+            // Echoed so a test can see which language was asked for without
+            // reaching into the double.
+            Feedback: $"stub feedback [{request.FeedbackLanguage}]",
             Suggestion: "stub suggestion",
             FromFallback: false,
             // The real service reports these on every call; a double that omits
@@ -159,6 +187,100 @@ public sealed class StubAiContentService : IAiContentService
 
     /// <summary>How many end-of-conversation evaluations were requested.</summary>
     public int SpeakingEvaluations { get; private set; }
+
+    /// <summary>How many placement evaluations were requested.</summary>
+    public int PlacementEvaluations { get; private set; }
+
+    /// <summary>
+    /// Forces a specific score for every placement answer, so a test can prove
+    /// the AI's judgement actually reaches the band rather than being computed
+    /// around.
+    /// </summary>
+    public double? PlacementScore { get; set; }
+
+    /// <summary>Re-tellings requested, and the level each asked for.</summary>
+    public List<CefrLevel> RelevelRequests { get; } = [];
+
+    public Task<GeneratedContent> RelevelContentAsync(
+        RelevelRequest request,
+        CancellationToken ct = default)
+    {
+        RelevelRequests.Add(request.ToLevel);
+        if (Fail) throw new WordOs.Infrastructure.Ai.AiServiceException("stub outage");
+
+        // Recognisably the *same* story, told differently — which is the
+        // property the endpoint exists to provide.
+        var sentences = new List<string>
+        {
+            $"[{request.ToLevel.ToWire()}] A student was preparing for an "
+            + "important week of study.",
+            "They read about it every evening.",
+        };
+
+        foreach (var word in request.Words)
+        {
+            sentences.Add($"The teacher explained {word.Text} again, simply.");
+        }
+
+        var questions = Enumerable.Range(0, request.ComprehensionCount)
+            .Select(i => new GeneratedQuestion(
+                $"Re-told question {i + 1}?",
+                "The right answer",
+                ["Wrong one", "Another wrong one", "A third"]))
+            .ToList();
+
+        return Task.FromResult(new GeneratedContent(
+            Text: string.Join(' ', sentences),
+            Sentences: sentences,
+            Comprehension: questions,
+            Contexts: request.Words
+                .Select(w => new GeneratedWordContext(
+                    w.Text, sentences[0], sentences[^1], null))
+                .ToList(),
+            PromptVersion: "stub-relevel-v1",
+            Model: "stub",
+            Tokens: 7,
+            FromFallback: false,
+            Glossary: [new GlossaryEntry("student", "طالب", "noun")]));
+    }
+
+    public Task<PlacementEvaluation> EvaluatePlacementAsync(
+        PlacementEvaluationRequest request,
+        CancellationToken ct = default)
+    {
+        PlacementEvaluations++;
+        if (Fail) throw new WordOs.Infrastructure.Ai.AiServiceException("stub outage");
+
+        var ratings = request.Answers.Select(a => new PlacementAnswerRating(
+            a.ItemId,
+            a.Level,
+            // A crude stand-in for judgement: an empty or near-empty answer
+            // rates badly, a substantial one rates well. Enough for a test to
+            // tell a strong run from a weak one without pretending to be a
+            // language model.
+            PlacementScore ?? RateStub(a.Answer),
+            "stub rating")).ToList();
+
+        return Task.FromResult(new PlacementEvaluation(
+            ratings,
+            OverallLevel: null,
+            Summary: "stub placement summary",
+            FromFallback: false,
+            PromptVersion: "stub-placement-v1",
+            Model: "stub",
+            Tokens: 5));
+    }
+
+    private static double RateStub(string answer)
+    {
+        var words = answer.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        return words switch
+        {
+            0 => 0,
+            < 6 => 0.15,
+            _ => 0.85,
+        };
+    }
 
     public Task<SpeakingEvaluation> EvaluateSpeakingAsync(
         SpeakingEvaluationRequest request,

@@ -317,6 +317,44 @@ void main() {
   });
 
   group('spelling', () {
+    // One ladder, entered at the rung that suits the learner: C1 starts at the
+    // dictionary definition, B2 one rung down, B1 at a synonym, and A1/A2 at
+    // the Arabic meaning. Below that everything is still reachable one press at
+    // a time (Part 2 §38–§40). Parity with `BuildHintLadder` in the backend.
+    for (final (level, expectedEntry) in const [
+      (CefrLevel.c1, SpellingClueKind.definitionEn),
+      (CefrLevel.b2, SpellingClueKind.simplifiedDefinition),
+      (CefrLevel.b1, SpellingClueKind.synonym),
+      (CefrLevel.a2, SpellingClueKind.arabicMeaning),
+      (CefrLevel.a1, SpellingClueKind.arabicMeaning),
+    ]) {
+      test('the hint ladder for ${level.wire} starts at ${expectedEntry.name}',
+          () {
+        engine.addWord(user, candidate('research'));
+        _advanceTo(engine, user, SkillType.spelling);
+        // Spelling carries no level of its own; its clue follows Reading
+        // (ADR-008).
+        engine.updateSkillLevel(user, SkillType.reading, level);
+
+        final task =
+            engine.startSession(user, SkillType.spelling).items.single;
+
+        expect(task.hints.first.kind, expectedEntry);
+        expect(task.clueKind, expectedEntry,
+            reason: 'the clue is the first rung, not a separate thing');
+        expect(task.hints.last.kind, SpellingClueKind.letterCount,
+            reason: 'the ladder always ends at the number of letters');
+
+        // Every rung says something, nothing repeats, and none of them spells
+        // the word out — a press that changes nothing reads as broken.
+        expect(task.hints.map((h) => h.text).toSet().length, task.hints.length);
+        for (final hint in task.hints) {
+          expect(hint.text.trim(), isNotEmpty);
+          expect(hint.text.toLowerCase(), isNot(contains('research')));
+        }
+      });
+    }
+
     test('clue and input mode follow the level, and a hint is always offered',
         () {
       engine.addWord(user, candidate('research'));
@@ -328,10 +366,35 @@ void main() {
       expect(task.type, SessionItemType.spellingTask);
       expect(task.clue, isNotNull);
       expect(task.clueKind, isNotNull);
-      expect(task.hint, isNotNull, reason: 'MVP Core §33 allows extra help');
+      // The hint ladder, easiest last: each press steps down one rung and the
+      // last one is the letter count (Part 2 §38–§40).
+      expect(task.hints, isNotEmpty);
+      expect(task.hints.first.kind, task.clueKind);
+      expect(task.hints.first.text, task.clue);
+      expect(task.hints.last.kind, SpellingClueKind.letterCount);
+      expect(
+        task.hints.map((h) => h.kind.index).toList(),
+        orderedEquals(
+          task.hints.map((h) => h.kind.index).toList()..sort(),
+        ),
+        reason: 'a hint may only ever get easier',
+      );
       expect(task.inputMode, isNotNull);
       if (task.inputMode == SpellingInputMode.letterTiles) {
-        expect(task.letters, isNotEmpty);
+        // More tiles than the word needs (§36–§37): a pool of exactly the
+        // right letters is an anagram that can be solved by exhausting it,
+        // without the learner ever knowing which word they spelled.
+        expect(task.letters.length, greaterThan('research'.length));
+
+        // Every letter is still there, counted — "research" needs two "r"s.
+        for (final letter in 'research'.split('').toSet()) {
+          expect(
+            task.letters.where((l) => l == letter).length,
+            greaterThanOrEqualTo(
+                'research'.split('').where((l) => l == letter).length),
+            reason: 'not enough "$letter" tiles',
+          );
+        }
       }
     });
 

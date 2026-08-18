@@ -1,9 +1,11 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using WordOs.Application.Abstractions;
 using WordOs.Domain.Common;
 using WordOs.Domain.Levels;
 using WordOs.Domain.Placement;
+using WordOs.Domain.Users;
 using WordOs.Infrastructure.Persistence;
 
 namespace WordOs.Api.Endpoints;
@@ -137,7 +139,10 @@ public static class PlacementEndpoints
             item, difficulty, score, now,
             // The AI evaluator arrives in Phase 6; until then every free-text
             // answer is scored by the offline fallback, and that is recorded.
-            scoredByFallback: item.IsFreeText);
+            scoredByFallback: item.IsFreeText,
+            // The learner's own words — the most useful record this test
+            // produces, and impossible to recover later from a level (§26).
+            rawAnswer: request.Answer);
 
         var next = engine.NextItem(session.ToResponses(), Random.Shared);
         session.SetCurrentItem(next?.Id);
@@ -152,6 +157,7 @@ public static class PlacementEndpoints
         ClaimsPrincipal principal,
         WordOsDbContext db,
         PlacementEngine engine,
+        IAiContentService ai,
         TimeProvider clock,
         CancellationToken ct)
     {
@@ -177,6 +183,14 @@ public static class PlacementEndpoints
                 "The placement test is not finished yet.");
         }
 
+        // Speaking and Writing are re-scored by the AI before the bands are
+        // computed. During the test they carry an offline score, because the
+        // adaptive engine needs a number immediately to choose the next item;
+        // that number is length-and-variety and cannot tell a short fluent
+        // answer from a padded weak one. Reading and Listening are untouched —
+        // their answers are matched against a known key.
+        var aiScored = await RateProductiveAnswersAsync(session, ai, ct);
+
         var outcome = engine.Complete(session.ToResponses());
         var now = clock.GetUtcNow();
 
@@ -201,20 +215,31 @@ public static class PlacementEndpoints
 
         user.AdvanceOnboarding(OnboardingStage.Complete);
         session.Complete(now);
+        db.ActivityEvents.Add(ActivityEvent.Record(
+            user.Id, ActivityType.PlacementCompleted, now,
+            entityId: session.Id));
 
         await db.SaveChangesAsync(ct);
 
         return Results.Ok(new
         {
-            levels = outcome.Levels.Select(l => new
-            {
-                skill = l.Skill.ToWire(),
-                // Null for Spelling — measured, never levelled (ADR-008).
-                systemAssessedLevel = l.Level?.ToWire(),
-                userSelectedLevel = l.Level?.ToWire(),
-                confidence = l.Confidence,
-                rollingAccuracy = l.Accuracy,
-            }).ToList(),
+            // The four the learner sees. Spelling is measured and stored — its
+            // row still exists and still drives the hint strategy — but it is
+            // not a fifth primary skill and must not appear beside the others
+            // (§13, §20, §21). Grammar likewise: it shaped Speaking and Writing
+            // above rather than becoming a level of its own.
+            levels = outcome.Levels
+                .Where(l => l.Skill != SkillType.Spelling)
+                .Select(l => new
+                {
+                    skill = l.Skill.ToWire(),
+                    systemAssessedLevel = l.Level?.ToWire(),
+                    userSelectedLevel = l.Level?.ToWire(),
+                    confidence = l.Confidence,
+                    rollingAccuracy = l.Accuracy,
+                }).ToList(),
+            // Kept in the payload for the internal diagnostic it feeds — the
+            // spelling hint strategy — not as a level to display.
             spelling = new
             {
                 itemsAnswered = outcome.SpellingItemsAnswered,
@@ -222,14 +247,75 @@ public static class PlacementEndpoints
                 supportMode = outcome.SpellingSupportMode
                     .ToWire(),
             },
+            testVersion = session.TestVersion,
+            // Speaking and Writing were judged by the AI; the receptive skills
+            // were matched against a key. Saying so is honest, and explains why
+            // a band may move once real sessions start.
+            productiveScoredByAi = aiScored,
             summary = outcome.HasLowConfidence
-                ? "These are your starting levels. A couple of them are still "
-                  + "provisional — WordOS keeps measuring your real sessions and "
-                  + "will settle them within your first two weeks."
-                : "Your starting levels are set per skill. They are a starting "
-                  + "point — WordOS keeps measuring your real performance and "
-                  + "adjusts them over time.",
+                ? "A couple of these are still rough — the test was short, and "
+                  + "WordOS will settle them from your first two weeks of real "
+                  + "sessions."
+                : "Estimated per skill from a short test. WordOS keeps "
+                  + "measuring your real performance and adjusts as it learns "
+                  + "more about you.",
         });
+    }
+
+    /// <summary>
+    /// Replaces the offline scores for Speaking and Writing with the AI's.
+    /// </summary>
+    /// <remarks>
+    /// One call per skill, at the end — not per answer during the test, which
+    /// would put a model round-trip between every question and the next.
+    ///
+    /// The model rates; it does not place. Its per-answer scores go back into
+    /// the same Rasch estimator the receptive skills use, so a band is still
+    /// computed here, from evidence, under this server's confidence rules
+    /// (rule R2).
+    /// </remarks>
+    private static async Task<bool> RateProductiveAnswersAsync(
+        PlacementSession session,
+        IAiContentService ai,
+        CancellationToken ct)
+    {
+        var rated = false;
+
+        foreach (var skill in new[] { SkillType.Speaking, SkillType.Writing })
+        {
+            var answers = session.Answers
+                .Where(a => a.Skill == skill
+                            && !string.IsNullOrWhiteSpace(a.RawAnswer))
+                .ToList();
+
+            if (answers.Count == 0) continue;
+
+            var request = new PlacementEvaluationRequest(
+                skill,
+                answers.Select(a =>
+                {
+                    var item = PlacementItemBank.Find(a.ItemId);
+                    return new PlacementAnswerToRate(
+                        a.ItemId, a.Level, item?.Prompt ?? string.Empty,
+                        a.RawAnswer!);
+                }).ToList());
+
+            var evaluation = await ai.EvaluatePlacementAsync(request, ct);
+            if (evaluation.FromFallback) continue;
+
+            foreach (var rating in evaluation.Answers)
+            {
+                var answer = answers.FirstOrDefault(a => a.ItemId == rating.ItemId);
+                // The evidence is stored beside the score, so a surprising band
+                // can be read back rather than argued about (Part 3).
+                answer?.ApplyAiRating(
+                    rating.Score, rating.EstimatedLevel, rating.Evidence);
+            }
+
+            rated = true;
+        }
+
+        return rated;
     }
 
     private static object ToStep(
@@ -266,7 +352,15 @@ public static class PlacementEndpoints
         return new PlacementItemResponse(
             item.Id,
             item.Skill.ToWire(),
-            item.IsFreeText ? "FREE_TEXT" : "MULTIPLE_CHOICE",
+            // Three types, not two. A spoken item answered in a text box is a
+            // writing test filed under Speaking (§17) — and that is exactly
+            // what happened while this only ever said FREE_TEXT: the client
+            // has the microphone, it simply was never told to show it.
+            item.IsSpoken
+                ? "SPOKEN"
+                : item.IsFreeText
+                    ? "FREE_TEXT"
+                    : "MULTIPLE_CHOICE",
             item.Prompt,
             options,
             item.Passage,

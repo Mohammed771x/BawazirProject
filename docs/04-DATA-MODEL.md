@@ -50,10 +50,25 @@ rows — the doc-level states such as `READING_PENDING` are a *projection* of
 Global, not per-user. Built offline by joining three sources on the WordNet
 synset id, then loaded into PostgreSQL and served through our own API:
 
-`sense_id` (PK, WordNet synset id), `text`, `lemma`, `part_of_speech`,
+`sense_id` (PK, WordNet synset id), `text`, `text_normalized`, `lemma`, `part_of_speech`,
 `definition_en` (Open English WordNet), `meaning_ar` (Arabic WordNet),
-`cefr_level` (CEFR-J / Octanove, nullable), `frequency_rank`, `source_flags`,
-`updated_at`.
+`meaning_ar_normalized`, `cefr_level` (CEFR-J / Octanove, nullable), `frequency_rank`,
+`source_flags`, `updated_at`.
+
+Two provenances live here, and a row declares which it is in `source_flags`:
+
+* **Joined** from the three datasets — 175,611 rows, `en=oewn;ar=awn;cefr=…`.
+* **Authored** — the 167 closed-class words WordNet does not carry (pronouns, articles,
+  auxiliaries, modals, prepositions, conjunctions, question words), written into the importer
+  because those classes are finite and no upstream dataset supplies them (ADR-033). They carry
+  `en=wordos-closed-class`, a part of speech WordNet does not use (`pron`, `det`, `aux`,
+  `modal`, `prep`, `conj`, `part`, `intj`), and `frequency_rank = -1` so the auxiliary `are`
+  outranks the unit of area that shares its spelling.
+
+`meaning_ar_normalized` is the searchable fold of the Arabic gloss — diacritics and tatweel
+stripped, the alef and ya families collapsed, ta marbuta written as ha — with a trigram index,
+so a learner can find an English word by typing what it means (ADR-034). The displayed gloss is
+never changed.
 
 ```
 English word ─┐
@@ -120,8 +135,19 @@ generated itself (ADR-018, rule R8).
 ### `session_items` — one per question / task
 `id`, `session_id`, `word_id` (nullable for comprehension items), `item_type`
 (`COMPREHENSION`, `TARGET_WORD`, `WRITING_TASK`, `SPEAKING_TURN`, `SPELLING_TASK`,
-`REVIEW_ITEM`), `prompt`, `options` (jsonb, **already shuffled by the backend**),
-`correct_answer`, `user_answer`, `is_correct`, `attempt_number`, `answered_at`, `time_ms`.
+`REVIEW_ITEM`), `prompt`, `prompt_key` (nullable), `options` (jsonb, **already shuffled by the
+backend**), `correct_answer`, `user_answer`, `is_correct`, `attempt_number`, `answered_at`,
+`time_ms`.
+
+Spelling tasks carry three more: `clue` and `clue_kind` (the first rung of the hint ladder) and
+`hints` (jsonb — the whole ladder, easiest last, ADR-032), plus `letters` and `input_mode` for
+the tile pool. Listening items carry `audio_text`; Reading target words carry `context`.
+
+`prompt_key` is what makes an instruction sayable in the learner's language: it is set for the
+fixed instructions (`WRITE_THE_WORD`, `WRITE_A_SENTENCE`, `WRITE_A_SENTENCE_ABOUT_YOURSELF`) and
+**null for anything written for this session in particular**, because a comprehension question
+is content and content is not translated (ADR-035). `prompt` still carries the English text
+either way, as the fallback for a client that does not know a key.
 
 ### `ai_contents`
 `id`, `session_id`, `skill`, `prompt_version`, `model`, `request` (jsonb), `response` (jsonb),

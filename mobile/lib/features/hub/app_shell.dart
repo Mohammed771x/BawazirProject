@@ -49,7 +49,7 @@ class AppShell extends ConsumerWidget {
             NavigationDestination(
               icon: const Icon(Icons.style_outlined),
               selectedIcon: const Icon(Icons.style_rounded),
-              label: s.vocabulary,
+              label: s.myWords,
             ),
             NavigationDestination(
               icon: const Icon(Icons.settings_outlined),

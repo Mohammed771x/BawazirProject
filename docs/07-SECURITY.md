@@ -136,8 +136,26 @@ this is a stored-XSS vector.
 
 📋 A daily AI-spend cap per user, so one account cannot exhaust the budget.
 
-📋 The lookup endpoint requires a minimum query length and returns a bounded
-result set, so it cannot be used to dump the lexicon.
+✅ The lookup endpoint returns a bounded result set and caps the query length, so
+it cannot be used to dump the lexicon. A **single letter is matched exactly**
+rather than as a prefix — `a` and `I` are real words a learner must be able to
+add, while one letter must never return everything that starts with it. An
+Arabic query is a substring match over the meanings, so it too refuses a single
+character (ADR-033, ADR-034).
+
+✅ Search terms are stripped of control characters before they are compared.
+PostgreSQL refuses a NUL byte inside a text value, so one pasted character used
+to answer 500 — never an injection risk, since every query is parameterised by
+EF Core, but a crash all the same (ADR-036).
+
+✅ A query value that cannot be bound — `?days=abc`, a mistyped number, a stale
+link — is a **400 with `INVALID_PARAMETER`**, not a 500. ASP.NET raises binding
+failures as exceptions after the endpoint filters, so without handling them every
+caller mistake was logged as a server fault and hid real ones.
+
+✅ Numbers that reach date arithmetic are clamped rather than trusted. A
+hand-typed reporting window of 999,999,999 days overflowed `AddDays` and answered
+500; the window is capped at ten years in one shared place (ADR-036).
 
 ## 7. AI safety and prompt injection
 

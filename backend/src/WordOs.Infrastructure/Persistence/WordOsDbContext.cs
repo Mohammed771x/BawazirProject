@@ -35,6 +35,9 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
 
     public DbSet<LevelChangeRecord> LevelChanges => Set<LevelChangeRecord>();
 
+    /// <summary>The append-only activity log (Part 3 §34–§35).</summary>
+    public DbSet<ActivityEvent> ActivityEvents => Set<ActivityEvent>();
+
     public DbSet<Word> Words => Set<Word>();
 
     public DbSet<WordSkillState> WordSkillStates => Set<WordSkillState>();
@@ -86,6 +89,8 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
             e.HasIndex(x => x.Email).IsUnique();
             e.Property(x => x.PasswordHash).HasMaxLength(256).IsRequired();
             e.Property(x => x.DisplayName).HasMaxLength(120).IsRequired();
+            e.Property(x => x.PhoneCountryCode).HasMaxLength(6);
+            e.Property(x => x.PhoneNumber).HasMaxLength(20);
             e.Property(x => x.Role).HasConversion<string>().HasMaxLength(16);
             e.Property(x => x.OnboardingStage)
                 .HasConversion<string>().HasMaxLength(16);
@@ -158,6 +163,22 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
             e.Property(x => x.ChangeType).HasConversion<string>().HasMaxLength(32);
             e.Property(x => x.Reason).HasMaxLength(256);
             e.HasIndex(x => new { x.UserId, x.CreatedAt });
+        });
+
+        b.Entity<ActivityEvent>(e =>
+        {
+            e.ToTable("activity_events");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Type).HasConversion<string>().HasMaxLength(32);
+            e.Property(x => x.Skill).HasConversion<string?>().HasMaxLength(16);
+
+            // The two questions the dashboard asks: what did this learner do,
+            // and what happened across everyone in a window.
+            e.HasIndex(x => new { x.UserId, x.CreatedAt });
+            e.HasIndex(x => new { x.Type, x.CreatedAt });
+
+            e.HasOne<User>().WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
         b.Entity<Word>(e =>
@@ -233,6 +254,14 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
 
         b.Entity<PlacementAnswer>(e =>
         {
+            e.Property(x => x.Level).HasConversion<string>().HasMaxLength(8);
+            e.Property(x => x.Domain).HasConversion<string>().HasMaxLength(16);
+            e.Property(x => x.AlsoEvidenceFor)
+                .HasConversion<string?>().HasMaxLength(16);
+            // The learner's own words. Generous but bounded — a spoken answer
+            // transcript is longer than a typed one.
+            e.Property(x => x.RawAnswer).HasMaxLength(4000);
+            e.Property(x => x.EvaluationJson).HasMaxLength(4000);
             e.ToTable("placement_answers");
             e.HasKey(x => x.Id);
             e.Property(x => x.ItemId).HasMaxLength(64).IsRequired();
@@ -250,6 +279,8 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
             e.Property(x => x.LevelUsed).HasConversion<string>().HasMaxLength(8);
             e.Property(x => x.PromptVersion).HasMaxLength(64);
             e.Property(x => x.AiModel).HasMaxLength(64);
+            // Bounded generously: one entry per content word in a passage.
+            e.Property(x => x.GlossaryJson).HasMaxLength(20000);
             e.HasIndex(x => new { x.UserId, x.Skill, x.IsComplete });
             e.HasOne<User>().WithMany()
                 .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
@@ -275,8 +306,10 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
             e.Property(x => x.CorrectAnswer).HasMaxLength(512);
             e.Property(x => x.Clue).HasMaxLength(1024);
             e.Property(x => x.ClueKind).HasConversion<string?>().HasMaxLength(24);
+            e.Property(x => x.PromptKey).HasConversion<string?>().HasMaxLength(32);
             e.Property(x => x.InputMode).HasConversion<string?>().HasMaxLength(16);
-            e.Property(x => x.Hint).HasMaxLength(256);
+            // The hint ladder: an ordered array, so it is stored as JSON.
+            e.Property(x => x.HintsJson).HasColumnType("jsonb");
             e.Property(x => x.AudioText).HasMaxLength(4096);
             e.Property(x => x.LastAnswer).HasMaxLength(4000);
             e.HasIndex(x => new { x.SessionId, x.Position });
@@ -335,6 +368,7 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
             e.Property(x => x.PartOfSpeech).HasMaxLength(32);
             e.Property(x => x.DefinitionEn).HasMaxLength(2048);
             e.Property(x => x.MeaningAr).HasMaxLength(512).IsRequired();
+            e.Property(x => x.MeaningArNormalized).HasMaxLength(512).IsRequired();
             e.Property(x => x.CefrLevel).HasConversion<string?>().HasMaxLength(8);
             e.Property(x => x.SourceFlags).HasMaxLength(128);
 

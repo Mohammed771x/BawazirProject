@@ -4,7 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:wordos/app/wordos_app.dart';
 import 'package:wordos/core/api/api_providers.dart';
 import 'package:wordos/core/api/wordos_api.dart';
-import 'package:wordos/core/audio/tts_service.dart';
+import 'package:wordos/core/audio/speech_provider.dart';
+import 'package:wordos/core/audio/speech_service.dart';
 import 'package:wordos/core/models/models.dart';
 import 'package:wordos/mock_backend/engine/mock_engine.dart';
 import 'package:wordos/mock_backend/mock_wordos_api.dart';
@@ -35,8 +36,9 @@ class FlakyWordOsApi implements WordOsApi {
   }
 
   @override
-  Future<SkillSession> startSession(SkillType skill) =>
-      _run('startSession', () => _inner.startSession(skill));
+  Future<SkillSession> startSession(SkillType skill, {bool practice = false}) =>
+      _run('startSession',
+          () => _inner.startSession(skill, practice: practice));
 
   @override
   Future<AnswerResult> submitAnswer({
@@ -76,6 +78,8 @@ class FlakyWordOsApi implements WordOsApi {
     required String email,
     required String password,
     required String displayName,
+    String? phoneCountryCode,
+    String? phoneNumber,
   }) =>
       _inner.register(
           email: email, password: password, displayName: displayName);
@@ -120,8 +124,8 @@ class FlakyWordOsApi implements WordOsApi {
   Future<Word> addWord(WordCandidate candidate) => _inner.addWord(candidate);
 
   @override
-  Future<WordPage> words({WordState? state, int page = 0}) =>
-      _inner.words(state: state, page: page);
+  Future<WordPage> words({WordState? state, int page = 0, String? query}) =>
+      _inner.words(state: state, page: page, query: query);
 
   @override
   Future<WordDetail> wordDetail(String wordId) => _inner.wordDetail(wordId);
@@ -181,29 +185,45 @@ class FlakyWordOsApi implements WordOsApi {
   Future<PublicConfig> config() => _inner.config();
 
   @override
-  Future<AdminOverview> adminOverview() => _inner.adminOverview();
+  Future<AdminOverview> adminOverview({int? days}) => _inner.adminOverview();
 
   @override
-  Future<List<AdminUserSummary>> adminUsers() => _inner.adminUsers();
+  Future<AdminUserPage> adminUsers({String? query, int? days, int page = 0}) =>
+      _inner.adminUsers(query: query, days: days, page: page);
 
   @override
   Future<AdminUserDetail> adminUserDetail(String userId) =>
       _inner.adminUserDetail(userId);
 }
 
-/// A TTS that always fails, standing in for a device with no speech engine.
+/// A voice engine that always fails, standing in for a device with no speech
+/// engine at all.
 ///
-/// The parent's platform calls are already guarded, so the real plugin object
-/// it builds is harmless in a test — every method that matters is overridden.
-class BrokenTts extends TtsService {
+/// Faked at the provider level so the real [SpeechService] still runs — a
+/// failed `speak` must leave the service reporting *nothing playing*, which is
+/// precisely the bug a locally-held "playing" flag would hide.
+class BrokenTts implements SpeechProvider {
   @override
-  Future<bool> speak(String text, {bool slow = false}) async => false;
+  bool get isAvailable => false;
+
+  @override
+  String? get voiceDescription => null;
+
+  @override
+  set onComplete(VoidCallback? callback) {}
+
+  @override
+  Future<void> initialise() async {}
+
+  @override
+  Future<bool> speak(String text, {SpeechRate rate = SpeechRate.normal}) async =>
+      false;
 
   @override
   Future<void> stop() async {}
 
   @override
-  void dispose() {}
+  Future<void> dispose() async {}
 }
 
 /// Lets the mock backend's artificial latency timers fire before teardown.
@@ -285,8 +305,16 @@ void main() {
       expect(engine.lookup('    '), isEmpty);
     });
 
-    test('a very long query is handled without error', () {
-      expect(() => engine.lookup('a' * 5000), returnsNormally);
+    test('a very long query is refused the way the server refuses it', () {
+      // Not "answered anyway": the server caps the term at 64 characters, and
+      // a mock that answers a query no backend would accept hides the client
+      // bug until it reaches a device.
+      expect(
+        () => engine.lookup('a' * 5000),
+        throwsA(isA<ApiException>()
+            .having((e) => e.code, 'code', 'QUERY_TOO_LONG')
+            .having((e) => e.statusCode, 'status', 400)),
+      );
     });
   });
 
@@ -375,7 +403,8 @@ void main() {
           overrides: [
             ...testOverrides(),
             mockApiOverride(),
-            ttsServiceProvider.overrideWithValue(BrokenTts()),
+            speechServiceProvider
+                .overrideWith((ref) => SpeechService(provider: BrokenTts())),
           ],
           child: const WordOsApp(),
         ),
@@ -387,11 +416,9 @@ void main() {
       await tester.tap(find.text('Listening'));
       await tester.pumpAndSettle();
 
-      // Nothing crashed, and the play control is present.
+      // Nothing crashed, and the clip has already tried to play by itself
+      // (§22) — which on this device is how the failure surfaces.
       expect(tester.takeException(), isNull);
-
-      await tester.tap(find.byIcon(Icons.play_arrow_rounded).first);
-      await tester.pumpAndSettle();
 
       expect(find.textContaining('Audio is unavailable'), findsOneWidget,
           reason: 'a silent device must not trap the learner');

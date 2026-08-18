@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_providers.dart';
 import '../../core/api/wordos_api.dart';
 import '../../core/models/models.dart';
+import '../../core/l10n/app_strings.dart';
+import '../../core/storage/preferences_providers.dart';
 
 class SessionState {
   const SessionState({
@@ -68,7 +72,7 @@ class SessionController extends Notifier<SessionState> {
         await tokens.clear();
         state = const SessionState(restoring: false);
       } else {
-        state = SessionState(restoring: false, error: e.message);
+        state = SessionState(restoring: false, error: _message(e));
       }
     }
   }
@@ -76,11 +80,19 @@ class SessionController extends Notifier<SessionState> {
   Future<bool> signIn(String email, String password) =>
       _authenticate(() => _api.login(email: email, password: password));
 
-  Future<bool> signUp(String email, String password, String displayName) =>
+  Future<bool> signUp(
+    String email,
+    String password,
+    String displayName, {
+    String? phoneCountryCode,
+    String? phoneNumber,
+  }) =>
       _authenticate(() => _api.register(
             email: email,
             password: password,
             displayName: displayName,
+            phoneCountryCode: phoneCountryCode,
+            phoneNumber: phoneNumber,
           ));
 
   Future<bool> _authenticate(Future<AuthResponse> Function() call) async {
@@ -93,7 +105,8 @@ class SessionController extends Notifier<SessionState> {
       state = SessionState(user: result.user, restoring: false);
       return true;
     } on ApiException catch (e) {
-      state = state.copyWith(busy: false, error: e.message, restoring: false);
+      state = state.copyWith(
+          busy: false, error: _message(e), restoring: false);
       return false;
     }
   }
@@ -110,15 +123,37 @@ class SessionController extends Notifier<SessionState> {
     }
   }
 
+  /// Ends the session on this device, immediately.
+  ///
+  /// Local first, server second, and deliberately not the other way round.
+  /// Awaiting the round-trip meant that a slow, unreachable or simply
+  /// unresponsive server left the button looking dead for up to the receive
+  /// timeout — the learner taps "sign out" and nothing whatsoever happens.
+  ///
+  /// Revoking the refresh tokens still matters, so it is still sent; it is
+  /// just no longer allowed to hold the learner hostage. If it fails, this
+  /// device has already forgotten its tokens, and the refresh token expires
+  /// on its own.
   Future<void> signOut() async {
-    try {
-      await _api.logout();
-    } on ApiException {
-      // Signing out locally is what matters.
-    }
     await ref.read(tokenStoreProvider).clear();
+
+    // The product tour is for a device that has never had an account on it.
+    // Someone signing out is trying to reach the login form — usually to come
+    // back as somebody else — and putting a slide show in front of them makes
+    // them re-answer a question they answered when they installed the app.
+    await ref.read(appPreferencesProvider).setOnboardingSeen(true);
     state = const SessionState(restoring: false);
+
+    unawaited(_api.logout().catchError((Object _) {}));
   }
+
+  /// The failure in the learner's language.
+  ///
+  /// "Wrong email or password" is the app talking to the learner, so it is said
+  /// in the language they read the app in; the server's English sentence is the
+  /// fallback for a code this app has not met (ADR-035).
+  String _message(ApiException e) =>
+      ref.read(stringsProvider).apiError(e.code, e.message);
 
   void clearError() => state = state.copyWith(clearError: true);
 }

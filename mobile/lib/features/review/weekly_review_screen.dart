@@ -6,6 +6,7 @@ import '../../core/api/wordos_api.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../core/widgets/speaker_button.dart';
 import '../../core/widgets/app_widgets.dart';
 
 /// Weekly Review — a queue loop over the words added during the period.
@@ -78,11 +79,22 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
           _lastResult = result;
           _remaining = result.remaining;
         });
+
+        // Auto-advance (§9–12). The learner selects and the review moves on —
+        // no second tap. The pause is long enough to see whether the answer was
+        // right and, when it was not, what the answer actually is; a wrong item
+        // returns at the end of the session, so nothing is lost by moving on.
+        await Future<void>.delayed(
+          result.isCorrect
+              ? const Duration(milliseconds: 550)
+              : const Duration(milliseconds: 1600),
+        );
+        if (mounted) await _next();
       }
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+            .showSnackBar(SnackBar(content: Text(ref.read(stringsProvider).apiError(e.code, e.message))));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -101,7 +113,7 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
       } on ApiException catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(e.message)));
+              .showSnackBar(SnackBar(content: Text(ref.read(stringsProvider).apiError(e.code, e.message))));
         }
       } finally {
         if (mounted) setState(() => _busy = false);
@@ -193,10 +205,23 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
                     vertical: AppSpacing.xl,
                   ),
                   child: Center(
-                    child: Text(
-                      item.prompt,
-                      textAlign: TextAlign.center,
-                      style: context.text.headlineSmall,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            item.prompt,
+                            textAlign: TextAlign.center,
+                            style: context.text.headlineSmall,
+                          ),
+                        ),
+                        // Hearing the word is part of recalling it (§13).
+                        SpeakerButton(
+                          id: 'review:${item.id}',
+                          text: item.prompt,
+                          size: 22,
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -224,17 +249,17 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
             ),
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: FilledButton(
-            onPressed: _lastResult == null || _busy ? null : _next,
-            child: Text(
-              _lastResult?.nextItem == null && _lastResult != null
-                  ? s.finish
-                  : s.next,
+        // No "Next" button: answering advances the review by itself (§9–12).
+        // The control is kept only for the very end, where the learner decides
+        // when to look at their result rather than being thrown at it.
+        if (_lastResult != null && _lastResult!.nextItem == null)
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: FilledButton(
+              onPressed: _busy ? null : _next,
+              child: Text(s.finish),
             ),
           ),
-        ),
       ],
     );
   }

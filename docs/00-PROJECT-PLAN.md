@@ -1,6 +1,8 @@
 # WordOS — Master Project Plan
 
-> Source of truth for **what we are building and in which order**.
+> Source of truth for **what we set out to build and in which order**. It was built, and the
+> finished behaviour is described in [`08-FINAL-SPECIFICATION.md`](08-FINAL-SPECIFICATION.md) —
+> read that for what the application does today.
 > Derived exclusively from `WordOS Decumentation/` (7 documents, read in full).
 > Companion files: [`01-PHASES.md`](01-PHASES.md) · [`02-PROGRESS.md`](02-PROGRESS.md) · [`03-DECISIONS.md`](03-DECISIONS.md) · [`04-DATA-MODEL.md`](04-DATA-MODEL.md) · [`05-API-CONTRACT.md`](05-API-CONTRACT.md)
 
@@ -63,9 +65,9 @@ action must be logged and measurable (`MVP Core.txt` §53–68).
 bawazirapp/
 ├── WordOS Decumentation/   # original requirement documents (read-only)
 ├── docs/                   # planning, decisions, contracts, progress ledger
-├── mobile/                 # Flutter app          ← Phase 1–4 (in progress)
-├── backend/                # ASP.NET Core + PostgreSQL  ← Phase 5
-└── ai-service/             # Python FastAPI       ← Phase 6
+├── mobile/                 # Flutter app (built)
+├── backend/                # ASP.NET Core 10 + PostgreSQL 17 (built), incl. tools/lexicon
+└── ai-service/             # Python FastAPI, holds the Gemini key (built)
 ```
 
 ## 4. Build order and why

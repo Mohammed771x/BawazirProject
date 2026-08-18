@@ -45,8 +45,32 @@ public class SkillSession
 
     public bool IsComplete { get; private set; }
 
+    /// <summary>
+    /// A session with no vocabulary attached to it (Part 2 §5).
+    /// </summary>
+    /// <remarks>
+    /// When nothing is due, a learner who opened the app to practise should be
+    /// able to practise. A practice session generates real content and asks
+    /// real comprehension questions, but it owns no words: nothing passes,
+    /// nothing fails, no gap is scheduled and no level moves. It is the one
+    /// session type that measures nothing — which is exactly why it is safe to
+    /// offer whenever the pipeline is empty.
+    /// </remarks>
+    public bool IsPractice { get; private set; }
+
     /// <summary>The passage or audio script, for Reading and Listening.</summary>
     public string? ContentText { get; private set; }
+
+    /// <summary>
+    /// Every word of the passage with the meaning it carries there, as JSON.
+    /// </summary>
+    /// <remarks>
+    /// Written when the passage is generated, because that is when the model
+    /// knows which sense it meant. Tapping a word then costs nothing and always
+    /// answers about *this* sentence — a dictionary lookup would return every
+    /// sense the word has ever had.
+    /// </remarks>
+    public string? GlossaryJson { get; private set; }
 
     /// <summary>Which item the learner is looking at right now.</summary>
     public Guid? CurrentItemId { get; private set; }
@@ -73,13 +97,15 @@ public class SkillSession
         Guid userId,
         SkillType skill,
         CefrLevel levelUsed,
-        DateTimeOffset now) =>
+        DateTimeOffset now,
+        bool isPractice = false) =>
         new()
         {
             UserId = userId,
             Skill = skill,
             LevelUsed = levelUsed,
             StartedAt = now,
+            IsPractice = isPractice,
         };
 
     public void SetContent(
@@ -87,13 +113,46 @@ public class SkillSession
         string promptVersion,
         string model,
         int tokens,
-        bool fromFallback)
+        bool fromFallback,
+        string? glossaryJson = null)
     {
         ContentText = text;
+        GlossaryJson = glossaryJson;
         PromptVersion = promptVersion;
         AiModel = model;
         AiTokens += tokens;
         if (fromFallback) UsedAiFallback = true;
+    }
+
+    /// <summary>
+    /// Replaces the passage and its questions with a re-telling at another
+    /// level, keeping the same session and the same words.
+    /// </summary>
+    /// <remarks>
+    /// Only legal before the learner has answered anything. Past that point the
+    /// questions they already cleared would be about sentences that no longer
+    /// exist, and their answers would be silently discarded — so the level is
+    /// locked once the questions begin.
+    /// </remarks>
+    public bool CanChangeLevel => _items.All(i => i.Attempts == 0);
+
+    /// <summary>
+    /// Sets the level a conversation runs at, from the next turn onwards.
+    /// </summary>
+    /// <remarks>
+    /// Speaking has no passage to replace: the level is an input to the next
+    /// thing the tutor says, so changing it takes effect immediately and needs
+    /// nothing regenerated.
+    /// </remarks>
+    public void SetLevel(CefrLevel level) => LevelUsed = level;
+
+    public void ReplaceContent(CefrLevel level, string? text, string? glossaryJson)
+    {
+        LevelUsed = level;
+        ContentText = text;
+        GlossaryJson = glossaryJson;
+        _items.Clear();
+        CurrentItemId = null;
     }
 
     public void MarkFallbackUsed() => UsedAiFallback = true;
@@ -233,11 +292,21 @@ public class SessionItem
 
     public SpellingClueKind? ClueKind { get; private set; }
 
+    /// <summary>
+    /// The whole hint ladder for this word, as JSON, easiest last.
+    /// </summary>
+    /// <remarks>
+    /// Built once when the session starts, because it depends on the learner's
+    /// level and on what the lexicon holds — neither of which the client can
+    /// see. The client reveals one rung per press; it never chooses what a
+    /// rung says.
+    /// </remarks>
+    public string? HintsJson { get; private set; }
+
     public string? LettersJson { get; private set; }
 
     public SpellingInputMode? InputMode { get; private set; }
 
-    public string? Hint { get; private set; }
 
     public int Attempts { get; private set; }
 
@@ -253,6 +322,18 @@ public class SessionItem
     public int? RequeuedAt { get; private set; }
 
     public string? LastAnswer { get; private set; }
+
+    /// <summary>
+    /// Which instruction this item carries, for items whose instruction is
+    /// fixed rather than generated.
+    /// </summary>
+    /// <remarks>
+    /// Null for anything written for this session in particular — a
+    /// comprehension question is content, and content is not translated
+    /// (ADR-035). <see cref="Prompt"/> stays populated either way, so a client
+    /// that does not know a key still has something to show.
+    /// </remarks>
+    public SessionPromptKey? PromptKey { get; private set; }
 
     public static SessionItem Comprehension(
         string prompt, IReadOnlyList<string> options, string correct) =>
@@ -289,12 +370,14 @@ public class SessionItem
             AudioText = audioText,
         };
 
-    public static SessionItem WritingTask(Guid wordId, string prompt, string word) =>
+    public static SessionItem WritingTask(
+        Guid wordId, string prompt, SessionPromptKey promptKey, string word) =>
         new()
         {
             Type = SessionItemType.WritingTask,
             WordId = wordId,
             Prompt = prompt,
+            PromptKey = promptKey,
             CorrectAnswer = word,
         };
 
@@ -302,23 +385,27 @@ public class SessionItem
         Guid wordId,
         string clue,
         SpellingClueKind clueKind,
+        IReadOnlyList<(SpellingClueKind Kind, string Text)> hints,
         IReadOnlyList<string>? letters,
         SpellingInputMode inputMode,
-        string hint,
         string word) =>
         new()
         {
             Type = SessionItemType.SpellingTask,
             WordId = wordId,
             Prompt = "Write the word",
+            PromptKey = SessionPromptKey.WriteTheWord,
             CorrectAnswer = word,
             Clue = clue,
             ClueKind = clueKind,
+            HintsJson = System.Text.Json.JsonSerializer.Serialize(
+                // Property names match the wire record the API reads this back
+                // into; the API camel-cases them on the way out.
+                hints.Select(h => new { Kind = h.Kind.ToWire(), Text = h.Text })),
             LettersJson = letters is null
                 ? null
                 : System.Text.Json.JsonSerializer.Serialize(letters),
             InputMode = inputMode,
-            Hint = hint,
         };
 
     internal void AttachTo(Guid sessionId, int position)
@@ -326,6 +413,21 @@ public class SessionItem
         SessionId = sessionId;
         Position = position;
     }
+
+    /// <summary>
+    /// Whether missing this item brings it back later in the session.
+    /// </summary>
+    /// <remarks>
+    /// Only the items about a <b>word</b> come back. The word is what the
+    /// session exists to teach, and meeting it again is the reinforcement that
+    /// makes a miss useful rather than final.
+    ///
+    /// A comprehension question is not about a word — it measures whether the
+    /// passage was pitched right. Asking it again teaches nothing (the learner
+    /// has already been shown the answer), and it strands them at the end of a
+    /// session re-reading questions they have finished with.
+    /// </remarks>
+    private bool Repeatable => Type is not SessionItemType.Comprehension;
 
     internal bool RecordAttempt(bool isCorrect, int maxAttempts, int sequence)
     {
@@ -335,11 +437,12 @@ public class SessionItem
         // pass the skill.
         FirstAttemptCorrect ??= isCorrect;
 
-        if (isCorrect || Attempts >= maxAttempts)
+        if (isCorrect || !Repeatable || Attempts >= maxAttempts)
         {
-            // Cleared either by getting it right, or by exhausting the retry
-            // budget — without the cap a learner who keeps missing would never
-            // reach the end (demo review §56).
+            // Cleared by getting it right, by being a question that is asked
+            // once, or by exhausting the retry budget — without the cap a
+            // learner who keeps missing would never reach the end
+            // (demo review §56).
             IsCleared = true;
             return false;
         }

@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using WordOs.Domain.Common;
 using WordOs.Domain.Review;
 using WordOs.Domain.Words;
+using WordOs.Domain.Users;
 using WordOs.Infrastructure.Persistence;
 
 namespace WordOs.Api.Endpoints;
@@ -203,7 +204,14 @@ public static class WeeklyReviewEndpoints
         if (review is null)
             return Problems.NotFound("REVIEW_NOT_FOUND", "Review not found.");
 
-        if (!review.IsComplete) review.Complete(clock.GetUtcNow());
+        if (!review.IsComplete)
+        {
+            var now = clock.GetUtcNow();
+            review.Complete(now);
+            db.ActivityEvents.Add(ActivityEvent.Record(
+                userId.Value, ActivityType.ReviewCompleted, now,
+                entityId: review.Id));
+        }
 
         await db.SaveChangesAsync(ct);
 

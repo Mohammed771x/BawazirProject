@@ -1,4 +1,8 @@
+import 'dart:math' as math;
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -14,12 +18,28 @@ import '../../core/widgets/app_widgets.dart';
 import '../hub/hub_screen.dart';
 import 'developer_widgets.dart';
 
+/// How far back the dashboard is looking. Null is all time.
+///
+/// Part 3 asks for Today / 5 days / 10 days / custom, because the two questions
+/// the Owner asks are different: "is this working?" is answered over months,
+/// "did something break today?" over hours. One shared window keeps the
+/// overview and the learner list talking about the same period.
+final adminWindowProvider = StateProvider<int?>((ref) => null);
+
+/// What the Owner has typed into the learner search.
+final adminSearchProvider = StateProvider<String>((ref) => '');
+
 final adminOverviewProvider = FutureProvider.autoDispose<AdminOverview>(
-  (ref) => ref.watch(wordOsApiProvider).adminOverview(),
+  (ref) => ref
+      .watch(wordOsApiProvider)
+      .adminOverview(days: ref.watch(adminWindowProvider)),
 );
 
-final adminUsersProvider = FutureProvider.autoDispose<List<AdminUserSummary>>(
-  (ref) => ref.watch(wordOsApiProvider).adminUsers(),
+final adminUsersProvider = FutureProvider.autoDispose<AdminUserPage>(
+  (ref) => ref.watch(wordOsApiProvider).adminUsers(
+        query: ref.watch(adminSearchProvider),
+        days: ref.watch(adminWindowProvider),
+      ),
 );
 
 /// The Owner area: **not** part of the learner's Settings and not reachable by
@@ -70,6 +90,150 @@ class _DeveloperScreenState extends ConsumerState<DeveloperScreen>
   }
 }
 
+/// The reporting window, shared by the overview and the learner list.
+///
+/// A row of chips rather than a dropdown: the three the Owner actually uses are
+/// one tap away, and "custom" is there for the fourth question nobody
+/// anticipated.
+class _RangeSelector extends ConsumerWidget {
+  const _RangeSelector();
+
+  static const _presets = [null, 1, 5, 10];
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+    final selected = ref.watch(adminWindowProvider);
+
+    Widget chip(String label, int? days) => Padding(
+          padding: const EdgeInsets.only(right: AppSpacing.xs),
+          child: ChoiceChip(
+            label: Text(label),
+            selected: selected == days,
+            onSelected: (_) =>
+                ref.read(adminWindowProvider.notifier).state = days,
+          ),
+        );
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          chip(s.devRangeAllTime, null),
+          chip(s.devRangeToday, 1),
+          chip(s.devRangeDays(5), 5),
+          chip(s.devRangeDays(10), 10),
+          Padding(
+            padding: const EdgeInsets.only(right: AppSpacing.xs),
+            child: ActionChip(
+              avatar: const Icon(Icons.tune_rounded, size: 16),
+              label: Text(
+                selected != null && !_presets.contains(selected)
+                    ? s.devRangeDays(selected)
+                    : s.devRangeCustom,
+              ),
+              onPressed: () => _askForRange(context, ref, s),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _askForRange(
+    BuildContext context,
+    WidgetRef ref,
+    AppStrings s,
+  ) async {
+    final days = await showDialog<int>(
+      context: context,
+      builder: (_) => _CustomRangeDialog(strings: s),
+    );
+
+    // A nonsense number leaves the window as it was rather than reporting on
+    // zero days. The dialog has already refused what it could; this is the
+    // second gate, because the number also reaches date arithmetic.
+    if (days != null && days > 0 && context.mounted) {
+      ref.read(adminWindowProvider.notifier).state = days;
+    }
+  }
+}
+
+/// Asks for a number of days.
+///
+/// A widget of its own, rather than an `AlertDialog` built inline, because the
+/// text controller has to outlive the dialog's *exit animation*. Creating it in
+/// the caller and disposing it as soon as `showDialog` returned meant the field
+/// was still on screen, still animating, still reading a controller that had
+/// just been thrown away — which crashed the app on the frame after the Owner
+/// pressed Save. That is why picking a custom range closed the app while the
+/// preset chips beside it were fine.
+class _CustomRangeDialog extends StatefulWidget {
+  const _CustomRangeDialog({required this.strings});
+
+  final AppStrings strings;
+
+  @override
+  State<_CustomRangeDialog> createState() => _CustomRangeDialogState();
+}
+
+class _CustomRangeDialogState extends State<_CustomRangeDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// What the field currently holds, or null if it is not a usable window.
+  ///
+  /// Anything a numeric keyboard can produce arrives here: nothing, a minus
+  /// sign, a decimal point, or more digits than an integer holds.
+  int? get _days {
+    final parsed = int.tryParse(_controller.text.trim());
+    if (parsed == null || parsed <= 0) return null;
+
+    // Longer than the product has existed is the same question as "all time",
+    // and the server clamps to the same ceiling.
+    return math.min(parsed, _maxDays);
+  }
+
+  static const int _maxDays = 3650;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.strings;
+
+    return AlertDialog(
+      title: Text(s.devRangeCustomTitle),
+      content: TextField(
+        controller: _controller,
+        keyboardType: TextInputType.number,
+        autofocus: true,
+        // Digits only: a minus or a decimal point can only ever produce a
+        // window that has to be rejected afterwards.
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        maxLength: 6,
+        onChanged: (_) => setState(() {}),
+        onSubmitted: (_) => Navigator.of(context).pop(_days),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(s.cancel),
+        ),
+        FilledButton(
+          // Disabled rather than silently ignored, so it is clear that the
+          // field wants a number and has not got one.
+          onPressed: _days == null ? null : () => Navigator.of(context).pop(_days),
+          child: Text(s.save),
+        ),
+      ],
+    );
+  }
+}
+
 class _OverviewTab extends ConsumerWidget {
   const _OverviewTab();
 
@@ -88,6 +252,8 @@ class _OverviewTab extends ConsumerWidget {
       data: (data) => ListView(
         padding: const EdgeInsets.all(AppSpacing.md),
         children: [
+          const _RangeSelector(),
+          const SizedBox(height: AppSpacing.sm),
           GridView.count(
             crossAxisCount: 2,
             shrinkWrap: true,
@@ -248,14 +414,64 @@ class _OverviewTab extends ConsumerWidget {
   }
 }
 
-class _UsersTab extends ConsumerWidget {
+class _UsersTab extends ConsumerStatefulWidget {
   const _UsersTab();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_UsersTab> createState() => _UsersTabState();
+}
+
+class _UsersTabState extends ConsumerState<_UsersTab> {
+  final _search = TextEditingController();
+  Timer? _debounce;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    // Debounced: the search runs in PostgreSQL across every learner, and a
+    // query per keystroke would be a self-inflicted load test.
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        ref.read(adminSearchProvider.notifier).state = value.trim();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final s = ref.watch(stringsProvider);
     final users = ref.watch(adminUsersProvider);
 
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xs),
+          child: TextField(
+            controller: _search,
+            onChanged: _onSearchChanged,
+            decoration: InputDecoration(
+              hintText: s.devSearchUsers,
+              prefixIcon: const Icon(Icons.search_rounded),
+            ),
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: AppSpacing.md),
+          child: _RangeSelector(),
+        ),
+        Expanded(child: _list(s, users)),
+      ],
+    );
+  }
+
+  Widget _list(AppStrings s, AsyncValue<AdminUserPage> users) {
     return users.when(
       loading: () => BusyView(message: s.loading),
       error: (e, _) => ErrorView(
@@ -263,13 +479,34 @@ class _UsersTab extends ConsumerWidget {
         retryLabel: s.retry,
         onRetry: () => ref.invalidate(adminUsersProvider),
       ),
-      data: (list) => ListView.separated(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        itemCount: list.length,
-        separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.xs),
-        itemBuilder: (context, index) {
-          final user = list[index];
-          return AppCard(
+      data: (page) {
+        if (page.items.isEmpty) {
+          return EmptyState(
+            icon: Icons.search_off_rounded,
+            title: s.devNoUsersMatch,
+          );
+        }
+
+        return ListView.separated(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          // One extra row for the count, which answers "how many match?" —
+          // a question the page itself cannot (Part 3 §37).
+          itemCount: page.items.length + 1,
+          separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.xs),
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.xxs),
+                child: Text(
+                  s.devUsersFound(page.total),
+                  style: context.text.labelMedium?.copyWith(
+                    color: context.colors.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+              );
+            }
+            final user = page.items[index - 1];
+            return AppCard(
             onTap: () => context.push(Routes.developerUser(user.id)),
             child: Row(
               children: [
@@ -339,8 +576,9 @@ class _UsersTab extends ConsumerWidget {
               ],
             ),
           );
-        },
-      ),
+          },
+        );
+      },
     );
   }
 }

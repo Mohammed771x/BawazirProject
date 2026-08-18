@@ -27,9 +27,15 @@ dataDir = Path.GetFullPath(dataDir);
 
 var dryRun = args.Contains("--dry-run");
 
+// The closed-class words are authored, not downloaded, so they can be applied
+// on their own — no 166 MB corpus, no parse, seconds instead of minutes. That
+// matters because they are the half of the lexicon most likely to be edited.
+var closedClassOnly = args.Contains("--closed-class-only");
+
 Console.WriteLine($"WordOS lexicon importer");
 Console.WriteLine($"  data: {dataDir}");
-Console.WriteLine($"  mode: {(dryRun ? "dry run (no database writes)" : "import")}");
+Console.WriteLine($"  mode: {(dryRun ? "dry run (no database writes)" : "import")}"
+                  + (closedClassOnly ? "  (closed-class words only)" : ""));
 Console.WriteLine();
 
 var cefrjCsv = Path.Combine(dataDir, "cefrj.csv");
@@ -37,7 +43,7 @@ var octanoveCsv = Path.Combine(dataDir, "octanove-c1c2.csv");
 var oewnDir = Path.Combine(dataDir, "oewn");
 var awnXml = Path.Combine(dataDir, "awn4.xml");
 
-foreach (var required in new[] { cefrjCsv, awnXml })
+foreach (var required in closedClassOnly ? [] : new[] { cefrjCsv, awnXml })
 {
     if (!File.Exists(required))
     {
@@ -46,7 +52,7 @@ foreach (var required in new[] { cefrjCsv, awnXml })
     }
 }
 
-if (!Directory.Exists(oewnDir))
+if (!closedClassOnly && !Directory.Exists(oewnDir))
 {
     Console.Error.WriteLine($"Missing {oewnDir}. Run ./download.sh first.");
     return 1;
@@ -54,26 +60,46 @@ if (!Directory.Exists(oewnDir))
 
 var sw = Stopwatch.StartNew();
 
-Console.Write("reading CEFR-J + Octanove … ");
-var cefr = LexiconSources.ReadCefr(cefrjCsv, octanoveCsv);
-Console.WriteLine($"{cefr.Count:N0} levelled (word, pos) pairs");
+List<LexiconRow> rows;
+BuildStats stats;
 
-Console.Write("reading Open English WordNet synsets … ");
-var synsets = LexiconSources.ReadOewnSynsets(oewnDir);
-Console.WriteLine($"{synsets.Count:N0} synsets");
+if (closedClassOnly)
+{
+    rows = FunctionWords.Build();
+    stats = new BuildStats(0, 0, rows.Count, 0, 0, 0, rows.Count);
+    Console.WriteLine($"closed-class words … {rows.Count:N0} rows");
+}
+else
+{
+    Console.Write("reading CEFR-J + Octanove … ");
+    var cefr = LexiconSources.ReadCefr(cefrjCsv, octanoveCsv);
+    Console.WriteLine($"{cefr.Count:N0} levelled (word, pos) pairs");
 
-Console.Write("reading Open English WordNet senses … ");
-var senses = LexiconSources.ReadOewnSenses(oewnDir);
-Console.WriteLine($"{senses.Count:N0} senses");
+    Console.Write("reading Open English WordNet synsets … ");
+    var synsets = LexiconSources.ReadOewnSynsets(oewnDir);
+    Console.WriteLine($"{synsets.Count:N0} synsets");
 
-Console.Write("reading Arabic WordNet … ");
-var arabic = LexiconSources.ReadArabicBySynset(awnXml);
-Console.WriteLine($"{arabic.Count:N0} synsets with Arabic");
+    Console.Write("reading Open English WordNet senses … ");
+    var senses = LexiconSources.ReadOewnSenses(oewnDir);
+    Console.WriteLine($"{senses.Count:N0} senses");
 
-Console.Write("joining … ");
-var (rows, stats) = LexiconBuilder.Build(senses, synsets, arabic, cefr);
-Console.WriteLine($"{rows.Count:N0} rows");
-Console.WriteLine();
+    Console.Write("reading Arabic WordNet … ");
+    var arabic = LexiconSources.ReadArabicBySynset(awnXml);
+    Console.WriteLine($"{arabic.Count:N0} synsets with Arabic");
+
+    Console.Write("joining … ");
+    (rows, stats) = LexiconBuilder.Build(senses, synsets, arabic, cefr);
+    Console.WriteLine($"{rows.Count:N0} rows");
+
+    // Pronouns, auxiliaries, articles, prepositions and question words are not in
+    // WordNet at all — it is a lexicon of content words — so a learner searching
+    // for "is", "are" or "what" found nothing. They are added here rather than
+    // waited for: the classes are closed, so the list is finite (ADR-033).
+    var closedClass = FunctionWords.Build();
+    rows.AddRange(closedClass);
+    Console.WriteLine($"closed-class words … {closedClass.Count:N0} rows");
+    Console.WriteLine();
+}
 
 Console.WriteLine("Join report");
 Console.WriteLine($"  emitted                {stats.Emitted,10:N0}");
@@ -149,6 +175,7 @@ await using (var create = connection.CreateCommand())
             "PartOfSpeech"   varchar(32)  NOT NULL,
             "DefinitionEn"   varchar(2048) NOT NULL,
             "MeaningAr"      varchar(512) NOT NULL,
+            "MeaningArNormalized" varchar(512) NOT NULL,
             "CefrLevel"      varchar(8),
             "FrequencyRank"  integer,
             "SourceFlags"    varchar(128) NOT NULL,
@@ -164,7 +191,8 @@ await using (var writer = await connection.BeginBinaryImportAsync(
                  """
                  COPY lexicon_staging (
                      "SenseId","Text","TextNormalized","Lemma","PartOfSpeech",
-                     "DefinitionEn","MeaningAr","CefrLevel","FrequencyRank",
+                     "DefinitionEn","MeaningAr","MeaningArNormalized",
+                     "CefrLevel","FrequencyRank",
                      "SourceFlags","UpdatedAt"
                  ) FROM STDIN (FORMAT BINARY)
                  """))
@@ -179,6 +207,9 @@ await using (var writer = await connection.BeginBinaryImportAsync(
         await writer.WriteAsync(row.PartOfSpeech);
         await writer.WriteAsync(row.DefinitionEn);
         await writer.WriteAsync(row.MeaningAr);
+        // Folded here rather than in SQL so the importer and the API agree on
+        // one definition of "the same Arabic word" (ADR-034).
+        await writer.WriteAsync(ArabicText.Normalize(row.MeaningAr));
         if (row.CefrLevel is null) await writer.WriteNullAsync();
         else await writer.WriteAsync(row.CefrLevel.Value.ToWire());
         if (row.FrequencyRank is null) await writer.WriteNullAsync();
@@ -197,10 +228,12 @@ await using (var merge = connection.CreateCommand())
         """
         INSERT INTO lexicon_entries AS t (
             "SenseId","Text","TextNormalized","Lemma","PartOfSpeech",
-            "DefinitionEn","MeaningAr","CefrLevel","FrequencyRank",
+            "DefinitionEn","MeaningAr","MeaningArNormalized",
+            "CefrLevel","FrequencyRank",
             "SourceFlags","UpdatedAt")
         SELECT "SenseId","Text","TextNormalized","Lemma","PartOfSpeech",
-               "DefinitionEn","MeaningAr","CefrLevel","FrequencyRank",
+               "DefinitionEn","MeaningAr","MeaningArNormalized",
+               "CefrLevel","FrequencyRank",
                "SourceFlags","UpdatedAt"
         FROM lexicon_staging
         ON CONFLICT ("SenseId") DO UPDATE SET
@@ -210,6 +243,7 @@ await using (var merge = connection.CreateCommand())
             "PartOfSpeech"   = EXCLUDED."PartOfSpeech",
             "DefinitionEn"   = EXCLUDED."DefinitionEn",
             "MeaningAr"      = EXCLUDED."MeaningAr",
+            "MeaningArNormalized" = EXCLUDED."MeaningArNormalized",
             "CefrLevel"      = EXCLUDED."CefrLevel",
             "FrequencyRank"  = EXCLUDED."FrequencyRank",
             "SourceFlags"    = EXCLUDED."SourceFlags",

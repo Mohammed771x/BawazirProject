@@ -74,10 +74,12 @@ void main() {
     await backToHub(tester);
     await openSkill(tester, 'Speaking');
 
-    // A conversation, not a quiz: no multiple-choice items at all, and the AI
-    // speaks first.
+    // Speaking opens on a warm-up — each word, four meanings — so that nobody
+    // walks into a conversation about words they cannot recall. `openSkill`
+    // has just cleared it; what follows must be the conversation itself.
     expect(find.byType(OptionTile), findsNothing,
-        reason: 'Speaking is a conversation, not a list of questions');
+        reason: 'once the warm-up is done, Speaking is a conversation and not '
+            'a list of questions');
 
     final opening = visibleText(tester).firstWhere(
         (t) => t.length > 20 && !t.contains('Speaking'),
@@ -163,14 +165,39 @@ void main() {
     // A hint is always offered, whichever mode it is.
     expect(spellingTexts.any((t) => t.contains('hint')), isTrue,
         reason: 'spelling always offers a hint. Visible: ${spellingTexts.take(8)}');
+
+    // The ladder: press until it runs out, and the last rung is always the
+    // number of letters (Part 2 §38–§40). Each press must add something, so
+    // the visible text can only grow.
+    var before = visibleText(tester).length;
     await tapAny(tester, ['Need a hint?']);
     await settle(tester);
-    expect(visibleText(tester).any((t) => t.contains('_')), isTrue,
-        reason: 'the hint reveals the opening letters and the length');
+    expect(visibleText(tester).length, greaterThan(before),
+        reason: 'the first press must reveal a rung');
+
+    while (find.text('Something easier').evaluate().isNotEmpty) {
+      before = visibleText(tester).length;
+      await tapAny(tester, ['Something easier']);
+      await settle(tester);
+      expect(visibleText(tester).length, greaterThan(before),
+          reason: 'every press must reveal a rung');
+    }
+
+    expect(visibleText(tester).any((t) => t.contains('Number of letters')),
+        isTrue,
+        reason: 'the ladder ends at the number of letters');
 
     if (usesTiles) {
       expect(spellingTexts.any((t) => t.contains('Tap the letters')), isTrue);
+
+      // The pool holds decoys (§36–§37), so finishing it is not the same as
+      // spelling the word — the learner has to leave tiles behind.
+      expect(tiles.evaluate().length, greaterThan('research'.length),
+          reason: 'the letter pool should be larger than the word');
+
       await spellWithTiles(tester, 'research');
+      expect(liveLetterTiles(tester).evaluate(), isNotEmpty,
+          reason: 'unused tiles should remain once the word is spelled');
     } else {
       await typeInto(tester, TextField, 'research');
     }

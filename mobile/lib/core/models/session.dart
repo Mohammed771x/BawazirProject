@@ -27,11 +27,47 @@ class TargetSpan {
       };
 }
 
+/// One word of the passage, with the meaning it carries **there**.
+///
+/// Written by the generator while it was composing the sentence, so tapping a
+/// word costs nothing and always answers about this sentence. A dictionary
+/// lookup would return every sense the word has ever had — "bank" has six, and
+/// five of them are wrong in any given passage.
+class GlossaryEntry {
+  const GlossaryEntry({
+    required this.word,
+    required this.meaning,
+    required this.partOfSpeech,
+  });
+
+  final String word;
+  final String meaning;
+
+  /// noun, verb, adjective, auxiliary… A learner needs this to understand what
+  /// they are adding: "will" as an auxiliary is a different thing to learn
+  /// than "will" as a noun.
+  final String partOfSpeech;
+
+  factory GlossaryEntry.fromJson(Map<String, dynamic> json) => GlossaryEntry(
+        word: json['word'] as String? ?? '',
+        meaning: json['meaning'] as String? ?? '',
+        partOfSpeech: json['partOfSpeech'] as String? ?? '',
+      );
+
+  Map<String, dynamic> toJson() => {
+        'word': word,
+        'meaning': meaning,
+        'partOfSpeech': partOfSpeech,
+      };
+}
+
 class SessionContent {
   const SessionContent({
     required this.text,
     required this.targetSpans,
     required this.revealTextAfterTest,
+    this.glossary = const [],
+    this.canChangeLevel = false,
   });
 
   final String text;
@@ -40,19 +76,95 @@ class SessionContent {
   /// Listening hides the transcript during the test and reveals it afterwards.
   final bool revealTextAfterTest;
 
+  /// Every word of this passage with the meaning it carries here.
+  final List<GlossaryEntry> glossary;
+
+  /// Whether the passage may still be re-told at another level — only before
+  /// the learner has answered anything, because re-telling replaces the
+  /// questions their answers belong to.
+  final bool canChangeLevel;
+
+  /// The glossary entry for [word], matched case-insensitively.
+  ///
+  /// Null for a word the generator did not gloss, which the caller answers by
+  /// asking the lexicon instead.
+  GlossaryEntry? glossaryFor(String word) {
+    final needle = word.trim().toLowerCase();
+    for (final entry in glossary) {
+      if (entry.word.trim().toLowerCase() == needle) return entry;
+    }
+    return null;
+  }
+
   factory SessionContent.fromJson(Map<String, dynamic> json) => SessionContent(
         text: json['text'] as String? ?? '',
         targetSpans: (json['targetSpans'] as List<dynamic>? ?? const [])
             .map((e) => TargetSpan.fromJson(e as Map<String, dynamic>))
             .toList(),
         revealTextAfterTest: json['revealTextAfterTest'] as bool? ?? false,
+        glossary: (json['glossary'] as List<dynamic>? ?? const [])
+            .map((e) => GlossaryEntry.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        canChangeLevel: json['canChangeLevel'] as bool? ?? false,
       );
 
   Map<String, dynamic> toJson() => {
         'text': text,
         'targetSpans': targetSpans.map((e) => e.toJson()).toList(),
         'revealTextAfterTest': revealTextAfterTest,
+        'glossary': glossary.map((e) => e.toJson()).toList(),
+        'canChangeLevel': canChangeLevel,
       };
+}
+
+/// One word of the warm-up a Speaking session opens with.
+///
+/// A spoken conversation gives the learner no time to look anything up, so the
+/// meanings are checked before it starts — actively, not merely displayed. The
+/// correct answer is deliberately absent: the server marks it (rule R1).
+class WarmupWord {
+  const WarmupWord({
+    required this.wordId,
+    required this.text,
+    required this.options,
+  });
+
+  final String wordId;
+  final String text;
+  final List<String> options;
+
+  factory WarmupWord.fromJson(Map<String, dynamic> json) => WarmupWord(
+        wordId: json['wordId'] as String? ?? '',
+        text: json['text'] as String? ?? '',
+        options: (json['options'] as List<dynamic>? ?? const [])
+            .map((e) => e as String)
+            .toList(),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'wordId': wordId,
+        'text': text,
+        'options': options,
+      };
+}
+
+/// The verdict on one warm-up answer. Recorded nowhere.
+class WarmupResult {
+  const WarmupResult({
+    required this.wordId,
+    required this.isCorrect,
+    required this.correctAnswer,
+  });
+
+  final String wordId;
+  final bool isCorrect;
+  final String correctAnswer;
+
+  factory WarmupResult.fromJson(Map<String, dynamic> json) => WarmupResult(
+        wordId: json['wordId'] as String? ?? '',
+        isCorrect: json['isCorrect'] as bool? ?? false,
+        correctAnswer: json['correctAnswer'] as String? ?? '',
+      );
 }
 
 class SessionTargetWord {
@@ -114,6 +226,7 @@ class SessionItem {
     required this.type,
     required this.wordId,
     required this.prompt,
+    this.promptKey,
     required this.options,
     required this.context,
     required this.clue,
@@ -121,13 +234,19 @@ class SessionItem {
     required this.letters,
     required this.inputMode,
     this.audioText,
-    this.hint,
+    this.hints = const [],
   });
 
   final String id;
   final SessionItemType type;
   final String? wordId;
+  /// The instruction as the server wrote it, in English. Shown only when
+  /// [promptKey] is absent — that is, when the text *is* the content.
   final String prompt;
+
+  /// Which fixed instruction this is, if it is one (ADR-035).
+  final SessionPromptKey? promptKey;
+
   final List<String> options;
 
   /// Present on Reading target-word items only. Listening carries the same
@@ -143,14 +262,19 @@ class SessionItem {
   /// Spoken by TTS. Listening items carry the sentence here and never in text.
   final String? audioText;
 
-  /// Optional extra help for a spelling task (`MVP Core.txt` §33).
-  final String? hint;
+  /// The hint ladder for a spelling task, easiest last (Part 2 §38–§40).
+  ///
+  /// The first rung is already shown as [clue]; each press of "hint" reveals
+  /// the next one. What each rung says was decided by the backend from the
+  /// learner's level, so the client never picks the help itself.
+  final List<SpellingHint> hints;
 
   factory SessionItem.fromJson(Map<String, dynamic> json) => SessionItem(
         id: json['id'] as String,
         type: SessionItemType.fromWire(json['type'] as String?),
         wordId: json['wordId'] as String?,
         prompt: json['prompt'] as String? ?? '',
+        promptKey: SessionPromptKey.fromWire(json['promptKey'] as String?),
         options:
             (json['options'] as List<dynamic>? ?? const []).cast<String>(),
         context: json['context'] == null
@@ -166,7 +290,9 @@ class SessionItem {
             ? null
             : SpellingInputMode.fromWire(json['inputMode'] as String),
         audioText: json['audioText'] as String?,
-        hint: json['hint'] as String?,
+        hints: (json['hints'] as List<dynamic>? ?? const [])
+            .map((h) => SpellingHint.fromJson(h as Map<String, dynamic>))
+            .toList(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -174,6 +300,7 @@ class SessionItem {
         'type': type.wire,
         'wordId': wordId,
         'prompt': prompt,
+        'promptKey': promptKey?.wire,
         'options': options,
         'context': context?.toJson(),
         'clue': clue,
@@ -181,8 +308,23 @@ class SessionItem {
         'letters': letters,
         'inputMode': inputMode?.wire,
         'audioText': audioText,
-        'hint': hint,
+        'hints': hints.map((h) => h.toJson()).toList(),
       };
+}
+
+/// One rung of a spelling task's hint ladder.
+class SpellingHint {
+  const SpellingHint({required this.kind, required this.text});
+
+  final SpellingClueKind kind;
+  final String text;
+
+  factory SpellingHint.fromJson(Map<String, dynamic> json) => SpellingHint(
+        kind: SpellingClueKind.fromWire(json['kind'] as String?),
+        text: json['text'] as String? ?? '',
+      );
+
+  Map<String, dynamic> toJson() => {'kind': kind.wire, 'text': text};
 }
 
 /// One line of a speaking conversation.
@@ -243,6 +385,8 @@ class SkillSession {
     required this.conversation,
     this.progress,
     this.usedAiFallback = false,
+    this.isPractice = false,
+    this.warmup = const [],
   });
 
   final String id;
@@ -262,6 +406,15 @@ class SkillSession {
   /// rather than hidden, so a poor session is not read as poor learning
   /// (`MVP Core.txt` §62).
   final bool usedAiFallback;
+
+  /// Practice: real content, real questions, no vocabulary attached (§5).
+  /// Said on screen, so the learner is never left wondering whether what they
+  /// just did counted towards anything.
+  final bool isPractice;
+
+  /// Speaking only: the words to check before the conversation starts. Empty
+  /// when there are none, and then the learner goes straight in.
+  final List<WarmupWord> warmup;
 
   factory SkillSession.fromJson(Map<String, dynamic> json) => SkillSession(
         id: json['id'] as String,
@@ -285,6 +438,10 @@ class SkillSession {
             : SessionProgress.fromJson(
                 json['progress'] as Map<String, dynamic>),
         usedAiFallback: json['usedAiFallback'] as bool? ?? false,
+        isPractice: json['isPractice'] as bool? ?? false,
+        warmup: (json['warmup'] as List<dynamic>? ?? const [])
+            .map((e) => WarmupWord.fromJson(e as Map<String, dynamic>))
+            .toList(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -297,6 +454,8 @@ class SkillSession {
         'conversation': conversation?.toJson(),
         'progress': progress?.toJson(),
         'usedAiFallback': usedAiFallback,
+        'isPractice': isPractice,
+        'warmup': warmup.map((e) => e.toJson()).toList(),
       };
 }
 

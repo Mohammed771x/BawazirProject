@@ -46,6 +46,12 @@ public class LexiconEntry
 
     public string MeaningAr { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// <see cref="MeaningAr"/> unvocalised and letter-folded, so a learner can
+    /// find an English word by typing its Arabic meaning (ADR-034).
+    /// </summary>
+    public string MeaningArNormalized { get; private set; } = string.Empty;
+
     /// <summary>Null when no source supplied a band for this sense.</summary>
     public CefrLevel? CefrLevel { get; private set; }
 
@@ -86,6 +92,7 @@ public class LexiconEntry
             PartOfSpeech = partOfSpeech.Trim(),
             DefinitionEn = definitionEn.Trim(),
             MeaningAr = meaningAr.Trim(),
+            MeaningArNormalized = ArabicText.Normalize(meaningAr),
             CefrLevel = cefrLevel,
             FrequencyRank = frequencyRank,
             SourceFlags = sourceFlags,

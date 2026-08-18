@@ -34,7 +34,20 @@ class SettingsScreen extends ConsumerWidget {
     if (user == null) return const SizedBox.shrink();
 
     return Scaffold(
-      appBar: AppBar(title: Text(s.settings)),
+      appBar: AppBar(
+        title: Text(s.settings),
+        actions: [
+          // Sign out lives here as well as at the foot of the list. At the
+          // foot alone it sat behind levels, daily targets, interests and
+          // appearance — present, but not findable, which for a learner who
+          // wants to switch accounts is the same as missing.
+          IconButton(
+            onPressed: () => _confirmSignOut(context, ref, s),
+            icon: const Icon(Icons.logout_rounded),
+            tooltip: s.signOut,
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(
           AppSpacing.md,
@@ -74,13 +87,45 @@ class SettingsScreen extends ConsumerWidget {
             const SizedBox(height: AppSpacing.lg),
           ],
           OutlinedButton.icon(
-            onPressed: () => ref.read(sessionProvider.notifier).signOut(),
+            onPressed: () => _confirmSignOut(context, ref, s),
             icon: const Icon(Icons.logout_rounded),
             label: Text(s.signOut),
           ),
         ],
       ),
     );
+  }
+}
+
+/// Confirms before ending the session.
+///
+/// Signing out is one tap from a toolbar now, so it needs the question — an
+/// accidental tap otherwise costs the learner their place and a re-login.
+Future<void> _confirmSignOut(
+  BuildContext context,
+  WidgetRef ref,
+  AppStrings s,
+) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text(s.signOut),
+      content: Text(s.signOutConfirm),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: Text(s.cancel),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: Text(s.signOut),
+        ),
+      ],
+    ),
+  );
+
+  if (confirmed == true) {
+    await ref.read(sessionProvider.notifier).signOut();
   }
 }
 
@@ -151,7 +196,7 @@ class _SkillLevelCardState extends ConsumerState<_SkillLevelCard> {
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+            .showSnackBar(SnackBar(content: Text(ref.read(stringsProvider).apiError(e.code, e.message))));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -236,7 +281,7 @@ class _DailyTargetCardState extends ConsumerState<_DailyTargetCard> {
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+            .showSnackBar(SnackBar(content: Text(ref.read(stringsProvider).apiError(e.code, e.message))));
       }
     }
   }
@@ -309,7 +354,7 @@ class _InterestsCardState extends ConsumerState<_InterestsCard> {
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+            .showSnackBar(SnackBar(content: Text(ref.read(stringsProvider).apiError(e.code, e.message))));
       }
     } finally {
       if (mounted) setState(() => _saving = false);

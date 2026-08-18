@@ -74,8 +74,36 @@ public sealed class HttpAiContentService(
         };
 
         var response = await PostAsync<ContentDto>("/ai/content", payload, ct);
+        return ToContent(response);
+    }
 
-        return new GeneratedContent(
+    public async Task<GeneratedContent> RelevelContentAsync(
+        RelevelRequest request,
+        CancellationToken ct = default)
+    {
+        var payload = new
+        {
+            text = request.Text,
+            from_level = request.FromLevel.ToWire(),
+            to_level = request.ToLevel.ToWire(),
+            words = request.Words.Select(w => new
+            {
+                text = w.Text,
+                meaning = w.Meaning,
+                definition = w.Definition,
+                part_of_speech = w.PartOfSpeech,
+            }),
+            comprehension_count = request.ComprehensionCount,
+        };
+
+        var response = await PostAsync<ContentDto>(
+            "/ai/content/relevel", payload, ct);
+
+        return ToContent(response);
+    }
+
+    private static GeneratedContent ToContent(ContentDto response) =>
+        new(
             Text: response.Text,
             Sentences: response.Sentences,
             Comprehension: response.Comprehension
@@ -87,8 +115,10 @@ public sealed class HttpAiContentService(
             PromptVersion: response.PromptVersion,
             Model: response.Model,
             Tokens: response.Tokens,
-            FromFallback: false);
-    }
+            FromFallback: false,
+            Glossary: (response.Glossary ?? [])
+                .Select(g => new GlossaryEntry(g.Word, g.MeaningAr, g.PartOfSpeech))
+                .ToList());
 
     public async Task<WritingObservation> EvaluateWritingAsync(
         WritingEvaluationRequest request,
@@ -101,6 +131,7 @@ public sealed class HttpAiContentService(
             definition = request.Definition,
             level = request.Level.ToWire(),
             sentence = request.Sentence,
+            feedback_language = request.FeedbackLanguage,
         };
 
         var response = await PostAsync<WritingDto>("/ai/writing", payload, ct);
@@ -164,6 +195,7 @@ public sealed class HttpAiContentService(
                 from_ai = t.FromAi,
                 text = t.Text,
             }),
+            feedback_language = request.FeedbackLanguage,
         };
 
         var response = await PostAsync<SpeakingEvalDto>(
@@ -180,6 +212,53 @@ public sealed class HttpAiContentService(
             Model: response.Model,
             Tokens: response.Tokens);
     }
+
+    public async Task<PlacementEvaluation> EvaluatePlacementAsync(
+        PlacementEvaluationRequest request,
+        CancellationToken ct = default)
+    {
+        var payload = new
+        {
+            skill = request.Skill.ToWire(),
+            answers = request.Answers.Select(a => new
+            {
+                item_id = a.ItemId,
+                level = a.Level.ToWire(),
+                prompt = a.Prompt,
+                answer = a.Answer,
+            }),
+        };
+
+        var response = await PostAsync<PlacementEvalDto>(
+            "/ai/placement/evaluate", payload, ct);
+
+        return new PlacementEvaluation(
+            response.Answers.Select(a => new PlacementAnswerRating(
+                a.ItemId,
+                ParseLevel(a.EstimatedLevel),
+                Math.Clamp(a.Score, 0, 1),
+                a.Evidence)).ToList(),
+            ParseLevel(response.OverallLevel),
+            response.Summary,
+            FromFallback: false,
+            PromptVersion: response.PromptVersion,
+            Model: response.Model,
+            Tokens: response.Tokens);
+    }
+
+    /// <summary>
+    /// A band the model named, or null when it named something unrecognisable.
+    /// </summary>
+    /// <remarks>
+    /// Null rather than a guess: the score is what the estimator actually
+    /// consumes, and inventing a band here would put a made-up label into the
+    /// evidence the Owner audits.
+    /// </remarks>
+    private static CefrLevel? ParseLevel(string? raw) =>
+        Enum.TryParse<CefrLevel>((raw ?? string.Empty).Trim(), ignoreCase: true,
+            out var level)
+            ? level
+            : null;
 
     private async Task<T> PostAsync<T>(string path, object payload, CancellationToken ct)
     {
@@ -223,7 +302,8 @@ public sealed class HttpAiContentService(
         List<ContextDto> Contexts,
         string PromptVersion,
         string Model,
-        int Tokens);
+        int Tokens,
+        List<GlossaryDto>? Glossary = null);
 
     private sealed record QuestionDto(
         string Prompt, string Correct, List<string> Distractors);
@@ -256,6 +336,25 @@ public sealed class HttpAiContentService(
         string PromptVersion,
         string Model,
         int Tokens);
+
+    private sealed record GlossaryDto(
+        string Word,
+        string MeaningAr,
+        string PartOfSpeech);
+
+    private sealed record PlacementEvalDto(
+        List<PlacementEvalAnswerDto> Answers,
+        string OverallLevel,
+        string Summary,
+        string PromptVersion,
+        string Model,
+        int Tokens);
+
+    private sealed record PlacementEvalAnswerDto(
+        string ItemId,
+        string EstimatedLevel,
+        double Score,
+        string Evidence);
 
     private sealed record SpeakingEvalWordDto(
         string Word,

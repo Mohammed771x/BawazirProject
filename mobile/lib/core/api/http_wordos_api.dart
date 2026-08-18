@@ -13,6 +13,7 @@ class HttpWordOsApi implements WordOsApi {
     required String baseUrl,
     required this.tokenReader,
     this.refreshTokenReader,
+    this.languageReader,
     this.onRefreshed,
     this.onUnauthorized,
     Dio? dio,
@@ -37,6 +38,16 @@ class HttpWordOsApi implements WordOsApi {
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
           }
+
+          // What the app *says to* the learner follows the language they chose
+          // — instructions, feedback — while what it teaches them stays
+          // English (ADR-035). Sent per request rather than stored, because the
+          // language is a device setting and not an account fact (ADR-010).
+          final language = languageReader?.call();
+          if (language != null && language.isNotEmpty) {
+            options.headers['Accept-Language'] = language;
+          }
+
           handler.next(options);
         },
         onError: (error, handler) async {
@@ -85,6 +96,10 @@ class HttpWordOsApi implements WordOsApi {
 
   /// Supplies the refresh token, when there is one.
   final String? Function()? refreshTokenReader;
+
+  /// The language tag the learner is reading the app in, read per request so
+  /// switching language in Settings takes effect on the next call.
+  final String? Function()? languageReader;
 
   /// Hands back the rotated pair. The store, not this class, persists them.
   final void Function(String token, String? refreshToken)? onRefreshed;
@@ -256,11 +271,17 @@ class HttpWordOsApi implements WordOsApi {
     required String email,
     required String password,
     required String displayName,
+    String? phoneCountryCode,
+    String? phoneNumber,
   }) async =>
       AuthResponse.fromJson(await _post('/auth/register', {
         'email': email,
         'password': password,
         'displayName': displayName,
+        if (phoneCountryCode != null && phoneCountryCode.isNotEmpty)
+          'phoneCountryCode': phoneCountryCode,
+        if (phoneNumber != null && phoneNumber.isNotEmpty)
+          'phoneNumber': phoneNumber,
       }));
 
   @override
@@ -325,6 +346,14 @@ class HttpWordOsApi implements WordOsApi {
   }
 
   @override
+  Future<WordDefinition> defineWord(String word) async {
+    final res = await _guard(
+      () => _dio.get<dynamic>('/words/define', queryParameters: {'w': word}),
+    );
+    return WordDefinition.fromJson((res.data as Map).cast<String, dynamic>());
+  }
+
+  @override
   Future<Word> addWord(WordCandidate candidate) async =>
       // The sense id is the whole request. Sending the level, meaning or
       // definition would be pointless — the server re-resolves the sense
@@ -337,9 +366,14 @@ class HttpWordOsApi implements WordOsApi {
       }));
 
   @override
-  Future<WordPage> words({WordState? state, int page = 0}) async =>
+  Future<WordPage> words({
+    WordState? state,
+    int page = 0,
+    String? query,
+  }) async =>
       WordPage.fromJson(await _get('/words', {
         if (state != null) 'state': state.wire,
+        if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
         'page': page,
       }));
 
@@ -348,9 +382,14 @@ class HttpWordOsApi implements WordOsApi {
       WordDetail.fromJson(await _get('/words/$wordId'));
 
   @override
-  Future<SkillSession> startSession(SkillType skill) async =>
-      SkillSession.fromJson(
-          await _post('/sessions/${skill.wire.toLowerCase()}/start'));
+  Future<SkillSession> startSession(
+    SkillType skill, {
+    bool practice = false,
+  }) async =>
+      SkillSession.fromJson(await _post(
+        '/sessions/${skill.wire.toLowerCase()}/start'
+        '${practice ? '?practice=true' : ''}',
+      ));
 
   @override
   Future<AnswerResult> submitAnswer({
@@ -365,8 +404,29 @@ class HttpWordOsApi implements WordOsApi {
       }));
 
   @override
+  Future<WarmupResult> answerWarmup({
+    required String sessionId,
+    required String wordId,
+    required String answer,
+  }) async =>
+      WarmupResult.fromJson(
+          await _post('/sessions/$sessionId/warmup/answer', {
+        'wordId': wordId,
+        'answer': answer,
+      }));
+
+  @override
   Future<SkillSession> resumeSession(String sessionId) async =>
       SkillSession.fromJson(await _get('/sessions/$sessionId'));
+
+  @override
+  Future<SkillSession> changeSessionLevel(
+    String sessionId,
+    CefrLevel level,
+  ) async =>
+      SkillSession.fromJson(await _post('/sessions/$sessionId/level', {
+        'level': level.wire,
+      }));
 
   @override
   Future<WritingEvaluation> submitWriting({
@@ -445,18 +505,44 @@ class HttpWordOsApi implements WordOsApi {
       PublicConfig.fromJson(await _get('/config'));
 
   @override
-  Future<AdminOverview> adminOverview() async =>
-      AdminOverview.fromJson(await _get('/admin/overview'));
+  Future<AdminOverview> adminOverview({int? days}) async =>
+      AdminOverview.fromJson(await _get('/admin/overview', {'days': ?days}));
 
   @override
-  Future<List<AdminUserSummary>> adminUsers() async {
-    final res = await _guard(() => _dio.get<dynamic>('/admin/users'));
-    return (res.data as List<dynamic>? ?? const [])
-        .map((e) => AdminUserSummary.fromJson((e as Map).cast<String, dynamic>()))
-        .toList();
-  }
+  Future<AdminUserPage> adminUsers({
+    String? query,
+    int? days,
+    int page = 0,
+  }) async =>
+      AdminUserPage.fromJson(await _get('/admin/users', {
+        if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
+        'days': ?days,
+        'page': page,
+      }));
 
   @override
   Future<AdminUserDetail> adminUserDetail(String userId) async =>
       AdminUserDetail.fromJson(await _get('/admin/users/$userId'));
+
+  @override
+  Future<AdminWordPage> adminUserWords(
+    String userId, {
+    WordState? state,
+    String? query,
+    int page = 0,
+  }) async =>
+      AdminWordPage.fromJson(await _get('/admin/users/$userId/words', {
+        if (state != null) 'state': state.wire,
+        if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
+        'page': page,
+      }));
+
+  @override
+  Future<AdminWordJourney> adminWordJourney(String wordId) async =>
+      AdminWordJourney.fromJson(await _get('/admin/words/$wordId'));
+
+  @override
+  Future<PlacementEvidence> adminPlacementEvidence(String userId) async =>
+      PlacementEvidence.fromJson(
+          await _get('/admin/users/$userId/placement'));
 }

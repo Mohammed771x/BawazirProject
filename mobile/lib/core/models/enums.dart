@@ -156,10 +156,16 @@ enum SessionItemType {
 }
 
 /// What kind of hint a spelling task shows — chosen server-side from the level.
+/// One rung of the spelling hint ladder, hardest first.
+///
+/// The backend decides where a learner joins the ladder and what each rung
+/// says; the client only reveals the next one when asked (rule R1).
 enum SpellingClueKind {
-  arabicMeaning('ARABIC_MEANING'),
   definitionEn('DEFINITION_EN'),
-  synonym('SYNONYM');
+  simplifiedDefinition('SIMPLIFIED_DEFINITION'),
+  synonym('SYNONYM'),
+  arabicMeaning('ARABIC_MEANING'),
+  letterCount('LETTER_COUNT');
 
   const SpellingClueKind(this.wire);
 
@@ -170,6 +176,32 @@ enum SpellingClueKind {
         raw,
         SpellingClueKind.arabicMeaning,
       );
+}
+
+/// A fixed instruction, identified rather than spelled out by the server.
+///
+/// Instructions are part of the interface, so they are said in the language the
+/// learner reads the app in; the English they are here to learn — the passage,
+/// the questions about it, the meanings on offer — is not translated (ADR-035).
+/// Items whose text was written for this session in particular carry no key.
+enum SessionPromptKey {
+  writeTheWord('WRITE_THE_WORD'),
+  writeASentence('WRITE_A_SENTENCE'),
+  writeASentenceAboutYourself('WRITE_A_SENTENCE_ABOUT_YOURSELF');
+
+  const SessionPromptKey(this.wire);
+
+  final String wire;
+
+  static SessionPromptKey? fromWire(String? raw) {
+    if (raw == null) return null;
+    for (final v in SessionPromptKey.values) {
+      if (v.wire == raw) return v;
+    }
+    // An unknown key is not an error: the server's own prompt text is still
+    // there to fall back on.
+    return null;
+  }
 }
 
 enum SpellingInputMode {
@@ -189,7 +221,11 @@ enum SpellingInputMode {
 
 enum PlacementItemType {
   multipleChoice('MULTIPLE_CHOICE'),
-  freeText('FREE_TEXT');
+  freeText('FREE_TEXT'),
+
+  /// Answered out loud. Speaking and Writing are different skills and must be
+  /// tested differently — a text box here would measure writing (§17).
+  spoken('SPOKEN');
 
   const PlacementItemType(this.wire);
 

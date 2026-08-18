@@ -20,6 +20,10 @@ import 'placement_item_bank.dart';
 /// then Spelling: a short fixed ladder, measured but never levelled
 /// ```
 class PlacementEngine {
+  /// Which item bank produced a result. Stamped on the evidence, because a
+  /// result from an older bank is not comparable to a current one.
+  static const int currentTestVersion = 2;
+
   PlacementEngine({
     this.config = const PlacementConfig(),
     FreeResponseScorer? scorer,
@@ -33,7 +37,15 @@ class PlacementEngine {
 
   final Map<String, PlacementRun> _runs = {};
 
+  /// The last finished run per learner, kept for the Owner's evidence view
+  /// (Part 3). The real backend never deletes a placement session; the mock
+  /// used to drop it on completion, which made the evidence unavailable the
+  /// moment it became interesting.
+  final Map<String, PlacementRun> _completedByUser = {};
+
   PlacementRun? runFor(String sessionId) => _runs[sessionId];
+
+  PlacementRun? completedFor(String userId) => _completedByUser[userId];
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -88,6 +100,8 @@ class PlacementEngine {
       );
     }
     _runs.remove(sessionId);
+    run.isComplete = true;
+    _completedByUser[run.userId] = run;
     return _result(run);
   }
 

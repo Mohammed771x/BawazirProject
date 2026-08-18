@@ -338,17 +338,51 @@ public class PlacementAlgorithmTests
     [Fact]
     public void The_item_bank_matches_the_specification()
     {
-        // Generated from the Dart spec, so drift shows up here.
-        Assert.Equal(35, PlacementItemBank.All.Count);
+        // Drift shows up here. 44 = the original 35 plus nine grammar items
+        // added in placement v2.
+        Assert.Equal(44, PlacementItemBank.All.Count);
         Assert.Equal(10, PlacementItemBank.ForSkill(SkillType.Reading).Count);
         Assert.Equal(6, PlacementItemBank.ForSkill(SkillType.Spelling).Count);
+
+        // ── Grammar (§19) ───────────────────────────────────────────────────
+        var grammar = PlacementItemBank.All
+            .Where(i => i.MeasuredDomain == PlacementDomain.Grammar)
+            .ToList();
+
+        Assert.Equal(9, grammar.Count);
+
+        // Spread across bands, not clustered at one difficulty — the point is
+        // to locate the learner, not to score them.
+        foreach (var band in new[]
+                 {
+                     CefrLevel.A1, CefrLevel.A2, CefrLevel.B1, CefrLevel.B2,
+                 })
+        {
+            Assert.True(grammar.Any(i => i.Level == band),
+                $"grammar should cover {band}");
+        }
+
+        // Evidence for both production skills, which is the whole reason these
+        // items exist — neither Speaking nor Writing has enough prompts of its
+        // own to place a learner confidently.
+        Assert.All(grammar,
+            i => Assert.Equal(SkillType.Speaking, i.AlsoEvidenceFor));
+
+        // ── Speaking is spoken, not typed (§17) ─────────────────────────────
+        Assert.All(PlacementItemBank.ForSkill(SkillType.Speaking),
+            i => Assert.True(i.IsSpoken,
+                $"{i.Id} must be answered by voice, not by keyboard"));
 
         // Listening items are spoken, never shown.
         Assert.All(PlacementItemBank.ForSkill(SkillType.Listening),
             i => Assert.False(string.IsNullOrWhiteSpace(i.AudioText)));
 
-        // Productive skills are free text.
-        Assert.All(PlacementItemBank.ForSkill(SkillType.Writing),
+        // Productive skills are produced, not selected — with one deliberate
+        // exception: grammar items score into Writing but are multiple choice,
+        // because they measure a discrete rule rather than production.
+        Assert.All(
+            PlacementItemBank.ForSkill(SkillType.Writing)
+                .Where(i => i.MeasuredDomain != PlacementDomain.Grammar),
             i => Assert.True(i.IsFreeText));
         Assert.All(PlacementItemBank.ForSkill(SkillType.Speaking),
             i => Assert.True(i.IsFreeText));
@@ -375,5 +409,76 @@ public class PlacementAlgorithmTests
         var words = sentence.Split(' ');
         var needed = item.ExpectedWords == 0 ? 8 : item.ExpectedWords;
         return string.Join(' ', words.Take(Math.Clamp(needed, 1, words.Length)));
+    }
+
+    // ── How the ladder opens and climbs ──────────────────────────────────────
+
+    [Fact]
+    public void Every_skill_opens_with_its_easiest_question()
+    {
+        var engine = new PlacementEngine();
+        var responses = new List<PlacementResponse>();
+        var opened = new Dictionary<SkillType, CefrLevel>();
+
+        for (var i = 0; i < 60; i++)
+        {
+            var item = engine.NextItem(responses, new Random(7));
+            if (item is null) break;
+
+            if (!opened.ContainsKey(item.Skill)) opened[item.Skill] = item.Level;
+
+            responses.Add(new PlacementResponse(
+                item.Id, item.Skill,
+                engine.Config.Scale.DifficultyOf(item.Level), 1));
+        }
+
+        // A beginner meeting a B1 question first is how a placement test loses
+        // someone before it has started.
+        Assert.All(opened, entry => Assert.Equal(CefrLevel.A1, entry.Value));
+    }
+
+    [Fact]
+    public void A_correct_answer_makes_the_next_question_harder()
+    {
+        var reading = LadderFor(score: 1);
+
+        // Easy first, then upwards: the point of adapting at all.
+        Assert.True(reading.Count >= 3);
+        Assert.Equal(CefrLevel.A1, reading[0]);
+        Assert.True(reading[^1].Rank() > reading[0].Rank(),
+            $"reading climbed {string.Join(" → ", reading)}");
+    }
+
+    [Fact]
+    public void A_wrong_answer_does_not_push_the_learner_higher()
+    {
+        var reading = LadderFor(score: 0);
+
+        Assert.True(reading.Count >= 2);
+        Assert.True(reading[^1].Rank() <= reading[0].Rank(),
+            $"a learner who got everything wrong was walked up to "
+            + $"{reading[^1]}: {string.Join(" → ", reading)}");
+    }
+
+    /// <summary>The Reading bands asked, for a learner who always scores the
+    /// same.</summary>
+    private static List<CefrLevel> LadderFor(double score)
+    {
+        var engine = new PlacementEngine();
+        var responses = new List<PlacementResponse>();
+        var reading = new List<CefrLevel>();
+
+        for (var i = 0; i < 60; i++)
+        {
+            var item = engine.NextItem(responses, new Random(11));
+            if (item is null) break;
+            if (item.Skill == SkillType.Reading) reading.Add(item.Level);
+
+            responses.Add(new PlacementResponse(
+                item.Id, item.Skill,
+                engine.Config.Scale.DifficultyOf(item.Level), score));
+        }
+
+        return reading;
     }
 }

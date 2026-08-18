@@ -1,6 +1,7 @@
 import 'enums.dart';
 import 'placement.dart';
 import 'user.dart';
+import 'word.dart';
 
 /// Owner-only analytics projections.
 ///
@@ -202,6 +203,287 @@ class AdminOverview {
         'topInterests': topInterests.map((e) => e.toJson()).toList(),
         'aiFallbackRate': aiFallbackRate,
       };
+}
+
+/// One word in an Owner's view of a learner's vocabulary.
+///
+/// The mirror image of what the learner sees: My Words hides the pipeline
+/// states because they are internal machinery (Part 2 §42), and this exists to
+/// inspect exactly those (Part 3).
+class AdminWord {
+  const AdminWord({
+    required this.id,
+    required this.text,
+    required this.meaning,
+    required this.cefrLevel,
+    required this.state,
+    required this.currentSkill,
+    required this.addedAt,
+    required this.exposureCount,
+    required this.skillsPassed,
+    required this.attempts,
+  });
+
+  final String id;
+  final String text;
+  final String meaning;
+  final CefrLevel cefrLevel;
+  final WordState state;
+  final SkillType? currentSkill;
+  final DateTime addedAt;
+  final int exposureCount;
+  final int skillsPassed;
+  final int attempts;
+
+  factory AdminWord.fromJson(Map<String, dynamic> json) => AdminWord(
+        id: json['id'] as String,
+        text: json['text'] as String? ?? '',
+        meaning: json['meaning'] as String? ?? '',
+        cefrLevel: CefrLevel.fromWire(json['cefrLevel'] as String?),
+        state: WordState.fromWire(json['state'] as String?),
+        currentSkill: json['currentSkill'] == null
+            ? null
+            : SkillType.fromWire(json['currentSkill'] as String),
+        addedAt: DateTime.tryParse(json['addedAt'] as String? ?? '')?.toUtc() ??
+            DateTime.now().toUtc(),
+        exposureCount: (json['exposureCount'] as num?)?.toInt() ?? 0,
+        skillsPassed: (json['skillsPassed'] as num?)?.toInt() ?? 0,
+        attempts: (json['attempts'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One page of an Owner's view of a learner's vocabulary.
+class AdminWordPage {
+  const AdminWordPage({
+    required this.items,
+    required this.total,
+    this.hasMore = false,
+  });
+
+  final List<AdminWord> items;
+  final int total;
+  final bool hasMore;
+
+  factory AdminWordPage.fromJson(Map<String, dynamic> json) => AdminWordPage(
+        items: (json['items'] as List<dynamic>? ?? const [])
+            .map((e) => AdminWord.fromJson((e as Map).cast<String, dynamic>()))
+            .toList(),
+        total: (json['total'] as num?)?.toInt() ?? 0,
+        hasMore: json['hasMore'] as bool? ?? false,
+      );
+}
+
+/// One word's whole life: added, attempted, passed, matured, archived.
+///
+/// Built from the append-only word event log, so a word that failed Reading
+/// twice before passing shows all three events rather than only where it
+/// ended up.
+class AdminWordJourney {
+  const AdminWordJourney({
+    required this.word,
+    required this.learnerName,
+    required this.learnerId,
+    required this.skills,
+    required this.events,
+    required this.exposures,
+  });
+
+  final AdminWord word;
+  final String learnerName;
+  final String learnerId;
+  final List<WordSkillState> skills;
+  final List<WordEvent> events;
+
+  /// When this word was reused in generated content or a weekly review — a
+  /// priority signal, never a limit (rule R8).
+  final List<DateTime> exposures;
+
+  factory AdminWordJourney.fromJson(Map<String, dynamic> json) {
+    final learner = json['learner'] as Map<String, dynamic>? ?? const {};
+    return AdminWordJourney(
+      word: AdminWord.fromJson(
+          (json['word'] as Map).cast<String, dynamic>()),
+      learnerName: learner['displayName'] as String? ?? '',
+      learnerId: learner['id'] as String? ?? '',
+      skills: (json['skills'] as List<dynamic>? ?? const [])
+          .map((e) => WordSkillState.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      events: (json['events'] as List<dynamic>? ?? const [])
+          .map((e) => WordEvent.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      exposures: (json['exposures'] as List<dynamic>? ?? const [])
+          .map((e) => DateTime.tryParse(
+              (e as Map)['occurredAt'] as String? ?? ''))
+          .whereType<DateTime>()
+          .toList(),
+    );
+  }
+}
+
+/// One placement item as it was actually answered.
+///
+/// A CEFR band is a conclusion; this is the evidence behind it (Part 3). The
+/// learner's own words are stored verbatim precisely so this can exist — a
+/// score of 0.4 says nothing about *why*.
+class PlacementEvidenceItem {
+  const PlacementEvidenceItem({
+    required this.itemId,
+    required this.skill,
+    required this.domain,
+    required this.level,
+    required this.difficulty,
+    required this.score,
+    required this.rawAnswer,
+    required this.answeredAt,
+    this.alsoEvidenceFor,
+  });
+
+  final String itemId;
+  final SkillType skill;
+
+  /// What the item measures — grammar and spelling included, even though
+  /// neither is a visible skill.
+  final String domain;
+
+  final CefrLevel level;
+  final double difficulty;
+
+  /// Partial credit in [0, 1], computed server-side.
+  final double score;
+
+  final String? rawAnswer;
+  final DateTime answeredAt;
+
+  /// A second skill this answer counted towards, if any.
+  final SkillType? alsoEvidenceFor;
+
+  factory PlacementEvidenceItem.fromJson(Map<String, dynamic> json) =>
+      PlacementEvidenceItem(
+        itemId: json['itemId'] as String? ?? '',
+        skill: SkillType.fromWire(json['skill'] as String?),
+        domain: json['domain'] as String? ?? '',
+        level: CefrLevel.fromWire(json['level'] as String?),
+        difficulty: (json['difficulty'] as num?)?.toDouble() ?? 0,
+        score: (json['score'] as num?)?.toDouble() ?? 0,
+        rawAnswer: json['rawAnswer'] as String?,
+        answeredAt:
+            DateTime.tryParse(json['answeredAt'] as String? ?? '')?.toUtc() ??
+                DateTime.now().toUtc(),
+        alsoEvidenceFor: json['alsoEvidenceFor'] == null
+            ? null
+            : SkillType.fromWire(json['alsoEvidenceFor'] as String),
+      );
+}
+
+/// Where a learner started against where they are now.
+class PlacementProgressRow {
+  const PlacementProgressRow({
+    required this.skill,
+    required this.initialLevel,
+    required this.currentLevel,
+    required this.confidence,
+    required this.rollingAccuracy,
+  });
+
+  final SkillType skill;
+
+  /// The band the placement test assigned. Null when placement never ran.
+  final CefrLevel? initialLevel;
+
+  /// Where they are now — system-validated where one exists (rule R6).
+  final CefrLevel? currentLevel;
+
+  final double confidence;
+  final double rollingAccuracy;
+
+  factory PlacementProgressRow.fromJson(Map<String, dynamic> json) =>
+      PlacementProgressRow(
+        skill: SkillType.fromWire(json['skill'] as String?),
+        initialLevel: json['initialLevel'] == null
+            ? null
+            : CefrLevel.fromWire(json['initialLevel'] as String),
+        currentLevel: json['currentLevel'] == null
+            ? null
+            : CefrLevel.fromWire(json['currentLevel'] as String),
+        confidence: (json['confidence'] as num?)?.toDouble() ?? 0,
+        rollingAccuracy: (json['rollingAccuracy'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+/// The placement test as the Owner sees it: the result, and its evidence.
+class PlacementEvidence {
+  const PlacementEvidence({
+    required this.completed,
+    required this.testVersion,
+    required this.fallbackScoredCount,
+    required this.progress,
+    required this.answers,
+    this.completedAt,
+  });
+
+  final bool completed;
+
+  /// Which item bank produced this result. A result from an older version is
+  /// not comparable to a current one, and without the stamp there is no way to
+  /// tell which you are looking at.
+  final int testVersion;
+
+  /// Free-text answers scored offline rather than by the AI evaluator — the
+  /// caveat that belongs beside the result.
+  final int fallbackScoredCount;
+
+  final List<PlacementProgressRow> progress;
+  final List<PlacementEvidenceItem> answers;
+  final DateTime? completedAt;
+
+  factory PlacementEvidence.fromJson(Map<String, dynamic> json) {
+    final progress = json['progress'] as Map<String, dynamic>? ?? const {};
+    return PlacementEvidence(
+      completed: json['completed'] as bool? ?? false,
+      testVersion: (json['testVersion'] as num?)?.toInt() ?? 0,
+      fallbackScoredCount:
+          (json['fallbackScoredCount'] as num?)?.toInt() ?? 0,
+      progress: (progress['levels'] as List<dynamic>? ?? const [])
+          .map((e) =>
+              PlacementProgressRow.fromJson((e as Map).cast<String, dynamic>()))
+          .toList(),
+      answers: (json['answers'] as List<dynamic>? ?? const [])
+          .map((e) => PlacementEvidenceItem.fromJson(
+              (e as Map).cast<String, dynamic>()))
+          .toList(),
+      completedAt:
+          DateTime.tryParse(json['completedAt'] as String? ?? '')?.toUtc(),
+    );
+  }
+}
+
+/// One page of the learners list (Part 3 §37).
+class AdminUserPage {
+  const AdminUserPage({
+    required this.items,
+    required this.total,
+    this.page = 0,
+    this.hasMore = false,
+  });
+
+  final List<AdminUserSummary> items;
+
+  /// How many learners match the search and window — not how many are on this
+  /// page, which is what the Owner is actually asking.
+  final int total;
+
+  final int page;
+  final bool hasMore;
+
+  factory AdminUserPage.fromJson(Map<String, dynamic> json) => AdminUserPage(
+        items: (json['items'] as List<dynamic>? ?? const [])
+            .map((e) =>
+                AdminUserSummary.fromJson((e as Map).cast<String, dynamic>()))
+            .toList(),
+        total: (json['total'] as num?)?.toInt() ?? 0,
+        page: (json['page'] as num?)?.toInt() ?? 0,
+        hasMore: json['hasMore'] as bool? ?? false,
+      );
 }
 
 /// One row of the users list.

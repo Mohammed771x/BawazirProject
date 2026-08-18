@@ -116,7 +116,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             TextButton(
               onPressed: () {
                 ref.read(sessionProvider.notifier).clearError();
-                context.push(Routes.register);
+                // Peers, not parent and child — see the note on the
+                // matching link in register_screen.
+                context.go(Routes.register);
               },
               child: Text(s.signUp),
             ),

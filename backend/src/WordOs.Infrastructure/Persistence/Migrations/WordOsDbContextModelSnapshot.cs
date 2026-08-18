@@ -145,6 +145,11 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");
 
+                    b.Property<string>("MeaningArNormalized")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
                     b.Property<string>("PartOfSpeech")
                         .IsRequired()
                         .HasMaxLength(32)
@@ -185,16 +190,41 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uuid");
 
+                    b.Property<int?>("AiEstimatedLevel")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("AlsoEvidenceFor")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
                     b.Property<DateTimeOffset>("AnsweredAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<double>("Difficulty")
                         .HasColumnType("double precision");
 
+                    b.Property<string>("Domain")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("EvaluationJson")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
                     b.Property<string>("ItemId")
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Level")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<string>("RawAnswer")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
 
                     b.Property<double>("Score")
                         .HasColumnType("double precision");
@@ -235,6 +265,9 @@ namespace WordOs.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset>("StartedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("TestVersion")
+                        .HasColumnType("integer");
 
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
@@ -374,9 +407,8 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                     b.Property<bool?>("FirstAttemptCorrect")
                         .HasColumnType("boolean");
 
-                    b.Property<string>("Hint")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
+                    b.Property<string>("HintsJson")
+                        .HasColumnType("jsonb");
 
                     b.Property<string>("InputMode")
                         .HasMaxLength(16)
@@ -403,6 +435,10 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)");
+
+                    b.Property<string>("PromptKey")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.Property<int?>("RequeuedAt")
                         .HasColumnType("integer");
@@ -447,7 +483,14 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("CurrentItemId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("GlossaryJson")
+                        .HasMaxLength(20000)
+                        .HasColumnType("character varying(20000)");
+
                     b.Property<bool>("IsComplete")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsPractice")
                         .HasColumnType("boolean");
 
                     b.Property<string>("LevelUsed")
@@ -482,6 +525,41 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                     b.HasIndex("UserId", "Skill", "IsComplete");
 
                     b.ToTable("skill_sessions", (string)null);
+                });
+
+            modelBuilder.Entity("WordOs.Domain.Users.ActivityEvent", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("EntityId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Skill")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Type", "CreatedAt");
+
+                    b.HasIndex("UserId", "CreatedAt");
+
+                    b.ToTable("activity_events", (string)null);
                 });
 
             modelBuilder.Entity("WordOs.Domain.Users.RefreshToken", b =>
@@ -552,6 +630,14 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
+
+                    b.Property<string>("PhoneCountryCode")
+                        .HasMaxLength(6)
+                        .HasColumnType("character varying(6)");
+
+                    b.Property<string>("PhoneNumber")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<string>("Role")
                         .IsRequired()
@@ -842,6 +928,15 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("WordOs.Domain.Sessions.SkillSession", b =>
+                {
+                    b.HasOne("WordOs.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("WordOs.Domain.Users.ActivityEvent", b =>
                 {
                     b.HasOne("WordOs.Domain.Users.User", null)
                         .WithMany()

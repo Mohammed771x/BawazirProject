@@ -22,7 +22,15 @@ public static class AuthEndpoints
     public sealed record RegisterRequest(
         [property: Required, EmailAddress, MaxLength(320)] string Email,
         [property: Required, MinLength(8), MaxLength(128)] string Password,
-        [property: Required, MaxLength(120)] string DisplayName);
+        // No character-set restriction: "أحمد سعيد" is a name.
+        [property: Required, MaxLength(120)] string DisplayName,
+        // Optional so existing clients keep working; validated in shape when
+        // present. The calling code is kept separate from the number — see
+        // User.PhoneCountryCode for why.
+        [property: MaxLength(6), RegularExpression(@"^\+?[0-9]{1,5}$")]
+        string? PhoneCountryCode = null,
+        [property: MaxLength(20), RegularExpression(@"^[0-9 ()\-]{4,20}$")]
+        string? PhoneNumber = null);
 
     public sealed record LoginRequest(
         [property: Required, MaxLength(320)] string Email,
@@ -47,6 +55,8 @@ public static class AuthEndpoints
         // targets straight from it and must never invent a default: an absent
         // list would silently display A1 for a C1 learner.
         IReadOnlyList<SkillLevelResponse> SkillLevels,
+        string? PhoneCountryCode,
+        string? PhoneNumber,
         DateTimeOffset CreatedAt);
 
     /// <summary>
@@ -113,9 +123,13 @@ public static class AuthEndpoints
         // (docs/07-SECURITY.md §3).
         var user = User.Register(
             email, hasher.Hash(request.Password), request.DisplayName,
-            config, now);
+            config, now,
+            phoneCountryCode: request.PhoneCountryCode,
+            phoneNumber: request.PhoneNumber);
 
         db.Users.Add(user);
+        db.ActivityEvents.Add(
+            ActivityEvent.Record(user.Id, ActivityType.Registered, now));
 
         var issued = tokens.Issue(user, now);
         db.RefreshTokens.Add(RefreshToken.Issue(
@@ -163,6 +177,11 @@ public static class AuthEndpoints
         }
 
         user.RecordLogin(now);
+
+        // `LastLoginAt` is one moment; the dashboard needs the history
+        // (Part 3 §34–§35).
+        db.ActivityEvents.Add(
+            ActivityEvent.Record(user.Id, ActivityType.SignedIn, now));
 
         var issued = tokens.Issue(user, now);
         db.RefreshTokens.Add(RefreshToken.Issue(
@@ -287,6 +306,8 @@ public static class AuthEndpoints
             user.OnboardingStage.ToWire(),
             user.Interests.Select(i => i.Interest).ToList(),
             user.SkillLevels.Select(ToSkillLevelResponse).ToList(),
+            user.PhoneCountryCode,
+            user.PhoneNumber,
             user.CreatedAt);
 
     public static SkillLevelResponse ToSkillLevelResponse(SkillLevel level) =>

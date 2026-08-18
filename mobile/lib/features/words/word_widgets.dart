@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../core/widgets/speaker_button.dart';
 import '../../core/theme/skill_visuals.dart';
 import '../../core/widgets/app_widgets.dart';
 
@@ -77,7 +78,20 @@ class WordTile extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(word.text, style: context.text.titleMedium),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(word.text,
+                              style: context.text.titleMedium),
+                        ),
+                        // Every vocabulary item can be heard (§13, §44).
+                        SpeakerButton(
+                          id: 'word:${word.id}',
+                          text: word.text,
+                          size: 18,
+                        ),
+                      ],
+                    ),
                     const SizedBox(height: 2),
                     Text(
                       word.meaning,
@@ -97,17 +111,23 @@ class WordTile extends ConsumerWidget {
             children: [
               SkillPips(skills: word.skills),
               const Spacer(),
+              // What the learner is told about a word is where it is in their
+              // own learning, not which state row the server holds (§42–§45):
+              // a word still in the pipeline shows the skill it is waiting on,
+              // and everything past it — Active or Archived — reads simply as
+              // known. Archived is not a demotion and must never look like one.
               if (word.state == WordState.learning && word.currentSkill != null)
                 StatusPill(
                   label: s.skillName(word.currentSkill!),
                   color: SkillVisuals.color(context, word.currentSkill!),
                   icon: SkillVisuals.icon(word.currentSkill!),
                 )
-              else if (word.state == WordState.active)
+              else if (word.state == WordState.active ||
+                  word.state == WordState.archived)
                 StatusPill(
-                  label: '${s.active} · ${word.exposureCount}',
+                  label: s.wordKnown,
                   color: context.palette.success,
-                  icon: Icons.bolt_rounded,
+                  icon: Icons.check_circle_outline_rounded,
                 )
               else
                 StatusPill(

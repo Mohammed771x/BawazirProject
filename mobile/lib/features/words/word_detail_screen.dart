@@ -6,6 +6,7 @@ import '../../core/api/api_providers.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../core/widgets/speaker_button.dart';
 import '../../core/theme/skill_visuals.dart';
 import '../../core/widgets/app_widgets.dart';
 
@@ -50,6 +51,11 @@ class WordDetailScreen extends ConsumerWidget {
                         Expanded(
                           child: Text(word.text,
                               style: context.text.headlineSmall),
+                        ),
+                        SpeakerButton(
+                          id: 'word-detail:${word.id}',
+                          text: word.text,
+                          size: 24,
                         ),
                         LevelBadge(label: word.cefrLevel.label),
                       ],

@@ -44,7 +44,7 @@ void main() {
       final users = await api.adminUsers();
 
       expect(overview.userCount, greaterThan(0));
-      expect(users, isNotEmpty);
+      expect(users.items, isNotEmpty);
     });
 
     test('registering never yields an owner account', () async {
@@ -71,9 +71,9 @@ void main() {
       final overview = await api.adminOverview();
       final users = await api.adminUsers();
 
-      final owners = users.where((u) => u.role == UserRole.owner).length;
+      final owners = users.items.where((u) => u.role == UserRole.owner).length;
       expect(owners, 1);
-      expect(overview.userCount, users.length - owners);
+      expect(overview.userCount, users.items.length - owners);
     });
 
     test('spelling appears in skill stats but not in level distributions', () async {
@@ -118,7 +118,7 @@ void main() {
         () async {
       final api = apiFor('owner@wordos.app', 'wordos123');
       final users = await api.adminUsers();
-      final demo = users.firstWhere((u) => u.email == 'demo@wordos.app');
+      final demo = users.items.firstWhere((u) => u.email == 'demo@wordos.app');
 
       final detail = await api.adminUserDetail(demo.id);
 
@@ -138,7 +138,7 @@ void main() {
     test('a wrong answer is recorded rather than removing the word', () async {
       final api = apiFor('owner@wordos.app', 'wordos123');
       final users = await api.adminUsers();
-      final demo = users.firstWhere((u) => u.email == 'demo@wordos.app');
+      final demo = users.items.firstWhere((u) => u.email == 'demo@wordos.app');
       final detail = await api.adminUserDetail(demo.id);
 
       final failed = detail.mistakes.first;
@@ -164,6 +164,80 @@ void main() {
 
       expect(find.text('Developer Dashboard'), findsNothing);
       expect(find.text('Skip 2 days'), findsNothing);
+    });
+
+    testWidgets('a hand-typed reporting window cannot take the dashboard down',
+        (tester) async {
+      // The reported crash: the presets worked and typing a range closed the
+      // app. The number reaches date arithmetic that throws outside a range
+      // nobody bothered to check, so every kind of nonsense is typed here.
+      await bootApp(tester, surfaceSize: const Size(1200, 2600));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byType(TextFormField).first, 'owner@wordos.app');
+      await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
+      await tester.pumpAndSettle();
+
+      await openSettings(tester);
+      await tester.scrollUntilVisible(find.text('Developer Dashboard'), 250);
+      await tester.tap(find.text('Developer Dashboard'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      for (final typed in [
+        '3',            // the ordinary case
+        '0',            // no days at all
+        '-7',           // backwards
+        '999999999',    // the overflow
+        '2147483647',   // the largest int32
+        '99999999999999999999', // larger than an int
+        'abc',          // not a number
+        '3.5',          // not a whole one
+        '',             // nothing
+        '   ',
+      ]) {
+        final custom = find.byType(ActionChip);
+        await tester.ensureVisible(custom.first);
+        await tester.tap(custom.first);
+        await tester.pumpAndSettle();
+
+        final field = find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.byType(TextField),
+        );
+        expect(field, findsOneWidget,
+            reason: 'the custom range dialog should be open');
+
+        await tester.enterText(field, typed);
+        await tester.pumpAndSettle();
+
+        final save = find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(FilledButton, 'Save'),
+        );
+
+        // Save is disabled when the field holds nothing usable, so the way out
+        // of the dialog is Cancel — which must also leave the screen standing.
+        final enabled = tester.widget<FilledButton>(save).onPressed != null;
+        await tester.tap(enabled
+            ? save
+            : find.descendant(
+                of: find.byType(AlertDialog),
+                matching: find.widgetWithText(TextButton, 'Cancel'),
+              ));
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull,
+            reason: 'typing "$typed" as a reporting window crashed the dashboard');
+
+        // Still a dashboard, not a blank screen or an error page.
+        expect(find.text('Learners'), findsOneWidget,
+            reason: 'the overview disappeared after typing "$typed"');
+      }
     });
 
     testWidgets('the owner reaches the dashboard and its charts render',

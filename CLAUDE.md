@@ -2,6 +2,8 @@
 
 > **New session? Read this file, then [`docs/02-PROGRESS.md`](docs/02-PROGRESS.md).**
 > Together they tell you what this is, what is built, and exactly what to do next.
+> For how the finished application actually behaves — every section, flow and rule —
+> read [`docs/08-FINAL-SPECIFICATION.md`](docs/08-FINAL-SPECIFICATION.md).
 > You do **not** need to re-read the seven Arabic/English requirement documents to continue —
 > they are distilled into `docs/`.
 
@@ -25,8 +27,8 @@ measurable.
 | `WordOS Decumentation/` | Original requirement documents. **Read-only source of truth.** |
 | `docs/` | Distilled plan, phases, progress ledger, ADRs, data model, API contract, placement algorithm. |
 | `mobile/` | Flutter app (built). |
-| `backend/` | ASP.NET Core + PostgreSQL — **not started** (Phase 5). |
-| `ai-service/` | Python FastAPI AI layer — **not started** (Phase 6). |
+| `backend/` | ASP.NET Core 10 + PostgreSQL 17 — built, with the lexicon importer in `tools/`. |
+| `ai-service/` | Python FastAPI layer holding the Gemini key — built. |
 
 ## The nine rules that must never be broken
 

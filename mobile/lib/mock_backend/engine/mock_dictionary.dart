@@ -1,3 +1,4 @@
+import '../../core/api/wordos_api.dart';
 import '../../core/models/models.dart';
 
 /// A small offline "dictionary + AI word analysis" used by the mock backend.
@@ -236,6 +237,33 @@ class MockDictionary {
         ),
       );
 
+  /// Exact lookup of a word tapped inside a passage (Part 2 §17).
+  ///
+  /// The real backend strips inflections against the lexicon; this stand-in
+  /// does the same crudely, over the handful of words the mock knows. It exists
+  /// so widget tests can drive the reading screen — the behaviour that counts
+  /// is verified against the real endpoint.
+  static WordDefinition define(String word) {
+    final query = word.trim().toLowerCase();
+    for (final candidate in [
+      query,
+      if (query.endsWith('s')) query.substring(0, query.length - 1),
+      if (query.endsWith('es')) query.substring(0, query.length - 2),
+      if (query.endsWith('ed')) query.substring(0, query.length - 2),
+      if (query.endsWith('ing')) query.substring(0, query.length - 3),
+    ]) {
+      final senses = entries[candidate];
+      if (senses != null && senses.isNotEmpty) {
+        return WordDefinition(
+          query: word,
+          matchedText: senses.first.text,
+          senses: senses.map(_withSenseId).toList(),
+        );
+      }
+    }
+    return WordDefinition(query: word, matchedText: null, senses: const []);
+  }
+
   /// Prefix search for the Add Word field.
   ///
   /// Typing `bo` returns every sense whose word starts with those letters, each
@@ -245,6 +273,28 @@ class MockDictionary {
   static List<WordCandidate> lookup(String rawQuery) {
     final query = rawQuery.trim().toLowerCase();
     if (query.isEmpty) return const [];
+
+    // The same cap the server enforces. Without it the mock answered a query
+    // no real backend would accept, which is how a client bug survives
+    // development and appears on a device.
+    if (query.length > 64) {
+      throw const ApiException(
+        'QUERY_TOO_LONG',
+        'Search term is too long.',
+        statusCode: 400,
+      );
+    }
+
+    // Arabic in, English out: a learner who knows the meaning but not the word
+    // searches with the meaning (ADR-034). The real backend folds diacritics
+    // before comparing; this fixture has none to fold.
+    if (RegExp(r'[؀-ۿ]').hasMatch(query)) {
+      return [
+        for (final entry in entries.entries)
+          for (final candidate in entry.value)
+            if (candidate.meaning.contains(query)) _withSenseId(candidate),
+      ];
+    }
 
     // Exact matches first, then other words that start with the query, so a
     // complete word is never buried under its own prefixes.

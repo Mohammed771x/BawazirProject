@@ -86,5 +86,69 @@ void main() {
       await settle(tester, total: const Duration(seconds: 60));
       debugPrint('✓ drill-down: ${visibleText(tester).take(20)}');
     }
+
+    // ── The words behind the counts (Part 3) ─────────────────────────────
+    //
+    // A figure the Owner cannot drill into is a number they have to take on
+    // trust. Whichever state this learner actually has words in should open
+    // those words.
+    final counts = visibleText(tester);
+    final stateWithWords = ['Learning', 'Active', 'Archived'].firstWhere(
+      (label) {
+        final at = counts.indexOf(label);
+        return at >= 0 &&
+            at + 1 < counts.length &&
+            (int.tryParse(counts[at + 1]) ?? 0) > 0;
+      },
+      orElse: () => '',
+    );
+    expect(stateWithWords, isNotEmpty,
+        reason: 'the drill-down learner should own some words. '
+            'Visible: ${counts.take(12)}');
+
+    await tapAny(tester, [stateWithWords]);
+    await settle(tester, total: const Duration(seconds: 60));
+    debugPrint('✓ word list ($stateWithWords): ${visibleText(tester).take(6)}');
+
+    final wordRows = find.byWidgetPredicate(
+        (w) => w.runtimeType.toString().contains('WordRow'));
+    expect(wordRows, findsWidgets,
+        reason: 'Visible: ${visibleText(tester).take(10)}');
+
+    await tester.tap(wordRows.first, warnIfMissed: false);
+    await settle(tester, total: const Duration(seconds: 60));
+
+    // The journey is read from the append-only event log, so it shows what
+    // happened rather than only where the word ended up.
+    expect(visibleText(tester).any((t) => t.contains('Added')), isTrue,
+        reason: 'the journey should start at the beginning. '
+            'Visible: ${visibleText(tester).take(12)}');
+    debugPrint('✓ word journey: ${visibleText(tester).take(12)}');
+
+    // Back up to the learner: journey → word list → learner.
+    await tester.pageBack();
+    await settle(tester);
+    await tester.pageBack();
+    await settle(tester, total: const Duration(seconds: 30));
+
+    // ── Placement evidence (Part 3) ──────────────────────────────────────
+    //
+    // A level is a conclusion; this is what produced it. The Owner reaches it
+    // from the levels section of the learner they are already looking at.
+    await tester.dragUntilVisible(
+      find.text('Placement evidence'),
+      find.byType(Scrollable).first,
+      const Offset(0, -300),
+    );
+    await tapAny(tester, ['Placement evidence']);
+    await settle(tester, total: const Duration(seconds: 60));
+
+    final evidence = visibleText(tester);
+    expect(evidence.any((t) => t.contains('Started at')), isTrue,
+        reason: 'the two halves of "have they moved?" belong together. '
+            'Visible: ${evidence.take(10)}');
+    expect(evidence.any((t) => t.contains('Test version')), isTrue,
+        reason: 'a result from an older item bank is not comparable');
+    debugPrint('✓ placement evidence: ${evidence.take(12)}');
   }, timeout: const Timeout(Duration(minutes: 8)));
 }

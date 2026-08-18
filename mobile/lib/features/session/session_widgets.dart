@@ -1,8 +1,12 @@
+import 'dart:async';
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
-import '../../core/audio/tts_service.dart';
+import '../../core/audio/speech_provider.dart';
+import '../../core/audio/speech_service.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
@@ -11,52 +15,121 @@ import '../../core/widgets/app_widgets.dart';
 
 /// Renders generated content with the target words underlined/highlighted,
 /// exactly as the documents require — visible, but never explained inline.
-class HighlightedPassage extends StatelessWidget {
+///
+/// Every word is tappable (Part 2 §17–§19). A word the learner does not know
+/// should not stop the passage dead: one tap gives the meaning and how it
+/// sounds, and the passage carries on. The target words are the exception —
+/// those are what the session is about to test, so they are pronounced but not
+/// explained. [onWordTap] receives whether the tapped word was a target one,
+/// and the screen decides what to show.
+///
+/// Typography is set here rather than left to the theme's body style (§14–§16):
+/// a passage is read for a minute at a time, not glanced at, so it gets a larger
+/// size, generous line height and a measured line length.
+class HighlightedPassage extends StatefulWidget {
   const HighlightedPassage({
     super.key,
     required this.content,
     required this.color,
+    this.onWordTap,
   });
 
   final SessionContent content;
   final Color color;
 
+  /// Called with the tapped word and whether it is one of the session's target
+  /// words. Null makes the passage plain text, as the result screen shows it.
+  final void Function(String word, {required bool isTarget})? onWordTap;
+
+  @override
+  State<HighlightedPassage> createState() => _HighlightedPassageState();
+}
+
+class _HighlightedPassageState extends State<HighlightedPassage> {
+  /// Recognisers own native resources; one per word, all released together.
+  final _recognizers = <TapGestureRecognizer>[];
+
+  @override
+  void dispose() {
+    for (final r in _recognizers) {
+      r.dispose();
+    }
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final spans = [...content.targetSpans]
+    for (final r in _recognizers) {
+      r.dispose();
+    }
+    _recognizers.clear();
+
+    final text = widget.content.text;
+    final spans = [...widget.content.targetSpans]
       ..sort((a, b) => a.start.compareTo(b.start));
-    final base = context.text.bodyLarge?.copyWith(height: 1.7);
-    final pieces = <TextSpan>[];
+
+    final base = context.text.bodyLarge?.copyWith(
+      fontSize: 19,
+      height: 1.85,
+      letterSpacing: 0.15,
+    );
+    // Full strength, not a wash: a 50%-alpha underline on the dark theme's
+    // surface is effectively invisible, which loses the one signal telling the
+    // learner which words the session is about (§16).
+    final targetStyle = base?.copyWith(
+      color: widget.color,
+      fontWeight: FontWeight.w700,
+      decoration: TextDecoration.underline,
+      decorationColor: widget.color,
+      decorationThickness: 2.5,
+    );
+
+    bool isTarget(int start, int end) => spans.any(
+        (s) => start < s.end.clamp(0, text.length) && end > s.start);
+
+    final pieces = <InlineSpan>[];
     var cursor = 0;
 
-    for (final span in spans) {
-      if (span.start > content.text.length) break;
-      final end = span.end.clamp(0, content.text.length);
-      if (span.start > cursor) {
+    // Letters, digits and the apostrophes and hyphens that live inside words —
+    // "doesn't" and "well-known" are one word each, not three.
+    for (final match in RegExp(r"[\p{L}\p{N}][\p{L}\p{N}'’\-]*", unicode: true)
+        .allMatches(text)) {
+      if (match.start > cursor) {
         pieces.add(
-          TextSpan(text: content.text.substring(cursor, span.start), style: base),
+          TextSpan(text: text.substring(cursor, match.start), style: base),
         );
       }
-      pieces.add(
-        TextSpan(
-          text: content.text.substring(span.start, end),
-          style: base?.copyWith(
-            color: color,
-            fontWeight: FontWeight.w700,
-            decoration: TextDecoration.underline,
-            decorationColor: color.withValues(alpha: 0.5),
-            decorationThickness: 2,
-          ),
-        ),
-      );
-      cursor = end;
+      cursor = match.end;
+
+      final word = match.group(0)!;
+      final target = isTarget(match.start, match.end);
+
+      TapGestureRecognizer? recognizer;
+      if (widget.onWordTap != null) {
+        recognizer = TapGestureRecognizer()
+          ..onTap = () => widget.onWordTap!(word, isTarget: target);
+        _recognizers.add(recognizer);
+      }
+
+      pieces.add(TextSpan(
+        text: word,
+        style: target ? targetStyle : base,
+        recognizer: recognizer,
+      ));
     }
-    if (cursor < content.text.length) {
-      pieces.add(TextSpan(text: content.text.substring(cursor), style: base));
+    if (cursor < text.length) {
+      pieces.add(TextSpan(text: text.substring(cursor), style: base));
     }
 
-    return SelectionArea(
-      child: RichText(text: TextSpan(children: pieces)),
+    // The passage is English however the interface is set. Inheriting the
+    // app's direction right-aligns every line and starts them from the wrong
+    // end — legible, and wrong.
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Text.rich(
+        TextSpan(children: pieces),
+        textAlign: TextAlign.left,
+      ),
     );
   }
 }
@@ -133,8 +206,20 @@ class SessionResultView extends ConsumerWidget {
                 _OutcomeTile(outcome: outcome, dateFormat: dateFormat),
                 const SizedBox(height: AppSpacing.xs),
               ],
+              // Listening ends with the recording back in the learner's hands
+              // (§5, §7). During the session the audio was a test; afterwards
+              // it is study material — and the one moment they most want to
+              // hear it again is having just seen which questions they missed.
+              //
+              // Order: answers, then the audio, then the text. Hearing it
+              // before reading it is the same order as the session itself.
               if (transcript != null) ...[
                 const SizedBox(height: AppSpacing.lg),
+                if (result.skill == SkillType.listening) ...[
+                  SectionHeader(title: s.listenAgain),
+                  ReplayPlayer(text: transcript!.text, color: color),
+                  const SizedBox(height: AppSpacing.lg),
+                ],
                 SectionHeader(title: s.showTranscript),
                 AppCard(
                   color: context.palette.subtleSurface,
@@ -323,6 +408,86 @@ class _Sentence extends StatelessWidget {
 
 /// Plays one sentence for a Listening vocabulary item. No transcript is shown:
 /// the whole point of the skill is understanding from audio (demo review §33).
+/// Play, stop and slow — the recording, handed back after the test.
+///
+/// Deliberately not autoplaying, unlike the player during the session: nothing
+/// should start talking while the learner is reading their result. They press
+/// it when they want it.
+class ReplayPlayer extends ConsumerStatefulWidget {
+  const ReplayPlayer({super.key, required this.text, required this.color});
+
+  final String text;
+  final Color color;
+
+  @override
+  ConsumerState<ReplayPlayer> createState() => _ReplayPlayerState();
+}
+
+class _ReplayPlayerState extends ConsumerState<ReplayPlayer> {
+  bool _slow = false;
+
+  String get _id => 'replay:${widget.text.hashCode}';
+
+  Future<void> _toggle() async {
+    final speech = ref.read(speechServiceProvider);
+    if (speech.isSpeakingId(_id)) {
+      await speech.stop();
+      return;
+    }
+    await speech.speak(_id, widget.text,
+        rate: _slow ? SpeechRate.slow : SpeechRate.normal);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ref.watch(stringsProvider);
+    // Read from the service, so the icon cannot claim something is playing
+    // when it is not.
+    final playing = ref.watch(speechServiceProvider).isSpeakingId(_id);
+
+    return AppCard(
+      color: widget.color.withValues(alpha: 0.06),
+      borderColor: widget.color.withValues(alpha: 0.28),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              IconButton.filledTonal(
+                onPressed: _toggle,
+                iconSize: 28,
+                icon: Icon(playing
+                    ? Icons.stop_rounded
+                    : Icons.play_arrow_rounded),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  playing ? s.stopAudio : s.listenAgain,
+                  style: context.text.titleSmall,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          SegmentedButton<bool>(
+            segments: [
+              ButtonSegment(value: false, label: Text(s.normalSpeed)),
+              ButtonSegment(value: true, label: Text(s.slowSpeed)),
+            ],
+            selected: {_slow},
+            onSelectionChanged: (value) {
+              setState(() => _slow = value.first);
+              // Applied at once: a speed control that waits for the next press
+              // is a setting, not a control.
+              unawaited(_toggle());
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class SentencePlayer extends ConsumerStatefulWidget {
   const SentencePlayer({super.key, required this.text, required this.color});
 
@@ -347,9 +512,22 @@ class _SentencePlayerState extends ConsumerState<SentencePlayer> {
   Future<void> _speak({bool slow = false}) async {
     if (!mounted) return;
     setState(() => _played = true);
-    final ok =
-        await ref.read(ttsServiceProvider).speak(widget.text, slow: slow);
+
+    final ok = await ref.read(speechServiceProvider).speak(
+          'sentence:${widget.text.hashCode}',
+          widget.text,
+          rate: slow ? SpeechRate.slow : SpeechRate.normal,
+        );
     if (mounted && !ok) setState(() => _audioFailed = true);
+  }
+
+  Future<void> _toggle({bool slow = false}) async {
+    final speech = ref.read(speechServiceProvider);
+    if (speech.isSpeakingId('sentence:${widget.text.hashCode}')) {
+      await speech.stop();
+      return;
+    }
+    await _speak(slow: slow);
   }
 
   @override
@@ -380,18 +558,28 @@ class _SentencePlayerState extends ConsumerState<SentencePlayer> {
             children: [
               Expanded(
                 flex: 2,
-                child: FilledButton.tonalIcon(
-                  onPressed: () => _speak(),
-                  icon: Icon(_played
-                      ? Icons.replay_rounded
-                      : Icons.play_arrow_rounded),
-                  label: Text(_played ? s.playAgain : s.playAudio),
-                ),
+                child: Builder(builder: (context) {
+                  final playing = ref
+                      .watch(speechServiceProvider)
+                      .isSpeakingId('sentence:${widget.text.hashCode}');
+
+                  return FilledButton.tonalIcon(
+                    onPressed: () => _toggle(),
+                    icon: Icon(playing
+                        ? Icons.stop_rounded
+                        : (_played
+                            ? Icons.replay_rounded
+                            : Icons.play_arrow_rounded)),
+                    label: Text(playing
+                        ? s.stopAudio
+                        : (_played ? s.playAgain : s.playAudio)),
+                  );
+                }),
               ),
               const SizedBox(width: AppSpacing.xs),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () => _speak(slow: true),
+                  onPressed: () => _toggle(slow: true),
                   icon: const Icon(Icons.slow_motion_video_rounded, size: 18),
                   label: Text(s.slowSpeed),
                 ),
@@ -421,7 +609,9 @@ class _SentencePlayerState extends ConsumerState<SentencePlayer> {
                     ],
                   ),
                   const SizedBox(height: AppSpacing.xs),
-                  Text(widget.text, style: context.text.bodyMedium),
+                  // The script is English: it must not inherit the Arabic
+                  // interface's direction, exactly as the passage does not.
+                  EnglishText(widget.text, style: context.text.bodyMedium),
                 ],
               ),
             ),

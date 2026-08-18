@@ -8,6 +8,7 @@ import 'mock_content.dart';
 import 'levels/level_engine.dart';
 import 'mock_dictionary.dart';
 import 'placement/placement_engine.dart';
+import 'placement/placement_item_bank.dart';
 
 /// ⚠️ DISPOSABLE DEVELOPMENT COMPONENT — deleted in Phase 7.
 ///
@@ -129,14 +130,99 @@ class MockEngine {
   // Authorization lives in [MockAdmin], not in the UI: a normal user calling
   // these is refused with 403 exactly as the real backend must refuse them.
 
-  AdminOverview adminOverview(MockUser caller) =>
+  AdminOverview adminOverview(MockUser caller, {int? days}) =>
       admin.overview(caller, _usersById.values.toList());
 
-  List<AdminUserSummary> adminUsers(MockUser caller) =>
-      admin.users(caller, _usersById.values.toList());
+  AdminUserPage adminUsers(MockUser caller, {String? query, int? days}) =>
+      admin.users(caller, _usersById.values.toList(),
+          query: query, days: days, now: now);
 
   AdminUserDetail adminUserDetail(MockUser caller, String userId) =>
       admin.userDetail(caller, _usersById[userId]);
+
+  AdminWordPage adminUserWords(
+    MockUser caller,
+    String userId, {
+    WordState? state,
+    String? query,
+  }) =>
+      admin.userWords(caller, _usersById[userId], state: state, query: query);
+
+  /// The placement evidence the Owner sees (Part 3).
+  ///
+  /// Assembled here rather than in [MockAdmin] because only the engine can see
+  /// both halves: the finished placement run and the learner's current levels.
+  PlacementEvidence adminPlacementEvidence(MockUser caller, String userId) {
+    admin.requireOwner(caller);
+    final target = _usersById[userId];
+    if (target == null) {
+      throw const ApiException('NOT_FOUND', 'User not found.', statusCode: 404);
+    }
+
+    final run = _placement.completedFor(userId);
+    final progress = configuration.skillsOrder
+        .where((skill) => skill != SkillType.spelling)
+        .map((skill) {
+      final level = target.levels[skill]!;
+      return PlacementProgressRow(
+        skill: skill,
+        // Where placement put them, read from the level history rather than
+        // stored twice — the record is the source of truth.
+        initialLevel: target.levelChanges
+            .where((c) =>
+                c.skill == skill && c.changeType == LevelChangeType.placement)
+            .map((c) => c.next)
+            .firstOrNull,
+        currentLevel: level.systemAssessedLevel ?? level.userSelectedLevel,
+        confidence: level.confidence,
+        rollingAccuracy: level.rollingAccuracy,
+      );
+    }).toList();
+
+    if (run == null) {
+      return PlacementEvidence(
+        completed: false,
+        testVersion: PlacementEngine.currentTestVersion,
+        fallbackScoredCount: 0,
+        progress: progress,
+        answers: const [],
+      );
+    }
+
+    final answers = <PlacementEvidenceItem>[];
+    for (final skill in configuration.skillsOrder) {
+      for (final response in run.responsesFor(skill)) {
+        final item = PlacementItemBank.byId(response.itemId);
+        answers.add(PlacementEvidenceItem(
+          itemId: response.itemId,
+          skill: skill,
+          domain: item?.skill.wire ?? skill.wire,
+          level: item?.level ?? CefrLevel.b1,
+          difficulty: response.difficulty,
+          score: response.score,
+          rawAnswer: run.rawAnswers[response.itemId],
+          answeredAt: now,
+        ));
+      }
+    }
+
+    return PlacementEvidence(
+      completed: true,
+      testVersion: PlacementEngine.currentTestVersion,
+      fallbackScoredCount: 0,
+      progress: progress,
+      answers: answers,
+    );
+  }
+
+  AdminWordJourney adminWordJourney(MockUser caller, String wordId) {
+    final owner = _usersById.values.firstWhere(
+      (u) => u.words.any((w) => w.id == wordId),
+      orElse: () => throw const ApiException('WORD_NOT_FOUND', 'Word not found.',
+          statusCode: 404),
+    );
+    return admin.wordJourney(caller, owner, wordId);
+  }
 
   void logout(String? token) {
     if (token != null) _tokens.remove(token);
@@ -247,6 +333,8 @@ class MockEngine {
   // ── Words ─────────────────────────────────────────────────────────────────
   List<WordCandidate> lookup(String query) => MockDictionary.lookup(query);
 
+  WordDefinition define(String word) => MockDictionary.define(word);
+
   Word addWord(MockUser user, WordCandidate candidate) {
     final text = candidate.text.trim();
     final meaning = candidate.meaning.trim();
@@ -356,9 +444,14 @@ class MockEngine {
     return state.status;
   }
 
-  WordPage words(MockUser user, WordState? state) {
+  WordPage words(MockUser user, WordState? state, {String? query}) {
+    final term = (query ?? '').trim().toLowerCase();
     final items = user.words
         .where((w) => state == null || w.state == state)
+        .where((w) =>
+            term.isEmpty ||
+            w.text.toLowerCase().contains(term) ||
+            w.meaning.contains(term))
         .toList()
       ..sort((a, b) => b.addedAt.compareTo(a.addedAt));
     return WordPage(
@@ -467,10 +560,32 @@ class MockEngine {
   }
 
   // ── Sessions ──────────────────────────────────────────────────────────────
-  SkillSession startSession(MockUser user, SkillType skill) {
+  SkillSession startSession(
+    MockUser user,
+    SkillType skill, {
+    bool practice = false,
+  }) {
+    // An unfinished session for this skill is resumed, not replaced — the same
+    // rule the real backend applies. Starting a second one would strand the
+    // answers already given in a session nothing points at any more, which is
+    // exactly what a learner tapping the skill twice would produce.
+    for (final open in _sessions.values) {
+      if (open.userId == user.id &&
+          open.skill == skill &&
+          open.snapshot != null) {
+        return open.snapshot!;
+      }
+    }
+
     final target = user.levels[skill]!.dailyTargetWords;
     final due = _eligibleWords(user, skill).take(target).toList();
-    if (due.isEmpty) {
+
+    // A session with no vocabulary attached, for the days when nothing is due
+    // (Part 2 §5). Only the two skills that mean anything without words.
+    final isPractice = practice &&
+        (skill == SkillType.reading || skill == SkillType.listening);
+
+    if (due.isEmpty && !isPractice) {
       throw const ApiException(
         'NO_WORDS_DUE',
         'No words are due for this skill yet.',
@@ -539,6 +654,7 @@ class MockEngine {
       correctAnswers: generated.correctAnswers,
       startedAt: now,
       targetWords: targetWords,
+      isPractice: isPractice,
     );
     _sessions[session.id] = session;
     for (final item in generated.items) {
@@ -561,13 +677,111 @@ class MockEngine {
       targetWords: targetWords,
       items: generated.items,
       conversation: conversation,
+      isPractice: isPractice,
       progress: session.progress,
+      // The words this conversation is about, each with four meanings —
+      // checked before the talking starts (§1–§3). Empty for every other
+      // skill, and for a conversation with no words.
+      warmup: skill != SkillType.speaking
+          ? const []
+          : [
+              for (final word in targetWords)
+                WarmupWord(
+                  wordId: word.wordId,
+                  text: word.text,
+                  options: _content
+                      .buildReviewItem(
+                        wordId: word.wordId,
+                        text: word.text,
+                        meaning: word.meaning,
+                        otherMeanings: targetWords
+                            .map((w) => w.meaning)
+                            .where((m) => m != word.meaning)
+                            .toList(),
+                      )
+                      .options,
+                ),
+            ],
     );
   }
 
   /// Replays a session as it stands, the way the backend's `GET /sessions/{id}`
   /// does — the content is stored, never regenerated, so resuming shows the
   /// same passage and the queue position the learner left off at.
+  /// Re-tells a session's passage at another level.
+  ///
+  /// The mock cannot rewrite prose, so it regenerates at the new level and
+  /// says so — enough for the widget tests to drive the flow. Whether the
+  /// re-telling is genuinely the *same* story is a property of the real
+  /// generator, and is checked against it.
+  SkillSession changeSessionLevel(
+    MockUser user,
+    String sessionId,
+    CefrLevel level,
+  ) {
+    final session = _requireSession(user, sessionId);
+    final snapshot = session.snapshot;
+
+    if (snapshot == null) {
+      throw const ApiException('SESSION_NOT_FOUND', 'Session not found.',
+          statusCode: 404);
+    }
+
+    if (session.attempts.values.any((a) => a > 0)) {
+      throw const ApiException(
+        'SESSION_STARTED',
+        'The level cannot change once the questions have begun.',
+        statusCode: 409,
+      );
+    }
+
+    final definitions = snapshot.targetWords
+        .map((w) => user.words.firstWhere((x) => x.id == w.wordId).definitionEn)
+        .toList();
+
+    final generated = _content.buildComprehension(
+      words: snapshot.targetWords,
+      definitions: definitions,
+      interests: user.interests,
+      listening: snapshot.skill == SkillType.listening,
+    );
+
+    session.replaceItems(generated.items, generated.correctAnswers);
+
+    return session.snapshot = SkillSession(
+      id: snapshot.id,
+      skill: snapshot.skill,
+      levelUsed: level,
+      content: generated.content,
+      targetWords: snapshot.targetWords,
+      items: generated.items,
+      conversation: null,
+      progress: session.progress,
+    );
+  }
+
+  /// Marks one warm-up answer. Records nothing, exactly as the real one does.
+  WarmupResult answerWarmup(
+    MockUser user,
+    String sessionId,
+    String wordId,
+    String answer,
+  ) {
+    _requireSession(user, sessionId);
+
+    final word = user.words.firstWhere(
+      (w) => w.id == wordId,
+      orElse: () => throw const ApiException(
+          'WORD_NOT_FOUND', 'Word not found.', statusCode: 404),
+    );
+
+    return WarmupResult(
+      wordId: wordId,
+      isCorrect: answer.trim() == word.meaning.trim(),
+      correctAnswer: word.meaning,
+    );
+  }
+
   SkillSession resumeSession(MockUser user, String sessionId) {
     final session = _requireSession(user, sessionId);
     final snapshot = session.snapshot;
@@ -624,8 +838,12 @@ class MockEngine {
         ? answer.trim().toLowerCase() == correct.trim().toLowerCase()
         : answer == correct;
 
-    final requeued =
-        session.recordAttempt(itemId: itemId, isCorrect: isCorrect);
+    final requeued = session.recordAttempt(
+      itemId: itemId,
+      isCorrect: isCorrect,
+      // A comprehension question is asked once; only the word comes back.
+      repeatable: session.typeOf(itemId) != SessionItemType.comprehension,
+    );
     final wordId = session.wordIdForItem(itemId);
 
     return AnswerResult(
@@ -1520,6 +1738,7 @@ class _MockSession {
     required this.correctAnswers,
     required this.startedAt,
     required this.targetWords,
+    this.isPractice = false,
   });
 
   /// How many times one item may be asked in a single session. Without a cap a
@@ -1535,6 +1754,9 @@ class _MockSession {
   final Map<String, String> correctAnswers;
   final DateTime startedAt;
   final List<SessionTargetWord> targetWords;
+
+  /// A session that owns no words: nothing passes, nothing fails (§5).
+  final bool isPractice;
 
   /// Cleared items → whether they were right on the **first** attempt.
   final Map<String, bool> results = {};
@@ -1552,6 +1774,10 @@ class _MockSession {
 
   final List<String> queue = [];
   final Map<String, String> _itemToWord = {};
+
+  /// What kind of question each item is — a comprehension question is asked
+  /// once, a word comes back until it is right.
+  final Map<String, SessionItemType> _itemTypes = {};
   int _totalItems = 0;
 
   int get totalItems => _totalItems;
@@ -1560,10 +1786,34 @@ class _MockSession {
 
   String? wordIdForItem(String itemId) => _itemToWord[itemId];
 
+  SessionItemType? typeOf(String itemId) => _itemTypes[itemId];
+
   void register(SessionItem item) {
     queue.add(item.id);
     _totalItems++;
+    _itemTypes[item.id] = item.type;
     if (item.wordId != null) _itemToWord[item.id] = item.wordId!;
+  }
+
+  /// Swaps the whole question set, for a passage re-told at another level.
+  ///
+  /// Only ever called before anything has been answered — the real backend
+  /// refuses it afterwards, because these are the items the learner's answers
+  /// belong to.
+  void replaceItems(List<SessionItem> items, Map<String, String> answers) {
+    queue.clear();
+    results.clear();
+    attempts.clear();
+    _itemToWord.clear();
+    _itemTypes.clear();
+    _totalItems = 0;
+    correctAnswers
+      ..clear()
+      ..addAll(answers);
+
+    for (final item in items) {
+      register(item);
+    }
   }
 
   bool knows(String itemId) => correctAnswers.containsKey(itemId);
@@ -1573,7 +1823,11 @@ class _MockSession {
   /// Records an attempt and decides what happens to the item.
   ///
   /// Returns true when the item was requeued for another try.
-  bool recordAttempt({required String itemId, required bool isCorrect}) {
+  bool recordAttempt({
+    required String itemId,
+    required bool isCorrect,
+    bool repeatable = true,
+  }) {
     final attempt = (attempts[itemId] ?? 0) + 1;
     attempts[itemId] = attempt;
 
@@ -1583,7 +1837,12 @@ class _MockSession {
 
     queue.remove(itemId);
 
-    final canRetry = !isCorrect && attempt < maxAttemptsPerItem;
+    // Only items about a word come back. A comprehension question measures
+    // whether the passage was pitched right, and it has; asking it again
+    // teaches nothing and strands the learner at the end of the session
+    // re-reading questions they have finished with.
+    final canRetry =
+        repeatable && !isCorrect && attempt < maxAttemptsPerItem;
     if (canRetry) {
       queue.add(itemId);
       return true;

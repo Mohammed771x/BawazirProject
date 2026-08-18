@@ -42,10 +42,11 @@ void main() {
     await _tapText(tester, 'Create account');
 
     // By position: the label lives in the field's decoration, so matching on it
-    // is brittle, and the form is name → email → password.
+    // is brittle. The form is name → email → phone → password.
     await _fillAt(tester, 0, 'Layla');
     await _fillAt(tester, 1, email);
-    await _fillAt(tester, 2, password);
+    await _fillAt(tester, 2, '777123456');
+    await _fillAt(tester, 3, password);
     await _tapButton(tester, 'Create account');
     await _settle(tester);
 
@@ -79,10 +80,30 @@ void main() {
     await _settle(tester);
 
     var answered = 0;
+    var sawSpokenItem = false;
+
     while (answered < 40) {
       // The result screen ends the test, however many questions it took —
       // the count is adaptive and deliberately not fixed.
       if (find.text('Start learning').evaluate().isNotEmpty) break;
+
+      // A spoken item presents in one of two ways: a microphone when the
+      // recogniser initialised, or the "this device cannot listen" notice when
+      // it did not. Either proves the item arrived as Speaking rather than as
+      // an ordinary writing box (§17).
+      final micOffered =
+          find.bySemanticsLabel('microphone').evaluate().isNotEmpty;
+      if (micOffered ||
+          _visibleText(tester).any((t) => t.contains('cannot listen'))) {
+        sawSpokenItem = true;
+        // A simulator hears nothing even when the recogniser starts, so this
+        // takes the same escape hatch a learner has when their microphone is
+        // not working — which is itself worth exercising.
+        if (micOffered) {
+          await _tapAny(tester, ['Type instead']);
+          await _settle(tester);
+        }
+      }
 
       final options = find.byType(OptionTile);
       if (options.evaluate().isNotEmpty) {
@@ -114,7 +135,11 @@ void main() {
       answered++;
     }
 
-    debugPrint('✓ placement answered $answered questions');
+    expect(sawSpokenItem, isTrue,
+        reason: 'Speaking must be spoken, not typed into a box labelled '
+            'Speaking (§17)');
+    debugPrint('✓ placement answered $answered questions, '
+        'including a spoken one');
 
     // The result screen reports a level per skill, and Spelling must not carry
     // one (ADR-008) — worth checking here, where it is the real server's answer.
@@ -192,6 +217,24 @@ void main() {
     var requeued = 0;
     while (steps < 60) {
       if (find.text('Session complete').evaluate().isNotEmpty) break;
+
+      // A spoken item presents in one of two ways: a microphone when the
+      // recogniser initialised, or the "this device cannot listen" notice when
+      // it did not. Either proves the item arrived as Speaking rather than as
+      // an ordinary writing box (§17).
+      final micOffered =
+          find.bySemanticsLabel('microphone').evaluate().isNotEmpty;
+      if (micOffered ||
+          _visibleText(tester).any((t) => t.contains('cannot listen'))) {
+        sawSpokenItem = true;
+        // A simulator hears nothing even when the recogniser starts, so this
+        // takes the same escape hatch a learner has when their microphone is
+        // not working — which is itself worth exercising.
+        if (micOffered) {
+          await _tapAny(tester, ['Type instead']);
+          await _settle(tester);
+        }
+      }
 
       final options = find.byType(OptionTile);
       if (options.evaluate().isNotEmpty) {
@@ -273,7 +316,8 @@ void main() {
     final email2 = 'resume-${DateTime.now().millisecondsSinceEpoch}@wordos.test';
     await _fillAt(tester, 0, 'Omar');
     await _fillAt(tester, 1, email2);
-    await _fillAt(tester, 2, password);
+    await _fillAt(tester, 2, '777654321');
+    await _fillAt(tester, 3, password);
     await _tapButton(tester, 'Create account');
     await _settle(tester);
 
@@ -376,6 +420,13 @@ Future<void> _skipPlacement(WidgetTester tester) async {
 
   for (var i = 0; i < 40; i++) {
     if (find.text('Start learning').evaluate().isNotEmpty) break;
+
+    // A spoken item offers a microphone rather than a field; this run cannot
+    // use one, so it takes the learner's own escape hatch (§17).
+    if (find.bySemanticsLabel('microphone').evaluate().isNotEmpty) {
+      await _tapAny(tester, ['Type instead']);
+      await _settle(tester);
+    }
 
     final options = find.byType(OptionTile);
     if (options.evaluate().isNotEmpty) {

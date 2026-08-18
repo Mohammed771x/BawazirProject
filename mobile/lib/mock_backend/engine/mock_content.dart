@@ -236,6 +236,22 @@ class MockContentGenerator {
         text: text,
         targetSpans: spans,
         revealTextAfterTest: listening,
+        // The real generator glosses every content word while it writes. This
+        // stand-in glosses what it can: the target words, whose meanings it
+        // knows, plus a handful of common words the passage always contains.
+        glossary: [
+          for (final word in words)
+            GlossaryEntry(
+              word: word.text,
+              meaning: word.meaning,
+              partOfSpeech: 'noun',
+            ),
+          const GlossaryEntry(
+              word: 'student', meaning: 'طالب', partOfSpeech: 'noun'),
+          const GlossaryEntry(
+              word: 'the', meaning: 'أداة تعريف', partOfSpeech: 'determiner'),
+        ],
+        canChangeLevel: true,
       ),
       items: items,
       correctAnswers: correct,
@@ -261,6 +277,12 @@ class MockContentGenerator {
       final id = _id('it');
       // Alternate between a bare prompt and one that pushes for a personal
       // context, so a session is not five identical instructions.
+      final promptKey = i.isEven
+          ? SessionPromptKey.writeASentence
+          : SessionPromptKey.writeASentenceAboutYourself;
+      // The English text is still sent, as the fallback for a client that does
+      // not know the key; what the learner sees is said in their own language
+      // (ADR-035).
       final prompt = i.isEven
           ? 'Write one sentence using "${word.text}".'
           : 'Write one sentence about your own life using "${word.text}".';
@@ -270,6 +292,7 @@ class MockContentGenerator {
           type: SessionItemType.writingTask,
           wordId: word.wordId,
           prompt: prompt,
+          promptKey: promptKey,
           options: const [],
           context: null,
           clue: _meaningOf(word),
@@ -289,6 +312,23 @@ class MockContentGenerator {
   /// learner's level. Lower levels get the Arabic meaning, a simple definition
   /// or a synonym plus shuffled letters to arrange; B2 and above get an English
   /// definition and type the word freely. A hint is always available.
+  /// The word's letters plus decoys, shuffled — the same shape the real
+  /// backend builds (Part 2 §36–§37). A pool holding exactly the right letters
+  /// can be cleared by using every tile, which is not spelling.
+  List<String> _letterPool(String word) {
+    final letters = word.replaceAll(' ', '').toLowerCase().split('');
+    final decoyCount = (letters.length ~/ 2).clamp(3, 6);
+
+    final used = letters.toSet();
+    final available = 'abcdefghijklmnopqrstuvwxyz'
+        .split('')
+        .where((c) => !used.contains(c))
+        .toList()
+      ..shuffle(_random);
+
+    return [...letters, ...available.take(decoyCount)]..shuffle(_random);
+  }
+
   GeneratedSession buildSpelling({
     required List<SessionTargetWord> words,
     required List<String> definitions,
@@ -309,20 +349,8 @@ class MockContentGenerator {
       final definition = definitions[i];
       final synonym = MockDictionary.synonymFor(word.text);
 
-      final SpellingClueKind clueKind;
-      final String clue;
-      if (advanced && definition.isNotEmpty) {
-        clueKind = SpellingClueKind.definitionEn;
-        clue = definition;
-      } else if (!advanced && synonym != null) {
-        clueKind = SpellingClueKind.synonym;
-        clue = synonym;
-      } else {
-        clueKind = SpellingClueKind.arabicMeaning;
-        clue = _meaningOf(word);
-      }
-
-      final letters = word.text.replaceAll(' ', '').split('')..shuffle(_random);
+      final ladder = _hintLadder(word, definition, synonym, level);
+      final letters = _letterPool(word.text);
 
       items.add(
         SessionItem(
@@ -330,17 +358,18 @@ class MockContentGenerator {
           type: SessionItemType.spellingTask,
           wordId: word.wordId,
           prompt: 'Write the word',
+          promptKey: SessionPromptKey.writeTheWord,
           options: const [],
           context: null,
-          clue: clue,
-          clueKind: clueKind,
+          // The first rung is what the learner sees before asking for
+          // anything; the rest arrive one press at a time.
+          clue: ladder.first.text,
+          clueKind: ladder.first.kind,
+          hints: ladder,
           letters: useTiles ? letters : const [],
           inputMode: useTiles
               ? SpellingInputMode.letterTiles
               : SpellingInputMode.freeTyping,
-          // The hint reveals the first letters and the length — enough to
-          // unstick a learner without giving the answer away.
-          hint: _spellingHint(word.text),
         ),
       );
       correct[id] = word.text;
@@ -348,15 +377,57 @@ class MockContentGenerator {
     return GeneratedSession(content: null, items: items, correctAnswers: correct);
   }
 
-  static String _spellingHint(String word) {
-    final revealed = word.length <= 4 ? 1 : 2;
-    final masked = word
-        .split('')
-        .asMap()
-        .entries
-        .map((e) => e.key < revealed || e.value == ' ' ? e.value : '_')
-        .join();
-    return '$masked  (${word.replaceAll(' ', '').length} letters)';
+  /// The hint ladder for one word, from where this learner joins it.
+  ///
+  /// Mirrors `SessionContentBuilder.BuildHintLadder` in the C# backend: one
+  /// ladder of five rungs, each easier than the last, entered at the rung that
+  /// suits the level. Deleted with the rest of `mock_backend/` in Phase 7.
+  List<SpellingHint> _hintLadder(
+    SessionTargetWord word,
+    String definition,
+    String? synonym,
+    CefrLevel level,
+  ) {
+    final entry = switch (level.rank) {
+      final r when r >= CefrLevel.c1.rank => SpellingClueKind.definitionEn,
+      final r when r >= CefrLevel.b2.rank =>
+        SpellingClueKind.simplifiedDefinition,
+      final r when r >= CefrLevel.b1.rank => SpellingClueKind.synonym,
+      _ => SpellingClueKind.arabicMeaning,
+    };
+
+    final ladder = <SpellingHint>[];
+    void rung(SpellingClueKind kind, String? text) {
+      // Anything above the learner's rung is skipped, and a rung with nothing
+      // to say is skipped too: a press that changes nothing reads as broken.
+      if (kind.index < entry.index) return;
+      if (text == null || text.trim().isEmpty) return;
+      ladder.add(SpellingHint(kind: kind, text: text.trim()));
+    }
+
+    rung(SpellingClueKind.definitionEn, definition);
+    rung(SpellingClueKind.simplifiedDefinition, _simplifyDefinition(definition));
+    rung(SpellingClueKind.synonym, synonym);
+    rung(SpellingClueKind.arabicMeaning, _meaningOf(word));
+    rung(SpellingClueKind.letterCount,
+        '${word.text.replaceAll(' ', '').length}');
+
+    if (ladder.length > 1 &&
+        ladder[0].kind == SpellingClueKind.definitionEn &&
+        ladder[1].kind == SpellingClueKind.simplifiedDefinition &&
+        ladder[0].text == ladder[1].text) {
+      ladder.removeAt(1);
+    }
+
+    return ladder;
+  }
+
+  /// WordNet stacks alternatives behind semicolons; the first clause is the
+  /// definition and the rest is elaboration.
+  static String _simplifyDefinition(String definition) {
+    final text = definition.trim();
+    final cut = text.indexOf(';');
+    return cut > 0 ? text.substring(0, cut).trim() : text;
   }
 
   // ── Speaking ───────────────────────────────────────────────────────────────

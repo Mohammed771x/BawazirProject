@@ -53,6 +53,18 @@ void main() {
       expect(results.map((c) => c.text), contains('software'));
     });
 
+    test('an Arabic query returns the English words that mean it', () {
+      // A learner knows what they want to say and not yet how to say it, so
+      // the search runs in both directions (ADR-034). The real backend folds
+      // the diacritics off both sides first; this fixture carries none.
+      final results = engine.lookup('كتاب');
+
+      expect(results, isNotEmpty);
+      expect(results.map((c) => c.text), contains('book'));
+      expect(results.every((c) => !c.isSpellingSuggestion), isTrue,
+          reason: 'these are real entries, not spelling guesses');
+    });
+
     test('an empty query returns nothing rather than everything', () {
       expect(engine.lookup(''), isEmpty);
       expect(engine.lookup('   '), isEmpty);

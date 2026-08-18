@@ -4,6 +4,10 @@ Each phase has a **goal**, a **deliverable list** and **acceptance criteria**. A
 "done" when its acceptance criteria are verifiably met. Status is tracked in
 [`02-PROGRESS.md`](02-PROGRESS.md) — that file, not this one, is the live ledger.
 
+> **All phases are complete.** This file is kept as the record of the build order and of what
+> each phase had to prove; it is not a to-do list any more. For what the finished application
+> does, read [`08-FINAL-SPECIFICATION.md`](08-FINAL-SPECIFICATION.md).
+
 ---
 
 ## Phase 0 — Foundations & Planning

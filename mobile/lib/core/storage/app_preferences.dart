@@ -33,6 +33,16 @@ abstract class AppPreferences {
   ThemeMode get themeMode;
 
   Future<void> setThemeMode(ThemeMode mode);
+
+  /// Whether the product tour has been seen on this installation.
+  ///
+  /// Device-local on purpose, and not learning state: onboarding explains what
+  /// WordOS *is*, so it belongs to the install rather than to the account. A
+  /// learner who has seen it never sees it again, including before they have an
+  /// account to attach it to — which is exactly when it is shown.
+  bool get onboardingSeen;
+
+  Future<void> setOnboardingSeen(bool seen);
 }
 
 class _StoredAppPreferences implements AppPreferences {
@@ -40,6 +50,7 @@ class _StoredAppPreferences implements AppPreferences {
 
   static const _localeKey = 'wordos.ui.locale';
   static const _themeKey = 'wordos.ui.themeMode';
+  static const _onboardingKey = 'wordos.ui.onboardingSeen';
 
   final SharedPreferences _prefs;
 
@@ -74,13 +85,35 @@ class _StoredAppPreferences implements AppPreferences {
       // Non-fatal.
     }
   }
+
+  @override
+  bool get onboardingSeen => _prefs.getBool(_onboardingKey) ?? false;
+
+  @override
+  Future<void> setOnboardingSeen(bool seen) async {
+    try {
+      await _prefs.setBool(_onboardingKey, seen);
+    } catch (_) {
+      // Non-fatal: worst case the tour is offered once more.
+    }
+  }
 }
 
 /// Used by tests and as the fallback when the platform store is unavailable.
 class InMemoryAppPreferences implements AppPreferences {
-  InMemoryAppPreferences({Locale? locale, ThemeMode? themeMode})
-      : locale = locale ?? AppPreferences.defaultLocale,
+  InMemoryAppPreferences({
+    Locale? locale,
+    ThemeMode? themeMode,
+    // Tests start past the tour unless they are testing the tour itself.
+    this.onboardingSeen = true,
+  })  : locale = locale ?? AppPreferences.defaultLocale,
         themeMode = themeMode ?? ThemeMode.system;
+
+  @override
+  bool onboardingSeen;
+
+  @override
+  Future<void> setOnboardingSeen(bool seen) async => onboardingSeen = seen;
 
   @override
   Locale locale;

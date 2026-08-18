@@ -63,7 +63,20 @@ public sealed class PlacementEngine(
             var limits = Config.LimitsFor(skill);
             if (forSkill.Count >= limits.MaxItems) continue;
 
-            if (forSkill.Count >= limits.MinItems)
+            // Speaking and Writing must be measured on language the learner
+            // actually produced. Grammar items are filed under Writing and are
+            // multiple-choice, so a learner who answers those well can satisfy
+            // the stopping rule before ever writing a sentence — and then the
+            // band comes from ticking boxes about a skill defined by producing
+            // language. One produced answer is the minimum evidence.
+            var producedAny = skill is not (SkillType.Speaking or SkillType.Writing)
+                              || responses.Any(r =>
+                                  r.Skill == skill &&
+                                  PlacementItemBank.Find(r.ItemId) is
+                                      { } asked2 &&
+                                  (asked2.IsFreeText || asked2.IsSpoken));
+
+            if (producedAny && forSkill.Count >= limits.MinItems)
             {
                 var estimate = Estimator.Estimate(forSkill);
                 // Confident enough — spend the remaining questions elsewhere.
@@ -73,15 +86,61 @@ public sealed class PlacementEngine(
             var pool = PlacementItemBank.ForSkill(skill)
                 .Where(i => !asked.Contains(i.Id))
                 .ToList();
+
+            // Until there is one, only produced-language items count as
+            // progress for these two skills.
+            if (!producedAny)
+            {
+                var produced = pool
+                    .Where(i => i.IsFreeText || i.IsSpoken)
+                    .ToList();
+                if (produced.Count > 0) pool = produced;
+            }
+
             if (pool.Count == 0) continue;
 
             // Spelling is not adaptive: it walks a short fixed ladder so the
             // accuracy figure is comparable between learners (ADR-008).
             if (skill == SkillType.Spelling) return pool[0];
 
-            var theta = forSkill.Count == 0
-                ? Config.Scale.PriorMean
-                : Estimator.Estimate(forSkill).Theta;
+            // The first question of a skill is the easiest one available, not
+            // the most informative one.
+            //
+            // Adaptive-testing theory says to open at the population mean,
+            // because that is where a single answer tells you most. It is also
+            // how you greet a beginner with a B1 question and lose them before
+            // the test has begun. Opening easy costs a strong learner an item
+            // or two — the ladder climbs from their second answer — and costs
+            // a weak learner nothing, which is the trade this product wants:
+            // the result must never read as a verdict (Part 1).
+            if (forSkill.Count == 0)
+            {
+                var floor = pool.Min(i => Config.Scale.DifficultyOf(i.Level));
+                var easiest = pool
+                    .Where(i => Math.Abs(
+                        Config.Scale.DifficultyOf(i.Level) - floor) < 1e-9)
+                    .ToList();
+
+                return easiest[random.Next(easiest.Count)];
+            }
+
+            var theta = Estimator.Estimate(forSkill).Theta;
+
+            // Never more than one band above where the learner currently sits.
+            //
+            // Without this, a learner failing everything gets walked *upwards*
+            // once the easy items run out, because "closest remaining
+            // difficulty" is all the rule says — and the closest thing left to
+            // someone at the floor is something harder. Parading progressively
+            // harder questions at a person who is already struggling is the
+            // opposite of what this test is for. When nothing is within reach,
+            // the skill is finished; the estimate is not going to improve.
+            var reach = theta + Config.Scale.StepLogits;
+            pool = pool
+                .Where(i => Config.Scale.DifficultyOf(i.Level) <= reach)
+                .ToList();
+
+            if (pool.Count == 0) continue;
 
             // Maximum Fisher information for a Rasch item is at
             // difficulty == ability, so "closest difficulty" *is* the optimal

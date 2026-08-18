@@ -43,7 +43,64 @@ public interface IAiContentService
     Task<SpeakingEvaluation> EvaluateSpeakingAsync(
         SpeakingEvaluationRequest request,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Rates the productive half of the placement test — Speaking and Writing.
+    /// </summary>
+    /// <remarks>
+    /// Reading and Listening are deliberately absent: their answers are matched
+    /// against a known key, so a model would add cost, latency and disagreement
+    /// to a question that already has a right answer.
+    ///
+    /// Speaking and Writing have no key. Scoring them on length and lexical
+    /// variety cannot tell a short fluent answer from a padded weak one, which
+    /// is the gap this fills. The model estimates; the band is still computed
+    /// here from the scores it returns (rule R2).
+    /// </remarks>
+    Task<PlacementEvaluation> EvaluatePlacementAsync(
+        PlacementEvaluationRequest request,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Re-tells an existing passage at a different CEFR level.
+    /// </summary>
+    /// <remarks>
+    /// The same story, in different language — not a new passage on a similar
+    /// topic. A learner who asks for something easier has already invested in
+    /// this text; replacing the story reads as though the app ignored them.
+    /// </remarks>
+    Task<GeneratedContent> RelevelContentAsync(
+        RelevelRequest request,
+        CancellationToken ct = default);
 }
+
+/// <param name="Skill">SPEAKING or WRITING — never a receptive skill.</param>
+public sealed record PlacementEvaluationRequest(
+    SkillType Skill,
+    IReadOnlyList<PlacementAnswerToRate> Answers);
+
+public sealed record PlacementAnswerToRate(
+    string ItemId,
+    CefrLevel Level,
+    string Prompt,
+    string Answer);
+
+/// <param name="Score">Partial credit in <c>[0, 1]</c>, which is what the
+/// ability estimator consumes — the level label is for the evidence view.</param>
+public sealed record PlacementAnswerRating(
+    string ItemId,
+    CefrLevel? EstimatedLevel,
+    double Score,
+    string Evidence);
+
+public sealed record PlacementEvaluation(
+    IReadOnlyList<PlacementAnswerRating> Answers,
+    CefrLevel? OverallLevel,
+    string Summary,
+    bool FromFallback,
+    string PromptVersion = "",
+    string Model = "",
+    int Tokens = 0);
 
 public sealed record AiTargetWord(
     string Text,
@@ -89,14 +146,45 @@ public sealed record GeneratedContent(
     string PromptVersion,
     string Model,
     int Tokens,
-    bool FromFallback);
+    bool FromFallback,
+    IReadOnlyList<GlossaryEntry>? Glossary = null);
+
+/// <summary>
+/// One word of the passage, with the meaning it carries <b>there</b>.
+/// </summary>
+/// <remarks>
+/// Written during generation, when the model still knows which sense it meant.
+/// A dictionary consulted at tap time can only offer every sense the word has
+/// ever had — "bank" has six, and five of them are wrong in any given sentence.
+///
+/// It also carries the part of speech, which a learner needs in order to
+/// understand what they are adding: <c>will</c> as an auxiliary is a different
+/// thing to learn than <c>will</c> as a noun.
+/// </remarks>
+public sealed record GlossaryEntry(
+    string Word,
+    string Meaning,
+    string PartOfSpeech);
+
+/// <param name="Text">The passage to re-tell, exactly as the learner saw it.</param>
+public sealed record RelevelRequest(
+    string Text,
+    CefrLevel FromLevel,
+    CefrLevel ToLevel,
+    IReadOnlyList<AiTargetWord> Words,
+    int ComprehensionCount);
 
 public sealed record WritingEvaluationRequest(
     string Word,
     string Meaning,
     string Definition,
     CefrLevel Level,
-    string Sentence);
+    string Sentence,
+    /// <summary>
+    /// The language the learner reads the app in, for the feedback only. Their
+    /// sentence and the word they used are untouched (ADR-035).
+    /// </summary>
+    string FeedbackLanguage = "ar");
 
 /// <summary>
 /// What the evaluator observed. Deliberately no <c>Passed</c> field: the rule
@@ -142,7 +230,12 @@ public sealed record SpeakingEvaluationRequest(
     string LearnerName,
     CefrLevel Level,
     IReadOnlyList<AiTargetWord> Words,
-    IReadOnlyList<SpeakingTranscriptTurn> Transcript);
+    IReadOnlyList<SpeakingTranscriptTurn> Transcript,
+    /// <summary>
+    /// The language the feedback is written in. The conversation itself stays
+    /// English — that is the skill being practised (ADR-035).
+    /// </summary>
+    string FeedbackLanguage = "ar");
 
 /// <summary>
 /// What was observed about one word across the whole conversation.

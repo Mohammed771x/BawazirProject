@@ -85,11 +85,16 @@ public static class SessionContentBuilder
 
             // Alternating so a session is not five identical instructions, but
             // both forms are about *this word* — never a generic topic.
-            var prompt = i % 2 == 0
+            var key = i % 2 == 0
+                ? SessionPromptKey.WriteASentence
+                : SessionPromptKey.WriteASentenceAboutYourself;
+
+            var prompt = key == SessionPromptKey.WriteASentence
                 ? $"Write one sentence using \"{word.Text}\"."
                 : $"Write one sentence about your own life using \"{word.Text}\".";
 
-            session.AddItem(SessionItem.WritingTask(word.Id, prompt, word.Text));
+            session.AddItem(
+                SessionItem.WritingTask(word.Id, prompt, key, word.Text));
         }
     }
 
@@ -98,10 +103,11 @@ public static class SessionContentBuilder
         IReadOnlyList<Word> words,
         CefrLevel level,
         SpellingInputMode? preferredMode,
-        Random random)
+        Random random,
+        IReadOnlyDictionary<Guid, string>? synonyms = null)
     {
-        // B2 and above get an English definition and type freely; lower levels
-        // get the Arabic meaning and letter tiles (MVP Core §33–34).
+        // B2 and above type freely; lower levels get letter tiles
+        // (MVP Core §33–34).
         var advanced = level.Rank() >= CefrLevel.B2.Rank();
 
         // Placement can only make the task *easier* than the level implies,
@@ -110,49 +116,180 @@ public static class SessionContentBuilder
 
         foreach (var word in words)
         {
-            SpellingClueKind clueKind;
-            string clue;
-
-            if (advanced && !string.IsNullOrWhiteSpace(word.DefinitionEn))
-            {
-                clueKind = SpellingClueKind.DefinitionEn;
-                clue = word.DefinitionEn;
-            }
-            else
-            {
-                clueKind = SpellingClueKind.ArabicMeaning;
-                clue = word.Meaning;
-            }
-
-            var letters = word.Text
-                .Replace(" ", string.Empty)
-                .Select(c => c.ToString())
-                .ToList();
-            Shuffle(letters, random);
+            var ladder = BuildHintLadder(
+                word, level, synonyms?.GetValueOrDefault(word.Id));
 
             session.AddItem(SessionItem.SpellingTask(
                 wordId: word.Id,
-                clue: clue,
-                clueKind: clueKind,
-                letters: useTiles ? letters : null,
+                // The first rung is what the learner sees before asking for
+                // anything; the rest arrive one press at a time.
+                clue: ladder[0].Text,
+                clueKind: ladder[0].Kind,
+                hints: ladder,
+                letters: useTiles ? LetterPool(word.Text, random) : null,
                 inputMode: useTiles
                     ? SpellingInputMode.LetterTiles
                     : SpellingInputMode.FreeTyping,
-                hint: SpellingHint(word.Text),
                 word: word.Text));
         }
     }
 
     /// <summary>
-    /// Reveals the opening letters and the length — enough to unstick a learner
-    /// without giving the answer away.
+    /// The hint ladder for one word, from where this learner joins it.
     /// </summary>
-    private static string SpellingHint(string word)
+    /// <remarks>
+    /// One ladder, five rungs, each easier than the last:
+    ///
+    /// <code>
+    /// dictionary definition → simplified definition → synonym
+    ///                       → translation → number of letters
+    /// </code>
+    ///
+    /// Where a learner joins depends on their level, because the point of a
+    /// hint is to be usable: a full WordNet definition is often harder than the
+    /// word it defines, so handing one to an A2 learner tests their reading
+    /// rather than helping them spell. So C1 starts at the top, B2 one rung
+    /// down, B1 at the synonym, and A1/A2 at the translation.
+    ///
+    /// The rest of the ladder is still theirs — every press of "hint" steps
+    /// down one — but they never have to climb.
+    ///
+    /// Rungs with nothing to say are skipped: a word with no synonym in the
+    /// lexicon simply has one fewer step. The translation is always present, so
+    /// the ladder can never come back empty.
+    /// </remarks>
+    private static List<(SpellingClueKind Kind, string Text)> BuildHintLadder(
+        Word word,
+        CefrLevel level,
+        string? synonym)
     {
-        var revealed = word.Length <= 4 ? 1 : 2;
-        var masked = string.Concat(word.Select((c, i) =>
-            i < revealed || c == ' ' ? c : '_'));
-        return $"{masked}  ({word.Replace(" ", string.Empty).Length} letters)";
+        var rank = level.Rank();
+
+        // Where this learner joins. Anything above their rung is skipped, not
+        // shown later — climbing back up is not what a hint is for.
+        var entry = rank switch
+        {
+            var r when r >= CefrLevel.C1.Rank() => SpellingClueKind.DefinitionEn,
+            var r when r >= CefrLevel.B2.Rank() =>
+                SpellingClueKind.SimplifiedDefinition,
+            var r when r >= CefrLevel.B1.Rank() => SpellingClueKind.Synonym,
+            _ => SpellingClueKind.ArabicMeaning,
+        };
+
+        var ladder = new List<(SpellingClueKind, string)>();
+
+        void Rung(SpellingClueKind kind, string? text)
+        {
+            if (kind < entry) return;
+            if (string.IsNullOrWhiteSpace(text)) return;
+            ladder.Add((kind, text.Trim()));
+        }
+
+        Rung(SpellingClueKind.DefinitionEn, word.DefinitionEn);
+        Rung(SpellingClueKind.SimplifiedDefinition,
+            SimplifyDefinition(word.DefinitionEn));
+        Rung(SpellingClueKind.Synonym, synonym);
+        Rung(SpellingClueKind.ArabicMeaning, word.Meaning);
+        Rung(SpellingClueKind.LetterCount, LetterCount(word.Text));
+
+        // The simplified definition is only a rung when it says something
+        // different; otherwise the learner presses "hint" and nothing changes.
+        if (ladder.Count > 1 &&
+            ladder[0].Item1 == SpellingClueKind.DefinitionEn &&
+            ladder[1].Item1 == SpellingClueKind.SimplifiedDefinition &&
+            ladder[0].Item2 == ladder[1].Item2)
+        {
+            ladder.RemoveAt(1);
+        }
+
+        // A word with no definition and no synonym still gets its translation,
+        // so this can only be empty if the word itself is empty.
+        return ladder.Count > 0
+            ? ladder
+            : [(SpellingClueKind.LetterCount, LetterCount(word.Text))];
+    }
+
+    /// <summary>
+    /// The first gloss of a WordNet definition.
+    /// </summary>
+    /// <remarks>
+    /// WordNet stacks alternatives and examples behind semicolons; the first
+    /// clause is the definition and the rest is elaboration a learner reaching
+    /// for a hint does not need.
+    /// </remarks>
+    private static string SimplifyDefinition(string definition)
+    {
+        var text = (definition ?? string.Empty).Trim();
+        var cut = text.IndexOf(';');
+        if (cut > 0) text = text[..cut].Trim();
+        return text;
+    }
+
+    private static string LetterCount(string word)
+    {
+        var letters = word.Replace(" ", string.Empty).Length;
+        return $"{letters}";
+    }
+
+    /// <summary>
+    /// The tiles a learner picks from: the word's own letters plus decoys.
+    /// </summary>
+    /// <remarks>
+    /// A pool holding exactly the word's letters is not a spelling task — it is
+    /// an anagram with the answer built in, and a learner can finish it by
+    /// using every tile up without ever knowing the word (Part 2 §36–§37).
+    /// The decoys are drawn from letters that are *not* in the word, so a
+    /// duplicate never makes a correct answer ambiguous.
+    /// </remarks>
+    private static List<string> LetterPool(string word, Random random)
+    {
+        var letters = word
+            .Replace(" ", string.Empty)
+            .ToLowerInvariant()
+            .Select(c => c.ToString())
+            .ToList();
+
+        // Enough to matter, not so many that the pool becomes a wall of tiles.
+        var decoyCount = Math.Clamp(letters.Count / 2, 3, 6);
+
+        var used = letters.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var available = "abcdefghijklmnopqrstuvwxyz"
+            .Select(c => c.ToString())
+            .Where(c => !used.Contains(c))
+            .ToList();
+        Shuffle(available, random);
+
+        letters.AddRange(available.Take(decoyCount));
+        Shuffle(letters, random);
+        return letters;
+    }
+
+    /// <summary>
+    /// The warm-up a Speaking session opens with: each of its words, with four
+    /// meanings to choose from.
+    /// </summary>
+    /// <remarks>
+    /// A spoken conversation gives the learner no time to look anything up. By
+    /// the time they realise they cannot remember what a word means, the tutor
+    /// has already asked the question — so the meanings are checked *actively*
+    /// first, rather than merely displayed.
+    ///
+    /// It measures nothing. Nothing is recorded, no level moves and no word
+    /// passes or fails on it; a learner who misses one simply meets it again
+    /// until they have it. Its only job is that nobody walks into a
+    /// conversation about words they cannot recall.
+    /// </remarks>
+    public static IReadOnlyList<(Guid WordId, string Text, List<string> Options)>
+        BuildWarmup(IReadOnlyList<Word> words, Random random)
+    {
+        var meanings = words.Select(w => w.Meaning).ToList();
+
+        return words
+            .Select(w => (
+                w.Id,
+                w.Text,
+                BuildMeaningOptions(w.Meaning, meanings, random)))
+            .ToList();
     }
 
     private static List<string> BuildMeaningOptions(

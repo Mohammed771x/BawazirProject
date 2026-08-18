@@ -116,15 +116,44 @@ class MockAdmin {
 
   // ── Users ─────────────────────────────────────────────────────────────────
 
-  List<AdminUserSummary> users(MockUser caller, List<MockUser> users) {
+  /// The learners list, searched and windowed like the real endpoint.
+  ///
+  /// Paging is deliberately not simulated: the mock holds a handful of seeded
+  /// learners, and a fake page boundary would only teach the widget tests a
+  /// shape the real server does not produce.
+  AdminUserPage users(
+    MockUser caller,
+    List<MockUser> users, {
+    String? query,
+    int? days,
+    DateTime? now,
+  }) {
     requireOwner(caller);
-    final list = users.map(_summary).toList()
+
+    final term = (query ?? '').trim().toLowerCase();
+    final from = days != null && days > 0 && now != null
+        ? DateTime.utc(now.year, now.month, now.day)
+            .subtract(Duration(days: days - 1))
+        : null;
+
+    final list = users
+        .map(_summary)
+        .where((u) =>
+            term.isEmpty ||
+            u.displayName.toLowerCase().contains(term) ||
+            u.email.toLowerCase().contains(term))
+        .where((u) =>
+            from == null ||
+            (u.lastActiveAt ?? u.createdAt).isAfter(from) ||
+            (u.lastActiveAt ?? u.createdAt).isAtSameMomentAs(from))
+        .toList()
       ..sort((a, b) {
         final aAt = a.lastActiveAt ?? a.createdAt;
         final bAt = b.lastActiveAt ?? b.createdAt;
         return bAt.compareTo(aAt);
       });
-    return list;
+
+    return AdminUserPage(items: list, total: list.length);
   }
 
   AdminUserSummary _summary(MockUser user) => AdminUserSummary(
@@ -139,6 +168,82 @@ class MockAdmin {
             user.words.where((w) => w.state == WordState.active).length,
         sessionsCompleted:
             _analytics.sessions.where((s) => s.userId == user.id).length,
+      );
+
+  /// One learner's vocabulary as the Owner sees it: filtered by the very
+  /// pipeline states the learner's own screen hides (Part 3).
+  AdminWordPage userWords(
+    MockUser caller,
+    MockUser? target, {
+    WordState? state,
+    String? query,
+  }) {
+    requireOwner(caller);
+    if (target == null) {
+      throw const ApiException('NOT_FOUND', 'User not found.', statusCode: 404);
+    }
+
+    final term = (query ?? '').trim().toLowerCase();
+    final items = target.words
+        .where((w) => state == null || w.state == state)
+        .where((w) =>
+            term.isEmpty ||
+            w.text.toLowerCase().contains(term) ||
+            w.meaning.contains(term))
+        .toList()
+      ..sort((a, b) => b.addedAt.compareTo(a.addedAt));
+
+    return AdminWordPage(
+      items: items.map(_adminWord).toList(),
+      total: items.length,
+    );
+  }
+
+  /// One word's whole life, read from its own event trail.
+  AdminWordJourney wordJourney(
+    MockUser caller,
+    MockUser owner,
+    String wordId,
+  ) {
+    requireOwner(caller);
+    final word = owner.words.firstWhere(
+      (w) => w.id == wordId,
+      orElse: () => throw const ApiException(
+          'WORD_NOT_FOUND', 'Word not found.', statusCode: 404),
+    );
+
+    return AdminWordJourney(
+      word: _adminWord(word),
+      learnerName: owner.displayName,
+      learnerId: owner.id,
+      skills: word.skills.entries
+          .map((e) => WordSkillState(
+                skill: e.key,
+                status: e.value.status,
+                availableAt: e.value.availableAt,
+                attempts: e.value.attempts,
+              ))
+          .toList(),
+      events: List.of(word.events)
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt)),
+      // The mock keeps no exposure rows; the real endpoint reads them from the
+      // exposure table, which is where they are actually written.
+      exposures: const [],
+    );
+  }
+
+  AdminWord _adminWord(MockWord w) => AdminWord(
+        id: w.id,
+        text: w.text,
+        meaning: w.meaning,
+        cefrLevel: w.level,
+        state: w.state,
+        currentSkill: w.currentSkill,
+        addedAt: w.addedAt,
+        exposureCount: w.exposureCount,
+        skillsPassed:
+            w.skills.values.where((s) => s.status == SkillStatus.passed).length,
+        attempts: w.skills.values.fold(0, (sum, s) => sum + s.attempts),
       );
 
   AdminUserDetail userDetail(MockUser caller, MockUser? target) {

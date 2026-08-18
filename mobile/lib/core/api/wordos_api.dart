@@ -14,6 +14,10 @@ abstract class WordOsApi {
     required String email,
     required String password,
     required String displayName,
+    /// Digits only, without the plus. Kept separate from [phoneNumber] all the
+    /// way to the database — see the server's `User.PhoneCountryCode`.
+    String? phoneCountryCode,
+    String? phoneNumber,
   });
 
   Future<AuthResponse> login({
@@ -51,14 +55,32 @@ abstract class WordOsApi {
   // ── Words ─────────────────────────────────────────────────────────────────
   Future<List<WordCandidate>> lookupWord(String query);
 
+  /// Resolves one word as it appeared in a passage, inflections and all.
+  ///
+  /// Separate from [lookupWord] because it answers a different question: not
+  /// "what could the learner mean?" but "what is *this* word?". The base form
+  /// is worked out on the server, so the same tap gives the same answer on
+  /// every platform (rule R1).
+  Future<WordDefinition> defineWord(String word);
+
   Future<Word> addWord(WordCandidate candidate);
 
-  Future<WordPage> words({WordState? state, int page = 0});
+  /// The learner's own vocabulary, newest first.
+  ///
+  /// [query] searches the word and its meaning; [state] filters by pipeline
+  /// state and is used by the developer views rather than by the learner, who
+  /// sees one list (Part 2 §42–§46).
+  Future<WordPage> words({WordState? state, int page = 0, String? query});
 
   Future<WordDetail> wordDetail(String wordId);
 
   // ── Skill sessions ────────────────────────────────────────────────────────
-  Future<SkillSession> startSession(SkillType skill);
+  /// Starts (or resumes) a skill session.
+  ///
+  /// [practice] asks for a session with no vocabulary attached, for the days
+  /// when nothing is due (Part 2 §5). The server decides whether that is
+  /// possible for the skill; the client only ever asks.
+  Future<SkillSession> startSession(SkillType skill, {bool practice = false});
 
   /// Re-reads a session as the server has it.
   ///
@@ -67,6 +89,23 @@ abstract class WordOsApi {
   /// reconstructing it. The stored content is replayed — starting again would
   /// generate a different passage and lose the answers already given.
   Future<SkillSession> resumeSession(String sessionId);
+
+  /// Re-tells this session's passage at another CEFR level.
+  ///
+  /// The same story in different language, not a new one. Only legal before
+  /// the questions begin — the server refuses it afterwards, because
+  /// re-telling replaces the items the learner's answers belong to.
+  Future<SkillSession> changeSessionLevel(String sessionId, CefrLevel level);
+
+  /// Marks one warm-up answer before a Speaking conversation.
+  ///
+  /// Recorded nowhere: it measures nothing and moves nothing. Marked on the
+  /// server only because the client must never hold the answer key.
+  Future<WarmupResult> answerWarmup({
+    required String sessionId,
+    required String wordId,
+    required String answer,
+  });
 
   Future<AnswerResult> submitAnswer({
     required String sessionId,
@@ -120,11 +159,34 @@ abstract class WordOsApi {
   // Hiding the UI is not the access control — a normal user calling these
   // directly must be refused with `FORBIDDEN` (403).
 
-  Future<AdminOverview> adminOverview();
+  /// [days] scopes the figures to a window: 1 for today, 5, 10, or any custom
+  /// number. Omitted reports all time.
+  Future<AdminOverview> adminOverview({int? days});
 
-  Future<List<AdminUserSummary>> adminUsers();
+  /// The learner list, searched and paged server-side.
+  ///
+  /// [days] narrows it to learners who did something in that window — 1 for
+  /// today — and is answered from the activity log, not from a "last login"
+  /// column (Part 3 §34–§35).
+  Future<AdminUserPage> adminUsers({String? query, int? days, int page = 0});
 
   Future<AdminUserDetail> adminUserDetail(String userId);
+
+  /// One learner's vocabulary, filtered by pipeline state — the Owner's view,
+  /// which is deliberately the opposite of the learner's (Part 3).
+  Future<AdminWordPage> adminUserWords(
+    String userId, {
+    WordState? state,
+    String? query,
+    int page = 0,
+  });
+
+  /// One word's whole life, for any learner.
+  Future<AdminWordJourney> adminWordJourney(String wordId);
+
+  /// The placement test behind a learner's starting levels, with the answers
+  /// that produced them (Part 3).
+  Future<PlacementEvidence> adminPlacementEvidence(String userId);
 }
 
 /// A failure surfaced to the UI. `code` mirrors the backend error code so

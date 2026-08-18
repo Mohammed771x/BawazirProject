@@ -162,19 +162,51 @@ handed one item at a time instead of a fixed list.
 
 ## Words
 
+> **`Accept-Language`** — every request may carry it (`ar`, `en`; default `ar`).
+> It changes what the app *says to* the learner — generated feedback, and which
+> instruction key it is expected to render — and never what it teaches them:
+> passages, comprehension questions, options and the placement test are English
+> whatever it says (ADR-035).
+
 | Method | Path | Body → Response |
 |---|---|---|
-| GET | `/words/lookup?q=bo` | → `[WordCandidate]` (prefix search, or spelling suggestions) |
+| GET | `/words/lookup?q=bo` | → `[WordCandidate]` (either language; spelling suggestions when nothing matches) |
+| GET | `/words/define?w=researching` | → `{query, matchedText, senses:[WordCandidate]}` |
 | POST | `/words` | `{senseId, text?, meaning?}` → `Word` |
-| GET | `/words?state=LEARNING\|ACTIVE\|ARCHIVED&page=` | → `{items:[Word], total}` |
+| GET | `/words?state=LEARNING\|ACTIVE\|ARCHIVED&q=&page=&pageSize=` | → `{items:[Word], total, page, pageSize, hasMore}` |
 | GET | `/words/{id}` | → `WordDetail` |
 
-> **Lookup is a prefix search and never invents an entry.** `bo` returns every
-> sense whose word starts with those letters, each row carrying the word, its
-> CEFR level and the Arabic meaning of *that sense*. If nothing matches, the
-> response contains only candidates with `isSpellingSuggestion: true`, or is
-> empty. There is no "add it anyway" result, and the client offers no way to
-> type a meaning (ADR-012).
+> **Lookup searches from either side and never invents an entry.** `bo` returns
+> every sense whose word starts with those letters, each row carrying the word,
+> its CEFR level and the Arabic meaning of *that sense*. Beyond the prefix:
+>
+> * a query written in Arabic searches the **meanings** and returns the English
+>   words that carry them — `يذهب` → `go` — with diacritics folded off both
+>   sides (ADR-034);
+> * when nothing starts with what was typed, irregular and inflected forms are
+>   resolved, so `went` → `go` and `children` → `child` (ADR-033);
+> * a single letter is matched **exactly**, so `a` and `I` are addable while one
+>   letter still never returns the dictionary.
+>
+> If nothing matches, the response contains only candidates with
+> `isSpellingSuggestion: true`, or is empty. There is no "add it anyway" result,
+> and the client offers no way to type a meaning (ADR-012).
+>
+> Closed-class words (`is`, `the`, `because`, `what`) carry a part of speech
+> WordNet does not use — `pron`, `det`, `aux`, `modal`, `prep`, `conj`, `part`,
+> `intj` — because they are authored rather than imported (ADR-033).
+>
+> **`define` answers one word, not a search.** It is what a tap inside a
+> reading passage calls (ADR-022): the word arrives inflected and is resolved
+> against the lexicon here, never on the device. `matchedText` is the spelling
+> that answered — null, with an empty `senses` array and a `200`, when the
+> lexicon has no entry. Proper nouns and numbers appear in generated prose and
+> are not an error.
+>
+> **The list is searched and paged server-side.** `q` matches the word (case
+> insensitive) or its Arabic meaning; `total` counts every match, not the page.
+> `pageSize` is clamped to 100, and omitting the paging parameters is
+> legitimate — they default rather than 400.
 >
 > **`POST /words` re-resolves.** The body is treated as a **lookup key**; the
 > row that gets stored is the lexicon's, so a forged level, definition or part
@@ -211,7 +243,7 @@ handed one item at a time instead of a fixed list.
 
 | Method | Path | Body → Response |
 |---|---|---|
-| POST | `/sessions/{skill}/start` | — → `SkillSession` |
+| POST | `/sessions/{skill}/start?practice=` | — → `SkillSession` |
 | GET | `/sessions/{id}` | — → `SkillSession` (resume where the learner was) |
 
 | POST | `/sessions/{id}/answer` | `{itemId, answer}` → `AnswerResult` |
@@ -229,6 +261,12 @@ different passage.
 a session **abandons** any unfinished session for the same skill, so words are
 never consumed twice. `abandon` deletes the session and leaves its words due.
 
+`?practice=true` asks instead for a session with no vocabulary attached — real
+content and real comprehension questions, `isPractice: true`, no target words,
+and no effect on any word or level (ADR-023). Reading and Listening only;
+anything else still answers `409`. Never substituted silently: a plain `start`
+with nothing due is still `NO_WORDS_DUE`.
+
 Rate limits: `start`, `writing` and `speaking/turn` cost Gemini tokens and carry
 the tight budget; `answer` and `complete` do not and are covered by the global
 per-user limiter.
@@ -237,9 +275,13 @@ per-user limiter.
 // SkillSession — one shape, skill-specific parts nullable
 {
   "id":"s_1", "skill":"READING", "levelUsed":"B1",
+  "isPractice": false,                          // true → owns no words (ADR-023)
   "content": {                                  // READING / LISTENING only
      "text":"Ahmed was studying computer science…",
-     "revealTextAfterTest": false               // true for LISTENING
+     "revealTextAfterTest": false,              // true for LISTENING
+     // Where the session's own words sit in the text, so the client marks them
+     // without searching for them (R1). Ordered; `length`, not an end offset.
+     "targetSpans":[{"wordId":"w_1","start":72,"length":16}]
   },
   "targetWords":[{"wordId":"w_1","text":"operating system","meaning":"نظام تشغيل"}],
   "items":[
@@ -266,11 +308,20 @@ per-user limiter.
      "options":["…","…","…","…"]},
 
     {"id":"it8","type":"SPELLING_TASK","wordId":"w_1",
-     "clue":"software that manages a computer's resources",
-     "clueKind":"DEFINITION_EN",                 // ARABIC_MEANING | DEFINITION_EN | SYNONYM
+     "clue":"software that manages a computer's resources",   // = hints[0].text
+     "clueKind":"DEFINITION_EN",                              // = hints[0].kind
+     // The hint ladder, easiest last. The client shows hints[0] as the clue and
+     // reveals one more rung per press; it never picks the help itself
+     // (ADR-032). Rungs with nothing to say are absent, so the array is
+     // between one and five entries long and always ends at LETTER_COUNT.
+     "hints":[
+       {"kind":"DEFINITION_EN","text":"software that manages a computer's resources"},
+       {"kind":"SIMPLIFIED_DEFINITION","text":"software that manages a computer"},
+       {"kind":"SYNONYM","text":"OS"},
+       {"kind":"ARABIC_MEANING","text":"نظام تشغيل"},
+       {"kind":"LETTER_COUNT","text":"15"}],
      "letters":["o","p","e","r","a","t","i","n","g"],   // lower levels only, shuffled
-     "inputMode":"LETTER_TILES",                        // LETTER_TILES | FREE_TYPING
-     "hint":"op______  (15 letters)"},                  // always offered
+     "inputMode":"LETTER_TILES"},                       // LETTER_TILES | FREE_TYPING
     {"id":"it9","type":"WRITING_TASK","wordId":"w_1",
      "clue":"نظام تشغيل",
      "prompt":"Write one sentence using \"operating system\"."}
@@ -407,14 +458,42 @@ limit (R8). `start` returns `409 NO_WORDS_IN_PERIOD` when the week was empty.
 
 | Method | Path | Response |
 |---|---|---|
-| GET | `/admin/overview` | `AdminOverview` |
-| GET | `/admin/users` | `[AdminUserSummary]` |
+| GET | `/admin/overview?days=` | `AdminOverview` |
+| GET | `/admin/users?q=&days=&page=&pageSize=` | `{items:[AdminUserSummary], total, page, pageSize, hasMore}` |
 | GET | `/admin/users/{id}` | `AdminUserDetail` |
+| GET | `/admin/users/{id}/words?state=&q=&page=` | `{items:[AdminWord], total, hasMore}` |
+| GET | `/admin/users/{id}/placement` | placement evidence + initial-vs-current levels |
+| GET | `/admin/words/{wordId}` | one word's journey, for any learner |
 
 `AdminUserDetail.levelChanges` carries the level history, with `changeType`
 separating `USER_MANUAL_CHANGE` from `SYSTEM_VALIDATED_CHANGE` — the gap between
 what a learner claims and what the system proved is the metric
-(`MVP Core.txt` §60).
+(`MVP Core.txt` §60). `AdminUserDetail.activity` is the last fifty rows of the
+activity log (ADR-025) — the raw trail behind every figure beside it.
+
+> **`days` is a window, not a filter on one column.** 1 means today, and the
+> window starts at midnight UTC so a count does not slide with the hour the
+> Owner looks. Membership is answered from the activity log: "active in the
+> last 5 days" means the learner did something, not that their `lastLoginAt`
+> happens to fall inside it.
+>
+> Windowing scopes what it should — words added, sessions, per-skill outcomes —
+> and deliberately not `pipelineCompletionRate`, which needs five skills and
+> four two-day gaps to move and would read as a collapse over a short window.
+
+> **The word views are the mirror of My Words.** The learner's own screen hides
+> the pipeline states because they are internal machinery (Part 2 §42); these
+> exist to inspect exactly those. `/admin/words/{wordId}` is read from the
+> append-only word event log, so a word that failed Reading twice before passing
+> shows all three events — its current row remembers only the ending.
+
+> **Placement evidence is the audit trail for a level.** Each answer carries the
+> item, its CEFR band, the domain it measured (grammar and spelling included,
+> though neither is a visible skill), the partial-credit score, and — for
+> free-text and spoken items — the learner's own words. Multiple-choice items
+> deliberately store no raw answer: the score already says which option was
+> picked. `testVersion` stamps which item bank produced the result, because a
+> result from an older bank is not comparable to a current one.
 
 > **Authorization is server-side.** A caller whose role is not `OWNER` gets
 > `403 FORBIDDEN` from every one of these, regardless of what the client renders.
