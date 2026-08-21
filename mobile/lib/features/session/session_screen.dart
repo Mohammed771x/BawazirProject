@@ -237,20 +237,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         await _complete();
         return;
       }
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      // Everything, not only a refusal from the server. A malformed response or
+      // a bug on this screen must still end the wait: a spinner with no end
+      // says nothing and there is no way out of it but to kill the app.
+      //
+      // `ApiException.from` rather than `rawError.toString()` — a Dart error
+      // message is English, internal, and sometimes quotes the very data that
+      // broke it, none of which belongs on a learner's screen.
       if (!mounted) return;
       setState(() {
-        _error = e;
-        _loading = false;
-      });
-    } catch (e) {
-      // Anything that is not a refusal from the server — a malformed response,
-      // a bug here — must still end the wait. A spinner with no end is worse
-      // than an error: it says nothing, and there is no way out of it but to
-      // kill the app.
-      if (!mounted) return;
-      setState(() {
-        _error = ApiException('UNEXPECTED', e.toString());
+        _error = ApiException.from(rawError);
         _loading = false;
       });
     }
@@ -291,7 +288,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           _progress = result.progress;
         });
       }
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       _handleSubmitFailure(e);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -334,7 +332,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           _progress = evaluation.progress;
         });
       }
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       _handleSubmitFailure(e);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -484,7 +483,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       } else {
         setState(() => _voice = _VoicePhase.idle);
       }
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       _snack(_s.apiError(e.code, e.message));
       if (mounted) setState(() => _voice = _VoicePhase.idle);
     } finally {
@@ -524,7 +524,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       final result =
           await _api.completeSession(_session!.id);
       if (mounted) setState(() => _result = result);
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       _snack(_s.apiError(e.code, e.message));
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -702,11 +703,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       // sign-in — the learner changes it here and finds it unchanged there.
       await ref.read(sessionProvider.notifier).refresh();
       ref.invalidate(hubProvider);
-    } on ApiException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
-      }
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
+      if (mounted) _snack(_s.apiError(e.code, e.message));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -749,10 +748,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           ),
         );
       }
+      // Through `apiError`, like every other failure the learner reads: this
+      // one used to print the server's English sentence straight onto the
+      // screen, which in an Arabic app reads as a crash (ADR-035).
+      //
+      // Retry is offered only where trying again could actually work. A
+      // finished session or a question that has moved on will answer exactly
+      // the same way a second time, and a button that cannot help is worse
+      // than no button — it makes the learner press it repeatedly.
       return ErrorView(
-        message: _error!.message,
+        message: s.apiError(_error!.code, _error!.message),
         retryLabel: s.retry,
-        onRetry: _start,
+        onRetry: _error!.isRetryable ? _start : null,
       );
     }
 
@@ -1430,11 +1437,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
       // Every word recalled — the conversation can start.
       if (_warmupQueue.isEmpty) _resumeSpeaking();
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (mounted) {
         setState(() => _busy = false);
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+            .showSnackBar(SnackBar(content: Text(_s.apiError(e.code, e.message))));
       }
     }
   }

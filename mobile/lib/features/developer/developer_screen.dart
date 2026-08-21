@@ -255,7 +255,8 @@ class _OverviewTab extends ConsumerWidget {
     return overview.when(
       loading: () => BusyView(message: s.loading),
       error: (e, _) => ErrorView(
-        message: e is ApiException ? e.message : s.somethingWentWrong,
+        message: s.apiError(
+              ApiException.from(e).code, ApiException.from(e).message),
         retryLabel: s.retry,
         onRetry: () => ref.invalidate(adminOverviewProvider),
       ),
@@ -485,7 +486,8 @@ class _UsersTabState extends ConsumerState<_UsersTab> {
     return users.when(
       loading: () => BusyView(message: s.loading),
       error: (e, _) => ErrorView(
-        message: e is ApiException ? e.message : s.somethingWentWrong,
+        message: s.apiError(
+              ApiException.from(e).code, ApiException.from(e).message),
         retryLabel: s.retry,
         onRetry: () => ref.invalidate(adminUsersProvider),
       ),
@@ -691,7 +693,8 @@ class _FeedbackTab extends ConsumerWidget {
     return feedback.when(
       loading: () => BusyView(message: s.loading),
       error: (e, _) => ErrorView(
-        message: e is ApiException ? e.message : s.somethingWentWrong,
+        message: s.apiError(
+              ApiException.from(e).code, ApiException.from(e).message),
         retryLabel: s.retry,
         onRetry: () => ref.invalidate(adminFeedbackProvider),
       ),

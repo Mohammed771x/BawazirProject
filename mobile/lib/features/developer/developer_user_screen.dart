@@ -38,7 +38,8 @@ class DeveloperUserScreen extends ConsumerWidget {
       body: detail.when(
         loading: () => BusyView(message: s.loading),
         error: (e, _) => ErrorView(
-          message: e is ApiException ? e.message : s.somethingWentWrong,
+          message: s.apiError(
+              ApiException.from(e).code, ApiException.from(e).message),
           retryLabel: s.retry,
           onRetry: () => ref.invalidate(adminUserDetailProvider(userId)),
         ),
@@ -582,7 +583,8 @@ class _SkipDaysCardState extends ConsumerState<_SkipDaysCard> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(s.devSkipDaysDone(result.days, result.skillsDueNow)),
       ));
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(s.apiError(e.code, e.message))),

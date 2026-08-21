@@ -31,10 +31,12 @@ class _InterestsScreenState extends ConsumerState<InterestsScreen> {
       final profile =
           await ref.read(wordOsApiProvider).saveInterests(_selected.toList());
       ref.read(sessionProvider.notifier).updateUser(profile);
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(e.message)));
+            .showSnackBar(SnackBar(content: Text(
+                ref.read(stringsProvider).apiError(e.code, e.message))));
       }
     } finally {
       if (mounted) setState(() => _saving = false);

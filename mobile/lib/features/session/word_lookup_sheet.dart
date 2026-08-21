@@ -93,13 +93,13 @@ class _WordLookupSheetState extends ConsumerState<_WordLookupSheet> {
     try {
       await ref.read(wordOsApiProvider).addWord(candidate);
       if (mounted) setState(() => _added.add(candidate.senseId ?? candidate.meaning));
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       // A word the learner already owns is the common case here — they met it
       // in a passage precisely because it is one of theirs — so it reads as a
       // statement of fact rather than a failure.
       if (mounted) {
-        setState(() => _error =
-            e.code == 'WORD_ALREADY_ADDED' ? s.alreadyInYourWords : e.message);
+        setState(() => _error = s.apiError(e.code, e.message));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -235,10 +235,10 @@ class _WordLookupSheetState extends ConsumerState<_WordLookupSheet> {
       final chosen = _closestTo(entry.meaning, definition.senses);
       await ref.read(wordOsApiProvider).addWord(chosen);
       if (mounted) setState(() => _added.add(chosen.senseId ?? chosen.meaning));
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (mounted) {
-        setState(() => _error =
-            e.code == 'WORD_ALREADY_ADDED' ? s.alreadyInYourWords : e.message);
+        setState(() => _error = s.apiError(e.code, e.message));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -277,10 +277,10 @@ class _WordLookupSheetState extends ConsumerState<_WordLookupSheet> {
           );
         }
         if (snapshot.hasError) {
-          final error = snapshot.error;
-          return _Note(
-            text: error is ApiException ? error.message : s.somethingWentWrong,
-          );
+          // `hasError` guarantees a non-null error; the type does not, so it is
+          // narrowed rather than forced.
+          final e = ApiException.from(snapshot.error ?? 'unknown');
+          return _Note(text: s.apiError(e.code, e.message));
         }
 
         final definition = snapshot.data!;

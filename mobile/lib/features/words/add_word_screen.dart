@@ -65,7 +65,8 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
         _notFoundQuery =
             results.any((c) => !c.isSpellingSuggestion) ? null : value.trim();
       });
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (mounted) _snack(_strings.apiError(e.code, e.message));
     } finally {
       if (mounted) setState(() => _searching = false);
@@ -92,7 +93,8 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
           _controller.clear();
         });
       }
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (mounted) _snack(_strings.apiError(e.code, e.message));
     } finally {
       if (mounted) setState(() => _saving = false);

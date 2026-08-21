@@ -206,7 +206,8 @@ class _SkillLevelCardState extends ConsumerState<_SkillLevelCard> {
           );
       await ref.read(sessionProvider.notifier).refresh();
       ref.invalidate(hubProvider);
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(ref.read(stringsProvider).apiError(e.code, e.message))));
@@ -291,7 +292,8 @@ class _DailyTargetCardState extends ConsumerState<_DailyTargetCard> {
           );
       await ref.read(sessionProvider.notifier).refresh();
       ref.invalidate(hubProvider);
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(ref.read(stringsProvider).apiError(e.code, e.message))));
@@ -364,7 +366,8 @@ class _InterestsCardState extends ConsumerState<_InterestsCard> {
       final profile =
           await ref.read(wordOsApiProvider).saveInterests(next.toList());
       ref.read(sessionProvider.notifier).updateUser(profile);
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(ref.read(stringsProvider).apiError(e.code, e.message))));
@@ -556,20 +559,16 @@ class _FeedbackDialogState extends ConsumerState<_FeedbackDialog> {
     try {
       await ref.read(wordOsApiProvider).sendFeedback(body);
       if (mounted) Navigator.of(context).pop(true);
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (mounted) {
         setState(() {
           _sending = false;
-          // The server's own sentence, localised by its code where the app
-          // knows it (ADR-035).
+          // Localised by its code, with the server's own sentence as the
+          // fallback (ADR-035). Anything with no code of its own — a broken
+          // response, a bug here — lands on `UNEXPECTED`, so the separate
+          // catch-all this used to carry is no longer doing anything.
           _error = ref.read(stringsProvider).apiError(e.code, e.message);
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _sending = false;
-          _error = ref.read(stringsProvider).feedbackFailed;
         });
       }
     }

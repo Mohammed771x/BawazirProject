@@ -44,6 +44,13 @@ class SessionState {
 class SessionController extends Notifier<SessionState> {
   @override
   SessionState build() {
+    // The API layer cannot end the session itself — it is what this controller
+    // is built from — so it raises a signal and this is what acts on it.
+    final expired = ref.read(sessionExpiredProvider);
+    void onExpired() => expire();
+    expired.addListener(onExpired);
+    ref.onDispose(() => expired.removeListener(onExpired));
+
     Future.microtask(restore);
     return const SessionState();
   }
@@ -64,7 +71,8 @@ class SessionController extends Notifier<SessionState> {
     try {
       final user = await _api.me();
       state = SessionState(user: user, restoring: false);
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       // Only a rejected session signs the user out. Being offline at launch
       // must not discard a perfectly good session — the user opens the app on a
       // train and finds themselves logged out otherwise.
@@ -104,11 +112,31 @@ class SessionController extends Notifier<SessionState> {
           .save(result.token, refreshToken: result.refreshToken);
       state = SessionState(user: result.user, restoring: false);
       return true;
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       state = state.copyWith(
           busy: false, error: _message(e), restoring: false);
       return false;
     }
+  }
+
+  /// The session ended on the server side and cannot be recovered.
+  ///
+  /// Reached when a refresh is refused: the refresh token expired, was revoked
+  /// by signing out elsewhere, or was replayed and the whole family was
+  /// invalidated. The API layer has already dropped the tokens; what it cannot
+  /// do is tell the rest of the app, and until it did, nothing here changed —
+  /// `isSignedIn` stayed true, so the router kept the learner on a screen whose
+  /// every request now answered 401, with nothing on screen to say why.
+  ///
+  /// Clearing the user is what sends them to sign-in; the message is what stops
+  /// that looking like the app throwing them out at random.
+  void expire() {
+    if (!state.isSignedIn) return;
+    state = SessionState(
+      restoring: false,
+      error: ref.read(stringsProvider).apiError('UNAUTHORIZED', ''),
+    );
   }
 
   /// Applies a profile the server just returned (interests, placement, levels).

@@ -111,6 +111,18 @@ final appEnvironmentProvider =
 
 final tokenStoreProvider = Provider<TokenStore>((ref) => TokenStore());
 
+/// Raised when a session cannot be recovered and the learner must sign in again.
+///
+/// A signal rather than a direct call, because the alternative is `core`
+/// reaching into `features` for the session controller — and the session
+/// controller is built from the API provider, so that is also a cycle. The API
+/// layer bumps this; whoever owns the session listens.
+final sessionExpiredProvider = Provider<ValueNotifier<int>>((ref) {
+  final notifier = ValueNotifier<int>(0);
+  ref.onDispose(notifier.dispose);
+  return notifier;
+});
+
 final wordOsApiProvider = Provider<WordOsApi>((ref) {
   final env = ref.watch(appEnvironmentProvider);
   final tokens = ref.watch(tokenStoreProvider);
@@ -129,8 +141,18 @@ final wordOsApiProvider = Provider<WordOsApi>((ref) {
     // networking layer never touches the keystore.
     onRefreshed: (token, refresh) => tokens.save(token, refreshToken: refresh),
     // Reached only when the refresh token is gone too. Dropping both stops a
-    // dead token being replayed on every subsequent request.
-    onUnauthorized: tokens.clear,
+    // dead token being replayed on every subsequent request — and the session
+    // has to be ended in the app as well, or the router goes on believing the
+    // learner is signed in and leaves them on a screen where nothing works and
+    // nothing explains why.
+    //
+    // `ref.read` at call time rather than at build time: this provider is what
+    // `sessionProvider` is built from, so reading it any earlier would be a
+    // cycle. By the time a request can fail, both exist.
+    onUnauthorized: () {
+      tokens.clear();
+      ref.read(sessionExpiredProvider).value++;
+    },
   );
 });
 

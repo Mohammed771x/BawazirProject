@@ -52,7 +52,8 @@ class DeveloperWordsScreen extends ConsumerWidget {
       body: words.when(
         loading: () => BusyView(message: s.loading),
         error: (e, _) => ErrorView(
-          message: e is ApiException ? e.message : s.somethingWentWrong,
+          message: s.apiError(
+              ApiException.from(e).code, ApiException.from(e).message),
           retryLabel: s.retry,
           onRetry: () => ref.invalidate(adminUserWordsProvider(key)),
         ),
@@ -181,7 +182,8 @@ class DeveloperWordJourneyScreen extends ConsumerWidget {
       body: journey.when(
         loading: () => BusyView(message: s.loading),
         error: (e, _) => ErrorView(
-          message: e is ApiException ? e.message : s.somethingWentWrong,
+          message: s.apiError(
+              ApiException.from(e).code, ApiException.from(e).message),
           retryLabel: s.retry,
           onRetry: () => ref.invalidate(adminWordJourneyProvider(wordId)),
         ),

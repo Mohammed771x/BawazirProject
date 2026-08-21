@@ -52,7 +52,8 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
         _remaining = session.queue.length;
         _loading = false;
       });
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (!mounted) return;
       setState(() {
         _error = e;
@@ -91,7 +92,8 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
         );
         if (mounted) await _next();
       }
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text(ref.read(stringsProvider).apiError(e.code, e.message))));
@@ -110,7 +112,8 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
         final summary =
             await ref.read(wordOsApiProvider).completeWeeklyReview(_session!.id);
         if (mounted) setState(() => _result = summary);
-      } on ApiException catch (e) {
+      } catch (rawError) {
+        final e = ApiException.from(rawError);
         if (mounted) {
           ScaffoldMessenger.of(context)
               .showSnackBar(SnackBar(content: Text(ref.read(stringsProvider).apiError(e.code, e.message))));
@@ -144,7 +147,9 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
     if (_error != null) {
       return EmptyState(
         icon: Icons.event_available_rounded,
-        title: _error!.message,
+        // In the learner's language, like every other failure (ADR-035); this
+        // showed the server's English sentence.
+        title: s.apiError(_error!.code, _error!.message),
         message: s.reviewDoesNotChange,
         action: OutlinedButton(
           onPressed: () => Navigator.of(context).maybePop(),

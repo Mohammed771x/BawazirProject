@@ -234,6 +234,23 @@ class ApiException implements Exception {
     this.fieldErrors = const {},
   });
 
+  /// Any failure at all, as something the UI can show.
+  ///
+  /// Everything below the UI is expected to throw [ApiException] — but
+  /// "expected to" is not "does". A response whose shape this version of the
+  /// app does not recognise fails inside `fromJson` with a `TypeError`, which
+  /// is not an [ApiException] and so slips past every `on ApiException catch`
+  /// in the app. What the learner sees when that happens is a spinner that
+  /// never stops, because the `catch` that would have cleared it never runs.
+  ///
+  /// So the UI catches everything and converts here. A real [ApiException]
+  /// passes through untouched; anything else becomes `UNEXPECTED`, whose text
+  /// is written by this app rather than by `toString()` — a Dart error message
+  /// is English, internal, and occasionally quotes the data that broke it.
+  factory ApiException.from(Object error) => error is ApiException
+      ? error
+      : const ApiException('UNEXPECTED', 'Something went wrong.');
+
   final String code;
   final String message;
   final int? statusCode;
@@ -254,8 +271,29 @@ class ApiException implements Exception {
   bool get isServerError => (statusCode ?? 0) >= 500;
   bool get isNetwork => code == 'NETWORK' || code == 'TIMEOUT';
 
-  /// Worth offering a retry button for; a 404 or 409 is not.
-  bool get isRetryable => isNetwork || isServerError || isRateLimited;
+  /// Worth offering a retry button for.
+  ///
+  /// The test is whether pressing it could change the answer. Being offline,
+  /// overloaded or rate-limited all clear on their own, so they qualify; a
+  /// finished session or a question that has moved on will refuse identically
+  /// for ever, and a button that cannot help is worse than none — the learner
+  /// presses it again and again and concludes the app is broken.
+  ///
+  /// Most 409s are in the second group, which is why the status alone is not
+  /// enough: `SESSION_STARTING` is a 409 whose entire meaning is "ask again in
+  /// a moment", and it would otherwise be the one refusal that tells the
+  /// learner to retry while offering no way to.
+  bool get isRetryable =>
+      isNetwork ||
+      isServerError ||
+      isRateLimited ||
+      const {
+        'SESSION_STARTING',
+        'SESSION_RACE',
+        'RELEVEL_UNAVAILABLE',
+        'UNEXPECTED',
+        'BAD_RESPONSE',
+      }.contains(code);
 
   @override
   String toString() => 'ApiException($code, $message)';

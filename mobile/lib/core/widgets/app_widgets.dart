@@ -426,3 +426,46 @@ class BusyView extends StatelessWidget {
     );
   }
 }
+
+/// What replaces a widget that threw while building (see `main.dart`).
+///
+/// Deliberately the plainest thing in the app. It cannot read the theme — the
+/// failure may be *in* the theme, or in whatever was meant to provide it — and
+/// it cannot read [AppStrings] either, since the same is true of the locale.
+/// So it is self-contained: its own colours, and a bilingual line that needs no
+/// lookup to be right in either language.
+///
+/// It is also deliberately not a retry button. The widget that failed will fail
+/// again the moment it rebuilds, and offering an action that cannot work is how
+/// a learner ends up tapping the same button until they give up. Backing out to
+/// the previous screen is the way forward, and that control is already there.
+class AppErrorBox extends StatelessWidget {
+  const AppErrorBox({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xFFFDF6F4),
+      alignment: Alignment.center,
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      child: const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline_rounded, size: 34, color: Color(0xFFB3261E)),
+          SizedBox(height: AppSpacing.sm),
+          Text(
+            'حدث خطأ ما\nSomething went wrong',
+            textAlign: TextAlign.center,
+            textDirection: TextDirection.rtl,
+            style: TextStyle(
+              fontSize: 15,
+              height: 1.5,
+              color: Color(0xFF1C1B1F),
+              decoration: TextDecoration.none,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

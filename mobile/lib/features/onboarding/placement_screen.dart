@@ -105,7 +105,8 @@ class _PlacementScreenState extends ConsumerState<PlacementScreen> {
     setState(() => _busy = true);
     try {
       await body();
-    } on ApiException catch (e) {
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
       if (mounted) {
         setState(() {
           _phase = _Phase.error;

@@ -107,10 +107,162 @@ class AppStrings {
             'This review is already finished.',
             'انتهت هذه المراجعة بالفعل.',
           ),
+        'REVIEW_NOT_FOUND' => _(
+            'This review is no longer available.',
+            'لم تعد هذه المراجعة متاحة.',
+          ),
 
-        // Anything this app has not met: the server's own words, which is
-        // better than pretending nothing happened.
-        _ => fallback,
+        // Placement.
+        'PLACEMENT_NOT_FOUND' => _(
+            'This placement test is no longer available. Start it again.',
+            'لم يعد اختبار تحديد المستوى هذا متاحًا. ابدأه من جديد.',
+          ),
+        'PLACEMENT_COMPLETE' => _(
+            'You have already finished the placement test.',
+            'لقد أنهيت اختبار تحديد المستوى بالفعل.',
+          ),
+        'PLACEMENT_INCOMPLETE' => _(
+            'There are still questions left to answer.',
+            'ما زالت هناك أسئلة لم تُجب عنها.',
+          ),
+
+        // ── The learner is not to blame, and waiting fixes it ──────────────
+        //
+        // These three are the whole reason 503 exists in this service: too many
+        // people at once, not a fault. The wording says so, because "something
+        // went wrong" invites the learner to think their answer was lost — and
+        // nothing of theirs was even touched (ADR-051).
+        'SERVER_BUSY' => _(
+            'The server is busy right now. Try again in a moment.',
+            'الخادم مشغول الآن. حاول بعد لحظات.',
+          ),
+        'AI_BUSY' => _(
+            'Lessons are in high demand right now. Try again in a moment.',
+            'الطلب على الدروس مرتفع الآن. حاول بعد لحظات.',
+          ),
+        'SESSION_STARTING' || 'SESSION_RACE' => _(
+            'Your session is still being prepared. Try again in a moment.',
+            'ما زال يجري تحضير جلستك. حاول بعد لحظات.',
+          ),
+
+        // ── The session ended somewhere else ───────────────────────────────
+        //
+        // Signing in again is the only way out of these, so they say that
+        // rather than describing the mechanism. `REFRESH_REUSED` means a token
+        // was presented twice and every session was revoked — the learner did
+        // nothing wrong and does not need to be alarmed, they just need to
+        // sign in.
+        'INVALID_REFRESH' || 'REFRESH_REUSED' || 'UNAUTHORIZED' => _(
+            'Your session has ended. Please sign in again.',
+            'انتهت جلستك. يُرجى تسجيل الدخول مرة أخرى.',
+          ),
+        'FORBIDDEN' => _(
+            'You do not have access to this.',
+            'ليس لديك صلاحية للوصول إلى هذا.',
+          ),
+
+        // ── Connection ─────────────────────────────────────────────────────
+        //
+        // Separated on purpose. "No connection" is something the learner can
+        // act on; "the server took too long" is not their doing and retrying
+        // usually works. Collapsing both into one message sends people to
+        // restart a router that was never the problem.
+        'NETWORK' => _(
+            'No connection. Check your internet and try again.',
+            'لا يوجد اتصال. تحقّق من الإنترنت وحاول مرة أخرى.',
+          ),
+        'TIMEOUT' => _(
+            'The connection is slow and the request timed out. Try again.',
+            'الاتصال بطيء وانتهت مهلة الطلب. حاول مرة أخرى.',
+          ),
+        'INSECURE_CONNECTION' => _(
+            'This connection could not be trusted, so it was stopped.',
+            'تعذّر الوثوق بهذا الاتصال، لذا تم إيقافه.',
+          ),
+        'RATE_LIMITED' => _(
+            'Too many requests. Wait a moment and try again.',
+            'طلبات كثيرة جدًا. انتظر لحظة ثم حاول مرة أخرى.',
+          ),
+
+        // ── Nothing the learner can do anything about ──────────────────────
+        //
+        // Deliberately vague about the cause and specific about what happens
+        // next. The detail lives in the server's log, where an attacker cannot
+        // read it (docs/07-SECURITY.md §8) — and where it is of no use to a
+        // learner anyway.
+        'INTERNAL_ERROR' || 'SERVER_ERROR' => _(
+            'Something went wrong on our side. Please try again.',
+            'حدث خطأ لدينا. يُرجى المحاولة مرة أخرى.',
+          ),
+        // The response was not what this version of the app expects — an older
+        // app against a newer API, or a captive-portal page instead of JSON.
+        'BAD_RESPONSE' => _(
+            'The app could not read the reply. Try updating the app.',
+            'تعذّر على التطبيق قراءة الرد. جرّب تحديث التطبيق.',
+          ),
+        // Raised by the app about itself, never by the server.
+        'UNEXPECTED' => somethingWentWrong,
+
+        // ── Requests that should not have been sent ────────────────────────
+        //
+        // A learner cannot reach these by tapping: they mean this app sent
+        // something the API refused. Shown plainly rather than as a fault the
+        // learner must solve, because there is nothing for them to solve.
+        'INVALID_PARAMETER' || 'INVALID_SKILL' || 'INVALID_LEVEL' ||
+        'INVALID_STATE' || 'INVALID_STATUS' || 'WRONG_SKILL' ||
+        'WRONG_ITEM_TYPE' || 'VALIDATION_FAILED' =>
+          _(
+            'That request could not be completed. Please try again.',
+            'تعذّر إتمام هذا الطلب. يُرجى المحاولة مرة أخرى.',
+          ),
+        'ITEM_NOT_FOUND' => _(
+            'That question is no longer available.',
+            'لم يعد هذا السؤال متاحًا.',
+          ),
+        // A 409 that arrived with no body of its own, so there is no more
+        // specific code to say what changed underneath.
+        'CONFLICT' => _(
+            'That is not available right now.',
+            'هذا غير متاح في الوقت الحالي.',
+          ),
+        'UNKNOWN' => somethingWentWrong,
+        'NOT_FOUND' || 'USER_NOT_FOUND' => _(
+            'That is no longer available.',
+            'لم يعد هذا متاحًا.',
+          ),
+        'NO_CONTENT' => _(
+            'This session has no content to show.',
+            'لا يوجد محتوى لعرضه في هذه الجلسة.',
+          ),
+        'NO_WARMUP' => _(
+            'There is no warm-up for this session.',
+            'لا توجد تهيئة لهذه الجلسة.',
+          ),
+        'LEVEL_NOT_ADJUSTABLE' || 'SKILL_NOT_LEVELLED' => _(
+            'This skill does not have a level to change.',
+            'هذه المهارة ليس لها مستوى يمكن تغييره.',
+          ),
+
+        // ── Searching the dictionary ───────────────────────────────────────
+        'QUERY_TOO_LONG' => _(
+            'That search term is too long.',
+            'كلمة البحث طويلة جدًا.',
+          ),
+        'BAD_WORD' => _(
+            'Enter a single word to look up.',
+            'أدخل كلمة واحدة للبحث عنها.',
+          ),
+        'EMPTY_FEEDBACK' => _('Write a message first.', 'اكتب رسالة أولًا.'),
+
+        // A cancelled request is the app tidying up after a screen the learner
+        // already left. There is nobody to tell, and saying anything would be
+        // an error message for something they did on purpose.
+        'CANCELLED' => '',
+
+        // Anything this app has not met. The server writes its sentences for a
+        // learner to read, so the fallback is safe to show — but a blank one
+        // would be a dialog with no text in it, so it never gets that far.
+        _ => fallback.trim().isEmpty ? somethingWentWrong : fallback,
       };
 
   String get somethingWentWrong =>
@@ -182,8 +334,22 @@ class AppStrings {
   String get alreadyHaveAccount =>
       _('Already have an account?', 'لديك حساب بالفعل؟');
   String get emailRequired => _('Enter your email', 'أدخل بريدك الإلكتروني');
-  String get passwordRequired =>
-      _('Password must be at least 6 characters', 'كلمة المرور 6 أحرف على الأقل');
+  /// The **server's** rule, said before the request is sent.
+  ///
+  /// This used to say six while `RegisterRequest` required eight, so a
+  /// seven-character password passed the form, was refused by the API, and came
+  /// back as a validation failure that named no field — the learner was told
+  /// their details were wrong without being told which, or how.
+  ///
+  /// Keep this number and [minPasswordLength] in step with `MinLength(8)` in
+  /// `AuthEndpoints.RegisterRequest`.
+  String get passwordRequired => _(
+        'Password must be at least $minPasswordLength characters',
+        'كلمة المرور $minPasswordLength أحرف على الأقل',
+      );
+
+  /// What the API will accept, so the form can refuse it first.
+  static const int minPasswordLength = 8;
   String get demoHint => _(
         'Demo account: demo@wordos.app / wordos123',
         'حساب تجريبي: demo@wordos.app / wordos123',

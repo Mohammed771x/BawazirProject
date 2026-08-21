@@ -106,7 +106,9 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                   prefixIcon: const Icon(Icons.lock_outline_rounded),
                 ),
                 validator: (v) =>
-                    (v == null || v.length < 6) ? s.passwordRequired : null,
+                    (v == null || v.length < AppStrings.minPasswordLength)
+                        ? s.passwordRequired
+                        : null,
                 onFieldSubmitted: (_) => _submit(),
               ),
             ],
