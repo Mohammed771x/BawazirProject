@@ -50,6 +50,9 @@ Future<void> bootApp(
   WidgetTester tester, {
   Locale locale = const Locale('en'),
   Size? surfaceSize,
+  /// Extra overrides, for a test that needs to watch what a service was asked
+  /// to do — a fake voice engine, say.
+  List<Override> overrides = const [],
 }) async {
   if (surfaceSize != null) {
     tester.view.physicalSize = surfaceSize;
@@ -59,7 +62,7 @@ Future<void> bootApp(
 
   await tester.pumpWidget(
     ProviderScope(
-      overrides: testOverrides(locale: locale),
+      overrides: [...testOverrides(locale: locale), ...overrides],
       child: const WordOsApp(),
     ),
   );

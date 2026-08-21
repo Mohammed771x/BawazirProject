@@ -86,6 +86,11 @@ class MockAnalytics {
             firstAttemptPasses: skillAttempts
                 .where((a) => a.passed && a.attemptNumber == 1)
                 .length,
+            // Distinct words, not attempts — the denominator first-attempt
+            // accuracy belongs over. A word that failed twice before passing
+            // is three attempts and one word.
+            wordsDecided:
+                skillAttempts.map((a) => a.wordId).toSet().length,
           );
         }(),
     ];

@@ -243,14 +243,20 @@ public static class SessionContentBuilder
     /// </remarks>
     private static List<string> LetterPool(string word, Random random)
     {
+        // The spaces are tiles too. "alarm clock" is one vocabulary item, and a
+        // pool of its letters with the spaces stripped out is a puzzle with no
+        // solution: the learner can lay out every letter and still not have
+        // written the word.
         var letters = word
-            .Replace(" ", string.Empty)
             .ToLowerInvariant()
             .Select(c => c.ToString())
             .ToList();
 
         // Enough to matter, not so many that the pool becomes a wall of tiles.
-        var decoyCount = Math.Clamp(letters.Count / 2, 3, 6);
+        // Counted on the letters, not the spaces: a space is not something a
+        // learner has to guess.
+        var decoyCount = Math.Clamp(
+            letters.Count(l => l != " ") / 2, 3, 6);
 
         var used = letters.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var available = "abcdefghijklmnopqrstuvwxyz"

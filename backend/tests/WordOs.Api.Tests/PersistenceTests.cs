@@ -24,7 +24,10 @@ public class PersistenceTests(PostgresFixture db)
         new(2026, 8, 15, 9, 0, 0, TimeSpan.Zero);
 
     private static User NewUser(string email = "learner@test.dev") =>
-        User.Register(email, "argon2id$dummy-hash", "Learner", Config, T0);
+        // A number, because an account cannot be created without one
+        // (ADR-054).
+        User.Register(email, "argon2id$dummy-hash", "Learner", Config, T0,
+            phoneCountryCode: "967", phoneNumber: "770000000");
 
     private static Word NewWord(Guid userId, string senseId = "sense-1") =>
         Word.Add(userId, senseId, "research", "بحث علمي",
@@ -251,21 +254,27 @@ public class PersistenceTests(PostgresFixture db)
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);
 
+        // The lexicon is shared by every test in the run, and other tests seed
+        // words of their own — so these rows are tagged and counted alone.
+        // Counting everything that starts with "bo" makes this test fail the
+        // day someone else's fixture happens to need `book`.
+        var tag = $"s-{Guid.NewGuid():N}";
+
         await using var context = db.CreateContext();
         context.LexiconEntries.AddRange(
-            LexiconEntry.Create("s-book-n", "book", "book", "noun",
+            LexiconEntry.Create($"{tag}-book-n", "book", "book", "noun",
                 "a written work", "كتاب", CefrLevel.A1, 500, "oewn+awn+cefrj", T0),
-            LexiconEntry.Create("s-book-v", "book", "book", "verb",
+            LexiconEntry.Create($"{tag}-book-v", "book", "book", "verb",
                 "to reserve", "يحجز", CefrLevel.A2, 900, "oewn+awn+cefrj", T0),
-            LexiconEntry.Create("s-boot-n", "boot", "boot", "noun",
+            LexiconEntry.Create($"{tag}-boot-n", "boot", "boot", "noun",
                 "footwear", "حذاء", CefrLevel.A2, 2000, "oewn+awn+cefrj", T0),
-            LexiconEntry.Create("s-cat-n", "cat", "cat", "noun",
+            LexiconEntry.Create($"{tag}-cat-n", "cat", "cat", "noun",
                 "a small animal", "قطة", CefrLevel.A1, 300, "oewn+awn+cefrj", T0));
         await context.SaveChangesAsync();
 
         // Typing "bo" must surface every sense whose word starts with it.
         var matches = await context.LexiconEntries
-            .Where(l => l.TextNormalized.StartsWith("bo"))
+            .Where(l => l.SenseId.StartsWith(tag) && l.TextNormalized.StartsWith("bo"))
             .OrderBy(l => l.FrequencyRank)
             .ToListAsync();
 

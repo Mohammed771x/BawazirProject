@@ -16,7 +16,8 @@ void main() {
 
   setUp(() {
     engine = MockEngine();
-    final auth = engine.register('learner@test.dev', 'wordos123', 'Learner');
+    final auth = engine.register('learner@test.dev', 'wordos123', 'Learner',
+        phoneCountryCode: '967', phoneNumber: '770000014');
     user = engine.requireUser(auth.token);
   });
 

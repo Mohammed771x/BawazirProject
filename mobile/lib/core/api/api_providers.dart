@@ -33,6 +33,19 @@ class AppEnvironment {
     ),
   );
 
+  /// The build, for attaching to a bug report (ADR-053).
+  ///
+  /// A constant rather than a package lookup: this is stamped at build time and
+  /// a report should never fail to send because reading the bundle failed.
+  static const String version =
+      String.fromEnvironment('WORDOS_VERSION', defaultValue: 'dev');
+
+  /// Which platform the report came from — iOS, Android, web.
+  static String get platformName {
+    if (kIsWeb) return 'web';
+    return defaultTargetPlatform.name;
+  }
+
   bool get isSecureTransport =>
       Uri.tryParse(baseUrl)?.scheme.toLowerCase() == 'https';
 

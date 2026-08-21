@@ -49,12 +49,13 @@ public static class LexiconBuilder
         IReadOnlyDictionary<string, LexiconSources.OewnSynset> synsets,
         IReadOnlyDictionary<string, List<string>> arabicBySynset,
         IReadOnlyDictionary<(string Word, string Pos), CefrLevel> cefr,
-        IReadOnlyDictionary<string, int>? frequencyRanks = null)
+        IReadOnlyDictionary<string, int>? frequencyRanks = null,
+        IReadOnlyDictionary<(string Word, string Pos), List<string>>? forms = null)
     {
         var rows = new List<LexiconRow>(senses.Count);
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        int noArabic = 0, noSynset = 0, multiword = 0, withCefr = 0;
+        int noArabic = 0, noSynset = 0, multiword = 0, withCefr = 0, inflectedCount = 0;
 
         foreach (var sense in senses)
         {
@@ -103,20 +104,65 @@ public static class LexiconBuilder
                 ? r
                 : RankFor(level, senseOrder: SenseOrdinal(sense.SenseId));
 
+            var meaning = Truncate(arabic[0], 512);
+            var definition = Truncate(synset.Definition, 2048);
+
             rows.Add(new LexiconRow(
                 SenseId: sense.SenseId,
                 Text: text,
                 TextNormalized: normalized,
                 Lemma: text,
                 PartOfSpeech: pos,
-                DefinitionEn: Truncate(synset.Definition, 2048),
+                DefinitionEn: definition,
                 // The first Arabic lemma is the primary gloss; alternatives are
                 // deliberately not concatenated, because a learner picks one
                 // meaning and that choice must be unambiguous.
-                MeaningAr: Truncate(arabic[0], 512),
+                MeaningAr: meaning,
                 CefrLevel: level,
                 FrequencyRank: rank,
                 SourceFlags: BuildSourceFlags(level is not null)));
+
+            // The forms of the same sense — `went` and `going` beside `go` —
+            // each an entry of its own, because a learner adds and practises a
+            // form as a word (ADR-045). The base still ranks first: a form is
+            // one step behind the word it belongs to.
+            var listed = forms is not null
+                         && forms.TryGetValue((sense.Word, sense.PartOfSpeech), out var f)
+                ? f
+                : [];
+
+            foreach (var inflected in Inflections.For(text, pos, listed))
+            {
+                var (english, arabicLabel) = Inflections.Label(inflected.Form);
+                var suffix = inflected.Form switch
+                {
+                    Inflections.Form.Past => "pst",
+                    Inflections.Form.PastParticiple => "pp",
+                    Inflections.Form.Progressive => "ing",
+                    _ => "pl",
+                };
+
+                var inflectedId = Truncate($"{sense.SenseId}#{suffix}", 64);
+                if (!seen.Add(inflectedId)) continue;
+
+                inflectedCount++;
+
+                rows.Add(new LexiconRow(
+                    SenseId: inflectedId,
+                    Text: inflected.Text,
+                    TextNormalized: inflected.Text.ToLowerInvariant(),
+                    // The lemma is what ties the form to its word, and what a
+                    // learner is told: "past tense of go".
+                    Lemma: text,
+                    PartOfSpeech: pos,
+                    DefinitionEn: Truncate($"{english} of \"{text}\" — {definition}", 2048),
+                    MeaningAr: Truncate($"{meaning} ({arabicLabel})", 512),
+                    CefrLevel: level,
+                    // One step behind its base, so searching "go" offers the
+                    // word before its forms.
+                    FrequencyRank: rank is null ? null : rank + 1,
+                    SourceFlags: BuildSourceFlags(level is not null) + ";form=" + suffix));
+            }
         }
 
         var deduped = Deduplicate(rows, out var collapsed);

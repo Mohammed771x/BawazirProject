@@ -23,6 +23,8 @@ dependencies:
   intl: ^0.20.2
   equatable: ^2.1.0
   shared_preferences: ^2.5.5
+  # Opens the support chat in WhatsApp (ADR-055).
+  url_launcher: ^6.3.1
 
 dev_dependencies:
   flutter_test:

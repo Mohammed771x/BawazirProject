@@ -86,7 +86,13 @@ class MockEngine {
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  AuthResponse register(String email, String password, String displayName) {
+  AuthResponse register(
+    String email,
+    String password,
+    String displayName, {
+    String? phoneCountryCode,
+    String? phoneNumber,
+  }) {
     final key = email.trim().toLowerCase();
     if (_usersByEmail.containsKey(key)) {
       throw const ApiException('EMAIL_TAKEN', 'This email is already registered.',
@@ -97,12 +103,25 @@ class MockEngine {
           'WEAK_PASSWORD', 'Password must be at least 6 characters.',
           statusCode: 400);
     }
+
+    // A number is required to create an account, exactly as the real server
+    // requires it (ADR-054). Checked on the digits: "()-" is punctuation the
+    // field permits and not a number.
+    final digits = (phoneNumber ?? '').replaceAll(RegExp(r'[^0-9]'), '');
+    final code = (phoneCountryCode ?? '').replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length < 6 || code.isEmpty) {
+      throw const ApiException(
+          'INVALID_PHONE', 'Enter a valid phone number.',
+          statusCode: 400);
+    }
+
     final user = MockUser(
       id: _newId('u'),
       email: key,
       password: password,
       displayName: displayName.trim().isEmpty ? 'Learner' : displayName.trim(),
       createdAt: now,
+      phone: '+$code$digits',
     );
     _usersByEmail[key] = user;
     _usersById[user.id] = user;
@@ -139,6 +158,118 @@ class MockEngine {
 
   AdminUserDetail adminUserDetail(MockUser caller, String userId) =>
       admin.userDetail(caller, _usersById[userId]);
+
+  /// Brings a learner's waiting skills forward (ADR-037).
+  ///
+  /// Mirrors the real endpoint: Owner-only, scheduled dates only, and nothing
+  /// that already happened is touched.
+  ScheduleAdvance adminAdvanceSchedule(
+    MockUser caller,
+    String userId, {
+    int days = 2,
+  }) {
+    admin.requireOwner(caller);
+
+    final learner = _usersById[userId];
+    if (learner == null) {
+      throw const ApiException('USER_NOT_FOUND', 'No such learner.',
+          statusCode: 404);
+    }
+
+    final shift = days.clamp(1, 30);
+
+    for (final word in learner.words) {
+      for (final state in word.skills.values) {
+        final at = state.availableAt;
+        if (at != null) state.availableAt = at.subtract(Duration(days: shift));
+      }
+    }
+
+    final dueNow = learner.words
+        .expand((w) => w.skills.values)
+        .where((s) =>
+            s.availableAt != null && !s.availableAt!.isAfter(now))
+        .length;
+
+    return ScheduleAdvance(
+      days: shift,
+      wordsShifted: learner.words.length,
+      skillsDueNow: dueNow,
+    );
+  }
+
+  // ── Feedback (ADR-053) ─────────────────────────────────────────────────────
+  //
+  // Held in memory like everything else here: the mock is a simulation of the
+  // C# rules and is deleted in Phase 7. What it has to reproduce is the shape —
+  // a learner may write and never read, and only the Owner sees the list.
+
+  final List<FeedbackMessage> _feedback = [];
+
+  void sendFeedback(MockUser caller, String body) {
+    final text = body.trim();
+    if (text.isEmpty) {
+      throw const ApiException(
+          'EMPTY_FEEDBACK', 'Write something first.', statusCode: 400);
+    }
+
+    _feedback.add(FeedbackMessage(
+      id: 'fb_${_feedback.length + 1}',
+      body: text,
+      handled: false,
+      createdAt: now,
+      senderId: caller.id,
+      senderName: caller.displayName,
+      senderEmail: caller.email,
+      senderPhone: caller.phone,
+      appVersion: 'mock',
+      platform: 'mock',
+    ));
+  }
+
+  FeedbackPage adminFeedback(MockUser caller, {bool? handledOnly}) {
+    admin.requireOwner(caller);
+
+    final rows = _feedback
+        .where((m) => handledOnly == null || m.handled == handledOnly)
+        .toList()
+      // Unhandled first, newest first — the order the screen is for.
+      ..sort((a, b) {
+        if (a.handled != b.handled) return a.handled ? 1 : -1;
+        return b.createdAt.compareTo(a.createdAt);
+      });
+
+    return FeedbackPage(
+      items: rows,
+      total: rows.length,
+      unread: _feedback.where((m) => !m.handled).length,
+      hasMore: false,
+    );
+  }
+
+  void adminSetFeedbackHandled(MockUser caller, String id, bool handled) {
+    admin.requireOwner(caller);
+
+    final index = _feedback.indexWhere((m) => m.id == id);
+    if (index < 0) {
+      throw const ApiException('NOT_FOUND', 'That message does not exist.',
+          statusCode: 404);
+    }
+
+    final old = _feedback[index];
+    _feedback[index] = FeedbackMessage(
+      id: old.id,
+      body: old.body,
+      handled: handled,
+      createdAt: old.createdAt,
+      senderId: old.senderId,
+      senderName: old.senderName,
+      senderEmail: old.senderEmail,
+      senderPhone: old.senderPhone,
+      appVersion: old.appVersion,
+      platform: old.platform,
+    );
+  }
 
   AdminWordPage adminUserWords(
     MockUser caller,
@@ -385,6 +516,7 @@ class MockEngine {
       meaning: resolved.meaning,
       definitionEn: resolved.definitionEn,
       partOfSpeech: resolved.partOfSpeech,
+      form: MockDictionary.formOf(candidate.senseId),
       level: resolved.suggestedLevel,
       addedAt: now,
       currentSkill: firstSkill,
@@ -413,6 +545,7 @@ class MockEngine {
         meaning: w.meaning,
         definitionEn: w.definitionEn,
         partOfSpeech: w.partOfSpeech,
+        form: w.form,
         cefrLevel: w.level,
         state: w.state,
         currentSkill: w.currentSkill,
@@ -727,6 +860,36 @@ class MockEngine {
           statusCode: 404);
     }
 
+    if (snapshot.skill == SkillType.spelling) {
+      throw const ApiException(
+        'LEVEL_NOT_ADJUSTABLE',
+        'This session has no level to change.',
+        statusCode: 400,
+      );
+    }
+
+    // The level the learner picks here is their level for this skill from now
+    // on — the same write-through the real backend performs, so Settings shows
+    // it the moment they look (ADR-030, ADR-038).
+    updateSkillLevel(user, snapshot.skill, level);
+
+    // Speaking and Writing have no passage to re-tell: the level is an input to
+    // what happens next, so nothing is regenerated and nothing the learner has
+    // already done is disturbed.
+    if (snapshot.skill == SkillType.speaking ||
+        snapshot.skill == SkillType.writing) {
+      return session.snapshot = SkillSession(
+        id: snapshot.id,
+        skill: snapshot.skill,
+        levelUsed: level,
+        content: snapshot.content,
+        targetWords: snapshot.targetWords,
+        items: snapshot.items,
+        conversation: snapshot.conversation,
+        progress: session.progress,
+      );
+    }
+
     if (session.attempts.values.any((a) => a > 0)) {
       throw const ApiException(
         'SESSION_STARTED',
@@ -832,10 +995,15 @@ class MockEngine {
       );
     }
 
-    // Spelling is judged case-insensitively; meaning questions are exact
-    // matches against the option the backend itself issued.
+    // Spelling is judged case-insensitively and without regard to spacing —
+    // "alarm clock" and "alarmclock" are the same spelling, and the exercise is
+    // the letters (ADR-042). Meaning questions are exact matches against the
+    // option the backend itself issued.
+    String despaced(String text) =>
+        text.toLowerCase().replaceAll(RegExp(r'\s+'), '');
+
     final isCorrect = session.skill == SkillType.spelling
-        ? answer.trim().toLowerCase() == correct.trim().toLowerCase()
+        ? despaced(answer) == despaced(correct)
         : answer == correct;
 
     final requeued = session.recordAttempt(
@@ -1098,10 +1266,24 @@ class MockEngine {
     );
   }
 
-  static bool _mentions(String text, String word) => RegExp(
-        '\\b${RegExp.escape(word.toLowerCase())}',
-        caseSensitive: false,
-      ).hasMatch(text.toLowerCase());
+  /// Whether the learner said the word (ADR-049).
+  ///
+  /// A whole word, not a prefix: `booking` and `bookshop` are not `book`, and
+  /// a learner who has not used the word must not be moved on from it. A plain
+  /// noun's regular plural *is* the word, because `book` and `books` are one
+  /// word to a learner. The server decides that from the lexicon; the mock has
+  /// no lexicon, so it accepts the regular endings and nothing else — which is
+  /// the same answer for every word this simulation is used with.
+  static bool _mentions(String text, String word) {
+    final target = RegExp.escape(word.toLowerCase().trim());
+    final plural = word.toLowerCase().endsWith('y')
+        ? '|${RegExp.escape(word.toLowerCase().substring(0, word.length - 1))}ies'
+        : '';
+    return RegExp(
+      '\\b(?:$target(?:e?s)?$plural)\\b',
+      caseSensitive: false,
+    ).hasMatch(text.toLowerCase());
+  }
 
   List<SessionTargetWord> _wordsUsedIn(String text, _MockSession session) =>
       session.targetWords.where((w) => _mentions(text, w.text)).toList();
@@ -1196,6 +1378,21 @@ class MockEngine {
           becameActive: becameActive,
           firstAttemptCorrect: passed,
           attemptsInSession: session.attemptsForWord(word.id),
+          // A conversation ends in coaching, not a verdict (ADR-048). The real
+          // service writes this; the mock stands in with the same shape so the
+          // screen is developed against what it will actually receive.
+          feedback: skill != SkillType.speaking
+              ? null
+              : passed
+                  ? 'You used "${word.text}" correctly and clearly.'
+                  : 'You did not use "${word.text}" as it is meant here. '
+                      'It comes back another day — nothing is lost.',
+          evidence: skill == SkillType.speaking && passed
+              ? 'I used ${word.text} in my answer.'
+              : null,
+          better: skill == SkillType.speaking
+              ? 'Yesterday I used ${word.text} at school.'
+              : null,
         ),
       );
     }
@@ -1236,6 +1433,9 @@ class MockEngine {
       comprehensionTotal: comprehensionTotal,
       words: outcomes,
       durationMs: durationMs,
+      summary: skill != SkillType.speaking
+          ? null
+          : 'You kept the conversation going and used most of your words.',
     );
     _sessions.remove(session.id);
     return result;
@@ -1674,6 +1874,7 @@ class MockWord {
     required this.meaning,
     required this.definitionEn,
     required this.partOfSpeech,
+    this.form,
     required this.level,
     required this.addedAt,
     required this.currentSkill,
@@ -1687,6 +1888,11 @@ class MockWord {
   final String meaning;
   final String definitionEn;
   final String partOfSpeech;
+
+  /// `past`, `pastParticiple`, `ing`, `plural` — or null for the plain word.
+  /// The server reads this off the sense id (ADR-045); the mock dictionary
+  /// states it outright, which is the same fact by a shorter route.
+  final String? form;
   final CefrLevel level;
   final DateTime addedAt;
   SkillType? currentSkill;
@@ -1908,6 +2114,7 @@ class MockUser {
     required this.password,
     required this.displayName,
     required this.createdAt,
+    this.phone,
   }) {
     for (final skill in MockEngine.configuration.skillsOrder) {
       levels[skill] = skill == SkillType.spelling
@@ -1933,6 +2140,9 @@ class MockUser {
   final String password;
   final String displayName;
   final DateTime createdAt;
+
+  /// International form, as registration collects it — Owner-visible only.
+  final String? phone;
 
   /// Set at seed time only. Self-service registration always creates a `USER`;
   /// there is deliberately no client-reachable path to becoming an `OWNER`.

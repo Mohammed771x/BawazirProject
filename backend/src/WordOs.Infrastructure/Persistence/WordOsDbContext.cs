@@ -38,6 +38,9 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
     /// <summary>The append-only activity log (Part 3 §34–§35).</summary>
     public DbSet<ActivityEvent> ActivityEvents => Set<ActivityEvent>();
 
+    /// <summary>What learners have written to the Owner (ADR-053).</summary>
+    public DbSet<FeedbackMessage> FeedbackMessages => Set<FeedbackMessage>();
+
     public DbSet<Word> Words => Set<Word>();
 
     public DbSet<WordSkillState> WordSkillStates => Set<WordSkillState>();
@@ -181,6 +184,26 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
                 .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
+        b.Entity<FeedbackMessage>(e =>
+        {
+            e.ToTable("feedback_messages");
+            e.HasKey(x => x.Id);
+
+            // Long enough for someone to describe what actually happened, and
+            // bounded so a single request cannot be a denial of service.
+            e.Property(x => x.Body).HasMaxLength(4000).IsRequired();
+            e.Property(x => x.AppVersion).HasMaxLength(32);
+            e.Property(x => x.Platform).HasMaxLength(32);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(16);
+
+            // The one query the Owner makes: unread first, newest first.
+            e.HasIndex(x => new { x.Status, x.CreatedAt });
+            e.HasIndex(x => new { x.UserId, x.CreatedAt });
+
+            e.HasOne<User>().WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         b.Entity<Word>(e =>
         {
             e.ToTable("words");
@@ -281,7 +304,32 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
             e.Property(x => x.AiModel).HasMaxLength(64);
             // Bounded generously: one entry per content word in a passage.
             e.Property(x => x.GlossaryJson).HasMaxLength(20000);
+            // What the session is about, independent of its items — a
+            // conversation has none (ADR-039).
+            e.Property(x => x.WordIdsJson).HasMaxLength(2000);
+            e.Property(x => x.UsedWordsJson).HasMaxLength(2000);
             e.HasIndex(x => new { x.UserId, x.Skill, x.IsComplete });
+
+            // One open session per learner per skill, enforced by the database
+            // rather than by a check-then-insert (ADR-063).
+            //
+            // "Starting a second session while one is open resumes rather than
+            // forks" was already the rule, and StartAsync already looked for an
+            // open session first — but a look followed by an insert is not
+            // atomic, and two taps on a slow connection are simultaneous
+            // enough. Measured: four concurrent starts produced four sessions
+            // and four Gemini calls, 14,366 tokens where 3,679 was the whole
+            // requirement. A double-tap billed four times.
+            //
+            // A filtered unique index is the only place that race can be
+            // settled, because it is the only participant that sees all four
+            // requests. Completed sessions are excluded: a learner has many of
+            // those per skill, and only the open one is exclusive.
+            e.HasIndex(x => new { x.UserId, x.Skill })
+                .IsUnique()
+                .HasFilter("\"IsComplete\" = false")
+                .HasDatabaseName("ix_skill_sessions_one_open_per_skill");
+
             e.HasOne<User>().WithMany()
                 .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
             e.HasMany(x => x.Items)

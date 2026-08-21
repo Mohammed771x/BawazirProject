@@ -14,7 +14,8 @@ void main() {
 
   setUp(() {
     engine = MockEngine();
-    final auth = engine.register('loop@test.dev', 'wordos123', 'Loop');
+    final auth = engine.register('loop@test.dev', 'wordos123', 'Loop',
+        phoneCountryCode: '967', phoneNumber: '770000011');
     user = engine.requireUser(auth.token);
   });
 
@@ -313,6 +314,58 @@ void main() {
       expect(evaluation.usedWord, isFalse);
       expect(evaluation.requeued, isTrue);
       expect(evaluation.feedback, contains('does not use'));
+    });
+  });
+
+  // ── The level a learner picks inside a session (ADR-030, ADR-038) ────────
+
+  group('changing the level inside a session', () {
+    test('writes through, so Settings shows it immediately', () {
+      engine.addWord(user, candidate('research'));
+
+      final before = user.levels[SkillType.reading]!.userSelectedLevel;
+      final session = engine.startSession(user, SkillType.reading);
+      final chosen = before == CefrLevel.b2 ? CefrLevel.b1 : CefrLevel.b2;
+
+      final relevelled =
+          engine.changeSessionLevel(user, session.id, chosen);
+
+      expect(relevelled.levelUsed, chosen);
+
+      // Settings renders the profile, not the session. Without the
+      // write-through a learner changes their level here and finds it
+      // unchanged there — which is what was reported.
+      expect(user.levels[SkillType.reading]!.userSelectedLevel, chosen);
+    });
+
+    test('Writing can be re-levelled — it is what the rewrite follows', () {
+      engine.addWord(user, candidate('allocate'));
+      _advanceTo(engine, user, SkillType.writing);
+
+      final session = engine.startSession(user, SkillType.writing);
+      final relevelled =
+          engine.changeSessionLevel(user, session.id, CefrLevel.c1);
+
+      expect(relevelled.levelUsed, CefrLevel.c1);
+      expect(user.levels[SkillType.writing]!.userSelectedLevel, CefrLevel.c1);
+
+      // Nothing was regenerated: a writing task has no passage to re-tell, so
+      // the learner keeps the sentence they were part-way through.
+      expect(relevelled.items.length, session.items.length);
+    });
+
+    test('Spelling has no level to change, and says so', () {
+      engine.addWord(user, candidate('research'));
+      _advanceTo(engine, user, SkillType.spelling);
+
+      final session = engine.startSession(user, SkillType.spelling);
+
+      // Measured, but it carries no CEFR band of its own (ADR-008).
+      expect(
+        () => engine.changeSessionLevel(user, session.id, CefrLevel.c1),
+        throwsA(isA<ApiException>()
+            .having((e) => e.code, 'code', 'LEVEL_NOT_ADJUSTABLE')),
+      );
     });
   });
 

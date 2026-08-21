@@ -62,7 +62,12 @@ class CountryCodeField extends StatelessWidget {
     required this.controller,
     required this.label,
     required this.arabic,
+    this.validator,
   });
+
+  /// Refuses the form when the number is missing (ADR-054). Passed in rather
+  /// than built here so the wording stays with the screen's own strings.
+  final String? Function(String?)? validator;
 
   final CallingCode selected;
   final ValueChanged<CallingCode> onCountryChanged;
@@ -116,6 +121,7 @@ class CountryCodeField extends StatelessWidget {
                 FilteringTextInputFormatter.allow(RegExp(r'[0-9 ()\-]')),
                 LengthLimitingTextInputFormatter(20),
               ],
+              validator: validator,
               decoration: InputDecoration(
                 labelText: label,
                 border: const OutlineInputBorder(),

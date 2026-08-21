@@ -1,2 +1,24 @@
 #include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
 #include "Generated.xcconfig"
+
+// Where a debug build on a device points, and why it lives here.
+//
+// `--dart-define` values reach an Xcode build through DART_DEFINES in
+// Generated.xcconfig — a file Flutter rewrites, including when Xcode itself
+// runs the build. So a build configured from the command line and then started
+// with Xcode's Run button silently loses its defines and falls back to the
+// in-app mock backend: the seeded demo account signs in, a real account is
+// rejected as "wrong email or password", and nothing about the failure points
+// at the cause.
+//
+// This file is checked in and Flutter never rewrites it, so the values survive.
+// `$(inherited)` keeps Flutter's own defines from the include above.
+//
+// Debug only. A release build sends bearer tokens over TLS or not at all
+// (docs/07-SECURITY.md §2), so it has no business pointing at a plain-HTTP
+// address on anyone's desk.
+//
+// Decoded, the two below are:
+//   WORDOS_MOCK=false
+//   WORDOS_API_BASE_URL=http://192.168.1.35:5199/api
+DART_DEFINES=$(inherited),V09SRE9TX01PQ0s9ZmFsc2U=,V09SRE9TX0FQSV9CQVNFX1VSTD1odHRwOi8vMTkyLjE2OC4xLjM1OjUxOTkvYXBp

@@ -6,6 +6,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WordOs.Domain.Common;
 using WordOs.Domain.Lexicon;
+using WordOs.Application.Abstractions;
+using WordOs.Domain.Users;
+using WordOs.Domain.Words;
 
 namespace WordOs.Api.Tests;
 
@@ -56,6 +59,8 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
             email = $"session-{Guid.NewGuid():N}@test.dev",
             password = "correct-horse-battery",
             displayName = "Learner",
+            phoneCountryCode = "967",
+            phoneNumber = "770000001",
         });
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -678,6 +683,869 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
             .FirstAsync(l => l.Skill == SkillType.Spelling);
         Assert.Null(level.UserSelectedLevel);
         Assert.Null(level.SystemAssessedLevel);
+    }
+
+    [SkippableFact]
+    public async Task Naming_a_word_is_not_using_it()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        // Reported from the device: the learner asked the tutor to move the
+        // conversation somewhere the word would fit — and naming it in that
+        // request counted as using it, so the tutor never asked for it again
+        // and the word failed the session it was never given a chance in.
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = "Can you change the topic so I can use research in a sentence?" });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        var used = body.GetProperty("wordsUsed").EnumerateArray()
+            .Select(w => w.GetString()).ToList();
+        var remaining = body.GetProperty("remaining").EnumerateArray()
+            .Select(w => w.GetString()).ToList();
+
+        Assert.DoesNotContain("research", used);
+        Assert.Contains("research", remaining);
+    }
+
+    [SkippableFact]
+    public async Task A_word_the_learner_actually_uses_is_counted_once()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = "I did some research about sleep last week." });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Contains("research", body.GetProperty("wordsUsed").EnumerateArray()
+            .Select(w => w.GetString()));
+
+        // And it stays counted across turns — the record is kept, not
+        // recomputed from a transcript search each time (ADR-040).
+        var second = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = "It was interesting." });
+
+        second.EnsureSuccessStatusCode();
+        var secondBody = await second.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Contains("research", secondBody.GetProperty("wordsUsed").EnumerateArray()
+            .Select(w => w.GetString()));
+    }
+
+    [SkippableFact]
+    public async Task A_word_the_session_saw_used_is_not_failed_as_never_used()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var wordId = await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        // The learner uses it, and the turn records that with the sentence in
+        // front of it.
+        var turn = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = "I did some research about how people sleep at night." });
+        turn.EnsureSuccessStatusCode();
+
+        var turnBody = await turn.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("research", turnBody.GetProperty("wordsUsed").EnumerateArray()
+            .Select(w => w.GetString()));
+
+        // The end-of-conversation judge then says it was never used at all —
+        // a disagreement about a fact, not about quality.
+        Ai.SpeakingVerdict = new SpeakingWordObservation(
+            Word: "research",
+            Used: false,
+            MeaningCorrect: false,
+            Understandable: false,
+            GrammarAcceptable: true,
+            MajorGrammarProblem: false,
+            Evidence: string.Empty,
+            Feedback: "stub");
+
+        var complete = await Client.PostAsync(
+            $"/api/sessions/{sessionId}/complete", null);
+        complete.EnsureSuccessStatusCode();
+
+        await using var context = db.CreateContext();
+        var state = await context.Set<WordSkillState>()
+            .FirstAsync(x => x.WordId == wordId && x.Skill == SkillType.Speaking);
+
+        // The evidence wins: the learner said it, in a sentence of their own.
+        Assert.Equal(SkillStatus.Passed, state.Status);
+    }
+
+    [SkippableFact]
+    public async Task A_conversation_ends_on_a_goodbye_not_on_a_question()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        var turn = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = "I did some research about how people sleep." });
+
+        turn.EnsureSuccessStatusCode();
+        var body = await turn.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.True(body.GetProperty("isFinal").GetBoolean());
+        Assert.Empty(body.GetProperty("remaining").EnumerateArray());
+
+        // The reply is written before the turn is judged, so without asking
+        // again the learner's last line was a question about the word they had
+        // just finished — "try to use the word research" one line after they
+        // used it (ADR-042). The last thing asked for is a turn with nothing
+        // left to practise, which is the closing.
+        Assert.Empty(Ai.LastRemainingWords);
+    }
+
+    [SkippableFact]
+    public async Task A_session_whose_word_has_moved_on_can_still_be_closed()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+        var wordId = await AddWordAsync("research", "بحث علمي");
+
+        var session = await StartAsync("reading");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        // The word moves on while this session is open — the same word
+        // finished elsewhere, or a schedule brought forward (ADR-037).
+        await using (var context = db.CreateContext())
+        {
+            await context.Database.ExecuteSqlAsync(
+                $"""UPDATE words SET "CurrentSkill" = 'Writing' WHERE "Id" = {wordId}""");
+        }
+
+        var complete = await Client.PostAsync(
+            $"/api/sessions/{sessionId}/complete", null);
+
+        // The domain refuses to apply a Reading result to a word now at
+        // Writing, and should. What must not happen is a 500: the session is
+        // then resumed on every visit and can never be finished, which is a
+        // learner permanently stuck on a loading screen (ADR-043).
+        complete.EnsureSuccessStatusCode();
+
+        var body = await complete.Content.ReadFromJsonAsync<JsonElement>();
+        var outcome = body.GetProperty("words").EnumerateArray().Single();
+
+        Assert.True(outcome.GetProperty("superseded").GetBoolean());
+
+        // And the word itself is untouched by a session that no longer owns it.
+        await using (var context = db.CreateContext())
+        {
+            var word = await context.Words.FirstAsync(w => w.Id == wordId);
+            Assert.Equal(SkillType.Writing, word.CurrentSkill);
+        }
+    }
+
+    // ── What counts as saying the word (ADR-049) ────────────────────────────
+
+    [SkippableTheory]
+    // The plural of a plain noun is the same word: "How many books do you
+    // read?" answered with "books" is the learner using `book`, and asking
+    // again for it is the tutor not listening.
+    [InlineData("I read three books every week.", true)]
+    [InlineData("I read one book every week.", true)]
+    [InlineData("My book is on the table.", true)]
+    // Another word that merely starts the same is not the word.
+    [InlineData("I am booking a flight tomorrow.", false)]
+    [InlineData("The bookshop near my house is small.", false)]
+    [InlineData("I like reading in the evening.", false)]
+    public async Task A_regular_plural_counts_and_a_different_word_does_not(
+        string said, bool shouldCount)
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("book", "كتاب");
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = said });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var used = body.GetProperty("wordsUsed").EnumerateArray()
+            .Select(w => w.GetString()).ToList();
+
+        Assert.Equal(shouldCount, used.Contains("book"));
+    }
+
+    [SkippableFact]
+    public async Task An_irregular_plural_is_a_different_word_and_does_not_count()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // `mice` is its own entry with its own pipeline (ADR-045), so a learner
+        // practising `mouse` has not practised it by saying `mice`.
+        await AddWordWithPluralAsync("mouse", "فأر", "mice");
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = "There are two mice in the kitchen." });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.DoesNotContain("mouse", body.GetProperty("wordsUsed").EnumerateArray()
+            .Select(w => w.GetString()));
+    }
+
+    [SkippableTheory]
+    // A verb is not pluralised, and another tense is another vocabulary item.
+    [InlineData("Yesterday I researched the topic for hours.", false)]
+    [InlineData("I am researching the topic today.", false)]
+    [InlineData("I did some research about sleep.", true)]
+    public async Task Another_form_of_a_verb_is_another_word(
+        string said, bool shouldCount)
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = said });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(shouldCount, body.GetProperty("wordsUsed").EnumerateArray()
+            .Select(w => w.GetString()).Contains("research"));
+    }
+
+    [SkippableFact]
+    public async Task Two_senses_of_one_spelling_are_one_thing_to_say()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // A learner may hold the same spelling twice — `book` the object and
+        // `book` the verb are separate senses and separate pipelines. A
+        // transcript cannot tell them apart, so the turn must treat the
+        // spelling as one thing to say rather than look each word up by name.
+        await AddWordAsync("book", "كتاب");
+        await AddWordAsync("book", "يحجز");
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = "I read three books every week." });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        // Said once, reported once — not once per sense.
+        var used = body.GetProperty("wordsUsed").EnumerateArray()
+            .Select(w => w.GetString()).ToList();
+        Assert.Equal(["book"], used);
+    }
+
+    /// <summary>Adds a noun the lexicon also carries an irregular plural for.</summary>
+    private async Task<Guid> AddWordWithPluralAsync(
+        string text, string meaning, string plural)
+    {
+        var senseId = $"pl-{Guid.NewGuid():N}"[..24];
+
+        await using (var context = db.CreateContext())
+        {
+            context.LexiconEntries.Add(LexiconEntry.Create(
+                senseId, text, text, "n", $"a {text}", meaning,
+                CefrLevel.A1, 1, "en=wordos-test;ar=wordos-test",
+                DateTimeOffset.UtcNow));
+
+            // The plural entry is what marks the plural as irregular: a regular
+            // one is never given a row of its own (ADR-045).
+            context.LexiconEntries.Add(LexiconEntry.Create(
+                $"{senseId}#pl", plural, text, "n",
+                $"plural of \"{text}\" — a {text}", $"{meaning} (الجمع)",
+                CefrLevel.A1, 2, "en=wordos-test;ar=wordos-test;form=pl",
+                DateTimeOffset.UtcNow));
+
+            await context.SaveChangesAsync();
+        }
+
+        var response = await Client.PostAsJsonAsync("/api/words", new { senseId });
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return body.GetProperty("id").GetGuid();
+    }
+
+    // ── One conversation at a time (ADR-048) ────────────────────────────────
+
+    [SkippableFact]
+    public async Task Adding_words_mid_conversation_does_not_start_a_second_one()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var started = await StartAsync("speaking");
+        var sessionId = started.GetProperty("id").GetGuid();
+        var words = started.GetProperty("targetWords").GetArrayLength();
+
+        // The learner leaves mid-conversation and adds vocabulary — the most
+        // ordinary thing in the world, and the moment a second session would
+        // appear and split them in two.
+        await AddWordAsync("allocate", "يخصص");
+
+        var resumed = await StartAsync("speaking");
+
+        Assert.Equal(sessionId, resumed.GetProperty("id").GetGuid());
+        Assert.Equal(words, resumed.GetProperty("targetWords").GetArrayLength());
+
+        // And the conversation they were having is still there.
+        Assert.NotEmpty(resumed.GetProperty("conversation")
+            .GetProperty("turns").EnumerateArray());
+    }
+
+    [SkippableFact]
+    public async Task A_conversation_only_ever_asks_for_its_own_words()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var started = await StartAsync("speaking");
+        var sessionId = started.GetProperty("id").GetGuid();
+        var announced = started.GetProperty("targetWords").EnumerateArray()
+            .Select(w => w.GetProperty("text").GetString()).ToList();
+
+        // Words that arrive at Speaking while the conversation is open — added
+        // now, or finished elsewhere and still parked here. Reading the queue
+        // instead of the session's own record turned a two-word session into a
+        // twelve-word interrogation, and the learner saw a screen promising two
+        // words and a tutor asking for a dozen (ADR-039).
+        await AddWordAsync("allocate", "يخصص");
+        await AdvanceToSpeakingAsync();
+
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = "I am fine, thank you for asking." });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var remaining = body.GetProperty("remaining").EnumerateArray()
+            .Select(w => w.GetString()).ToList();
+
+        Assert.Equal(announced, remaining);
+        Assert.DoesNotContain("allocate", remaining);
+    }
+
+    [SkippableFact]
+    public async Task Reaching_for_a_word_and_missing_the_form_is_told_which_form()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // Stands for `went`, the past tense of `go` — an entry of its own
+        // (ADR-045). A learner who says "I go there every year" has not used
+        // it, but they are one step away, and "try to use went" does not say
+        // which step. The verb is invented so the fixture never seeds real
+        // English into the dictionary every other test searches.
+        await AddInflectedWordAsync("vurned", "ذهب", lemma: "vurn", suffix: "pst",
+            siblings: ["vurn", "vurning"]);
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = "I vurn to my village every year with my family." });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        // Not used — another form of a verb is another word (ADR-049).
+        Assert.Empty(body.GetProperty("wordsUsed").EnumerateArray());
+
+        // But the tutor was told exactly what to say back.
+        var reminder = Assert.Single(Ai.LastFormReminders);
+        Assert.Equal("vurned", reminder.Word);
+        Assert.Equal("past tense", reminder.Form);
+        Assert.Equal("vurn", reminder.Said);
+
+        // And it knows what shape the word is, so the question can invite it.
+        Assert.Contains(Ai.LastRemainingShapes,
+            w => w.Text == "vurned" && w.Form == "past tense");
+    }
+
+    [SkippableFact]
+    public async Task Saying_the_word_itself_is_never_reported_as_a_near_miss()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddInflectedWordAsync("vurned", "ذهب", lemma: "vurn", suffix: "pst",
+            siblings: ["vurn", "vurning"]);
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        // A turn containing both the word and another of its forms. They used
+        // it, so there is nothing to repair.
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = "I vurned there last year and I vurn every summer." });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Contains("vurned", body.GetProperty("wordsUsed").EnumerateArray()
+            .Select(w => w.GetString()));
+        Assert.Empty(Ai.LastFormReminders);
+    }
+
+    /// <summary>Adds an inflected entry the lexicon knows the family of.</summary>
+    private async Task<Guid> AddInflectedWordAsync(
+        string text, string meaning, string lemma, string suffix,
+        string[] siblings)
+    {
+        var stem = $"{lemma}-{Guid.NewGuid():N}"[..20];
+        var senseId = $"{stem}#{suffix}";
+
+        await using (var context = db.CreateContext())
+        {
+            context.LexiconEntries.Add(LexiconEntry.Create(
+                senseId, text, lemma, "v", $"the {suffix} of {lemma}", meaning,
+                CefrLevel.A1, 1, "en=wordos-test;ar=wordos-test;form=" + suffix,
+                DateTimeOffset.UtcNow));
+
+            // The rest of the family, which is how a near miss is recognised.
+            foreach (var sibling in siblings)
+            {
+                context.LexiconEntries.Add(LexiconEntry.Create(
+                    $"{stem}-{sibling}", sibling, lemma, "v",
+                    $"a form of {lemma}", meaning,
+                    CefrLevel.A1, 1, "en=wordos-test;ar=wordos-test",
+                    DateTimeOffset.UtcNow));
+            }
+
+            await context.SaveChangesAsync();
+        }
+
+        var response = await Client.PostAsJsonAsync("/api/words", new { senseId });
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return body.GetProperty("id").GetGuid();
+    }
+
+    [SkippableFact]
+    public async Task A_finished_conversation_gives_way_to_the_next_one()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var first = await StartAsync("speaking");
+        var firstId = first.GetProperty("id").GetGuid();
+
+        await Client.PostAsJsonAsync(
+            $"/api/sessions/{firstId}/speaking/turn",
+            new { transcript = "I did some research about sleep last night." });
+
+        var completed = await Client.PostAsync(
+            $"/api/sessions/{firstId}/complete", null);
+        completed.EnsureSuccessStatusCode();
+
+        // A second word arrives at Speaking afterwards.
+        await AddWordAsync("allocate", "يخصص");
+        await AdvanceToSpeakingAsync();
+
+        var second = await StartAsync("speaking");
+
+        // A finished session is finished: the next one is its own conversation,
+        // which is what makes a second day of practice possible at all.
+        Assert.NotEqual(firstId, second.GetProperty("id").GetGuid());
+        Assert.NotEmpty(second.GetProperty("targetWords").EnumerateArray());
+    }
+
+    [SkippableFact]
+    public async Task A_conversation_ends_with_coaching_on_every_word()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn",
+            new { transcript = "I did some research about how people sleep." });
+
+        var complete = await Client.PostAsync(
+            $"/api/sessions/{sessionId}/complete", null);
+        complete.EnsureSuccessStatusCode();
+
+        var body = await complete.Content.ReadFromJsonAsync<JsonElement>();
+        var word = body.GetProperty("words").EnumerateArray().Single();
+
+        // The evaluation always had this; it was computed for the verdict and
+        // then thrown away. A learner told only that a word failed has learned
+        // that they failed and nothing else (ADR-048).
+        Assert.False(string.IsNullOrWhiteSpace(
+            word.GetProperty("feedback").GetString()));
+    }
+
+    // ── A session remembers what it is for (ADR-039) ────────────────────────
+
+    [SkippableFact]
+    public async Task A_conversation_still_has_its_words_when_the_learner_returns()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var started = await StartAsync("speaking");
+        var words = started.GetProperty("targetWords").EnumerateArray()
+            .Select(w => w.GetProperty("text").GetString())
+            .ToList();
+
+        Assert.NotEmpty(words);
+        Assert.NotEmpty(started.GetProperty("warmup").EnumerateArray());
+
+        // The learner leaves and comes back — the hub says words are due, and
+        // this is the request the app makes when they tap the skill again.
+        var resumed = await StartAsync("speaking");
+
+        Assert.Equal(started.GetProperty("id").GetGuid(),
+            resumed.GetProperty("id").GetGuid());
+
+        // A conversation has no items to recover its words from, so they used
+        // to vanish here: five words due on the hub, and nothing to talk about
+        // on the screen.
+        Assert.Equal(words, resumed.GetProperty("targetWords").EnumerateArray()
+            .Select(w => w.GetProperty("text").GetString())
+            .ToList());
+        Assert.NotEmpty(resumed.GetProperty("warmup").EnumerateArray());
+    }
+
+    [SkippableFact]
+    public async Task A_resumed_session_keeps_its_words_even_as_others_move_on()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var started = await StartAsync("speaking");
+        var sessionId = started.GetProperty("id").GetGuid();
+
+        // Something else changes the pipeline underneath the open session —
+        // another word arriving at this skill, or a schedule moving.
+        await AddWordAsync("allocate", "يخصص");
+
+        var resumed = await StartAsync("speaking");
+
+        Assert.Equal(sessionId, resumed.GetProperty("id").GetGuid());
+
+        // The session is about the words it started with. Reading "whatever is
+        // at this skill now" would quietly change what the learner is being
+        // asked about, mid-session.
+        Assert.Equal(
+            started.GetProperty("targetWords").GetArrayLength(),
+            resumed.GetProperty("targetWords").GetArrayLength());
+    }
+
+    [SkippableFact]
+    public async Task An_empty_session_left_by_an_older_build_is_replaced()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var started = await StartAsync("speaking");
+        var sessionId = started.GetProperty("id").GetGuid();
+
+        // Exactly what a session saved before ADR-039 looks like: a
+        // conversation, so no items, and no record of what it was about.
+        await using (var context = db.CreateContext())
+        {
+            await context.Database.ExecuteSqlAsync(
+                $"""UPDATE skill_sessions SET "WordIdsJson" = NULL WHERE "Id" = {sessionId}""");
+        }
+
+        var resumed = await StartAsync("speaking");
+
+        // Not resumed into an empty screen the learner can never leave: the
+        // words never left the queue, so a fresh session is the right answer.
+        Assert.NotEqual(sessionId, resumed.GetProperty("id").GetGuid());
+        Assert.NotEmpty(resumed.GetProperty("targetWords").EnumerateArray());
+    }
+
+    // ── Changing the level of a writing task (ADR-038) ──────────────────────
+
+    [SkippableFact]
+    public async Task Writing_can_be_relevelled_and_the_rewrite_follows_it()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToWritingAsync();
+
+        var session = await StartAsync("writing");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        var relevelled = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/level", new { level = "C1" });
+
+        relevelled.EnsureSuccessStatusCode();
+        var body = await relevelled.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("C1", body.GetProperty("levelUsed").GetString());
+
+        // Nothing was regenerated: a writing task has no passage to re-tell, so
+        // the learner keeps the task they were part-way through.
+        Assert.Equal(
+            session.GetProperty("items").GetArrayLength(),
+            body.GetProperty("items").GetArrayLength());
+
+        // And the level is what the rewrite is written at — the reason the
+        // control exists on this screen at all.
+        var item = body.GetProperty("items").EnumerateArray().First();
+        var answer = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/writing",
+            new
+            {
+                itemId = item.GetProperty("id").GetGuid(),
+                answer = "I did research about sleep yesterday.",
+            });
+
+        answer.EnsureSuccessStatusCode();
+        var evaluation = await answer.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("C1", evaluation.GetProperty("suggestion").GetString()!);
+    }
+
+    [SkippableFact]
+    public async Task The_level_a_learner_picks_in_a_session_becomes_their_level()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        var session = await StartAsync("reading");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/level", new { level = "B2" });
+        response.EnsureSuccessStatusCode();
+
+        // Settings renders the profile, so this is what the learner sees there.
+        var me = await Client.GetFromJsonAsync<JsonElement>("/api/me");
+        var reading = me.GetProperty("skillLevels").EnumerateArray()
+            .First(l => l.GetProperty("skill").GetString() == "READING");
+
+        Assert.Equal("B2", reading.GetProperty("userSelectedLevel").GetString());
+
+        // And only the user-selected level: performance decides the validated
+        // one, and a tap is not performance (rule R6).
+        Assert.NotEqual("B2",
+            reading.GetProperty("systemAssessedLevel").GetString() ?? "none");
+    }
+
+    // ── The Owner's time skip (ADR-037) ─────────────────────────────────────
+
+    [SkippableFact]
+    public async Task Skipping_two_days_opens_the_next_skill_without_waiting()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+        var wordId = await AddWordAsync("research", "بحث علمي");
+
+        // Pass Reading, which schedules Listening two days out. Without the
+        // skip, testing the rest of the pipeline means waiting eight days.
+        await FinishAsync(await StartAsync("reading"));
+
+        await using (var context = db.CreateContext())
+        {
+            var listening = await context.Set<WordSkillState>()
+                .FirstAsync(x => x.WordId == wordId && x.Skill == SkillType.Listening);
+
+            Assert.Equal(SkillStatus.Pending,
+                listening.EffectiveStatus(Clock.GetUtcNow()));
+        }
+
+        var owner = await SignInAsOwnerAsync();
+        var response = await owner.PostAsJsonAsync(
+            $"/api/admin/users/{userId}/advance-schedule", new { days = 2 });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(2, body.GetProperty("days").GetInt32());
+
+        await using (var context = db.CreateContext())
+        {
+            var listening = await context.Set<WordSkillState>()
+                .FirstAsync(x => x.WordId == wordId && x.Skill == SkillType.Listening);
+
+            Assert.Equal(SkillStatus.Available,
+                listening.EffectiveStatus(Clock.GetUtcNow()));
+        }
+
+        // And the session it unlocked actually starts.
+        var session = await StartAsync("listening");
+        Assert.NotEmpty(session.GetProperty("items").EnumerateArray());
+    }
+
+    [SkippableFact]
+    public async Task The_skip_moves_the_waiting_and_nothing_that_already_happened()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+        var wordId = await AddWordAsync("research", "بحث علمي");
+        await FinishAsync(await StartAsync("reading"));
+
+        DateTimeOffset? passedAt;
+        int attempts;
+        await using (var context = db.CreateContext())
+        {
+            var reading = await context.Set<WordSkillState>()
+                .FirstAsync(x => x.WordId == wordId && x.Skill == SkillType.Reading);
+            passedAt = reading.PassedAt;
+            attempts = reading.Attempts;
+        }
+
+        var owner = await SignInAsOwnerAsync();
+        await owner.PostAsJsonAsync(
+            $"/api/admin/users/{userId}/advance-schedule", new { days = 2 });
+
+        await using (var context = db.CreateContext())
+        {
+            var reading = await context.Set<WordSkillState>()
+                .FirstAsync(x => x.WordId == wordId && x.Skill == SkillType.Reading);
+
+            // History is the evidence the experiment runs on. A tool that
+            // rewrote it would make every figure on the dashboard a guess.
+            Assert.Equal(passedAt, reading.PassedAt);
+            Assert.Equal(attempts, reading.Attempts);
+            Assert.Equal(SkillStatus.Passed, reading.Status);
+
+            // And the skip itself is recorded, so a pipeline finished in an
+            // afternoon does not read as an extraordinary learner.
+            Assert.True(await context.ActivityEvents.AnyAsync(
+                e => e.UserId == userId && e.Type == ActivityType.ScheduleAdvanced));
+        }
+    }
+
+    [SkippableFact]
+    public async Task Only_the_owner_may_move_a_schedule()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        // The caller here is an ordinary learner — their own account, even.
+        // Hiding the button is not access control.
+        var response = await Client.PostAsJsonAsync(
+            $"/api/admin/users/{userId}/advance-schedule", new { days = 2 });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [SkippableTheory]
+    [InlineData(0)]
+    [InlineData(-30)]
+    [InlineData(999999999)]
+    public async Task A_nonsense_number_of_days_is_clamped_not_obeyed(int days)
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        var owner = await SignInAsOwnerAsync();
+        var response = await owner.PostAsJsonAsync(
+            $"/api/admin/users/{userId}/advance-schedule", new { days });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        var applied = body.GetProperty("days").GetInt32();
+        Assert.InRange(applied, 1, 30);
+    }
+
+    /// <summary>A second client, signed in as the Owner.</summary>
+    private async Task<HttpClient> SignInAsOwnerAsync()
+    {
+        var email = $"owner-{Guid.NewGuid():N}@test.dev";
+
+        var client = _factory!.CreateClient();
+        var response = await client.PostAsJsonAsync("/api/auth/register", new
+        {
+            email,
+            password = "correct-horse-battery",
+            displayName = "Owner",
+            phoneCountryCode = "967",
+            phoneNumber = "770000008",
+        });
+        response.EnsureSuccessStatusCode();
+
+        // Directly in the database, because the API offers no way to grant the
+        // role — which is itself a property worth keeping.
+        await using (var context = db.CreateContext())
+        {
+            await context.Database.ExecuteSqlAsync(
+                $"""UPDATE users SET "Role" = 'Owner' WHERE "Email" = {email}""");
+        }
+
+        // Re-issued after the change, so the token carries the new role.
+        var login = await client.PostAsJsonAsync("/api/auth/login",
+            new { email, password = "correct-horse-battery" });
+        login.EnsureSuccessStatusCode();
+        var body = await login.Content.ReadFromJsonAsync<JsonElement>();
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer", body.GetProperty("token").GetString());
+
+        return client;
     }
 
     /// <summary>
@@ -1663,6 +2531,63 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         Assert.Equal(CefrLevel.A2, level.UserSelectedLevel);
     }
 
+    [SkippableFact]
+    public async Task A_two_word_entry_can_actually_be_spelled()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("alarm clock", "منبّه");
+        await AdvanceToSpellingAsync();
+
+        var session = await StartAsync("spelling");
+        var item = session.GetProperty("items").EnumerateArray().Single();
+
+        var letters = item.GetProperty("letters").EnumerateArray()
+            .Select(l => l.GetString()!)
+            .ToList();
+
+        // Without a space tile the pool is a puzzle with no solution: every
+        // letter can be laid out and the word still is not written (ADR-042).
+        Assert.Contains(" ", letters);
+
+        // Every letter is there too, counted properly.
+        foreach (var group in "alarmclock".GroupBy(c => c))
+        {
+            Assert.True(
+                letters.Count(l => l == group.Key.ToString()) >= group.Count(),
+                $"not enough '{group.Key}' tiles");
+        }
+    }
+
+    [SkippableTheory]
+    [InlineData("alarm clock")]
+    [InlineData("alarmclock")]
+    [InlineData("ALARM CLOCK")]
+    [InlineData("alarm  clock")]
+    public async Task Spelling_ignores_how_the_spaces_fell(string answer)
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("alarm clock", "منبّه");
+        await AdvanceToSpellingAsync();
+
+        var session = await StartAsync("spelling");
+        var sessionId = session.GetProperty("id").GetGuid();
+        var item = session.GetProperty("items").EnumerateArray().Single();
+
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/answer",
+            new { itemId = item.GetProperty("id").GetGuid(), answer });
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        // The exercise is the letters. A learner with every letter right must
+        // not be failed by a gap — least of all one they had to tap for.
+        Assert.True(body.GetProperty("isCorrect").GetBoolean(),
+            $"\"{answer}\" should count as spelling \"alarm clock\"");
+    }
+
     // ── The spelling hint ladder ─────────────────────────────────────────────
 
     [SkippableTheory]
@@ -1774,5 +2699,252 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         Assert.DoesNotContain("SYNONYM", kinds);
         Assert.Contains("ARABIC_MEANING", kinds);
         Assert.Contains("LETTER_COUNT", kinds);
+    }
+
+    // ── Starting a session is exclusive, and cheap to lose ───────────────────
+    //
+    // These cover the defects found by the August 2026 audit. Each one is a
+    // rule the service already believed it enforced.
+
+    [SkippableFact]
+    public async Task Simultaneous_starts_produce_one_session_and_one_AI_call()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        var before = Ai.ContentCalls;
+
+        // Six taps arriving together, which is what a double-tap on a slow
+        // connection looks like at the server. This used to produce six
+        // sessions and six generations; the passage is the expensive part, so
+        // that was the bill multiplied by six for one learner's impatience.
+        var responses = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ =>
+            Client.PostAsync("/api/sessions/reading/start", null)));
+
+        // Two honest answers, depending on where in the winner's generation a
+        // request landed: the finished session, or "it is still being
+        // prepared". Never a second session, and never a 500.
+        var ids = new HashSet<Guid>();
+        foreach (var response in responses)
+        {
+            if (response.StatusCode == HttpStatusCode.Conflict)
+            {
+                var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+                Assert.Equal("SESSION_STARTING", problem
+                    .GetProperty("error").GetProperty("code").GetString());
+                continue;
+            }
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            ids.Add(body.GetProperty("id").GetGuid());
+        }
+
+        // The two invariants that matter, and the two that used to break: one
+        // session, and one passage paid for.
+        Assert.Single(ids);
+        Assert.Equal(before + 1, Ai.ContentCalls);
+
+        // Scoped to this learner: the suite shares one database, and the index
+        // being tested is per (user, skill) — other tests legitimately hold an
+        // open Reading session of their own.
+        await using var context = db.CreateContext();
+        Assert.Equal(1, await context.SkillSessions.CountAsync(
+            x => x.UserId == userId && !x.IsComplete
+                 && x.Skill == SkillType.Reading));
+    }
+
+    [SkippableFact]
+    public async Task Abandoning_a_finished_session_is_refused_not_obeyed()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        var session = await StartAsync("reading");
+        var sessionId = session.GetProperty("id").GetGuid();
+        await FinishAsync(session);
+
+        var response = await Client.PostAsync(
+            $"/api/sessions/{sessionId}/abandon", null);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        // The point of the refusal: the session is the record of what happened,
+        // and this service exists to measure itself. Obeying the abandon
+        // deleted the row, its items, the comprehension score and the token
+        // cost, leaving word outcomes with no evidence behind them.
+        await using var context = db.CreateContext();
+        Assert.True(await context.SkillSessions.AnyAsync(x => x.Id == sessionId));
+        Assert.True(await context.SessionItems.AnyAsync(x => x.SessionId == sessionId));
+    }
+
+    [SkippableFact]
+    public async Task Completing_early_leaves_the_unasked_words_exactly_as_they_were()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+        var wordId = await AddWordAsync("research", "بحث علمي");
+
+        var session = await StartAsync("reading");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        DateTimeOffset? availableBefore;
+        await using (var context = db.CreateContext())
+        {
+            var word = await context.Words.Include(w => w.Skills)
+                .FirstAsync(w => w.Id == wordId);
+            availableBefore = word.SkillState(SkillType.Reading).AvailableAt;
+        }
+
+        // Not a single item answered — a client that posts /complete with the
+        // queue still full, or a learner who force-quits at the wrong moment.
+        var response = await Client.PostAsync(
+            $"/api/sessions/{sessionId}/complete", null);
+        response.EnsureSuccessStatusCode();
+        var result = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        var outcome = result.GetProperty("words").EnumerateArray()
+            .Single(w => w.GetProperty("wordId").GetGuid() == wordId);
+
+        Assert.True(outcome.GetProperty("untouched").GetBoolean());
+        Assert.False(outcome.GetProperty("passed").GetBoolean());
+
+        // A word nobody asked about did not fail. It used to come back FAILED
+        // with zero attempts and a two-day wait, which is a false reading in
+        // the only data the experiment has.
+        await using (var context = db.CreateContext())
+        {
+            var word = await context.Words.Include(w => w.Skills)
+                .FirstAsync(w => w.Id == wordId);
+            var state = word.SkillState(SkillType.Reading);
+
+            Assert.Equal(SkillType.Reading, word.CurrentSkill);
+            Assert.NotEqual(SkillStatus.Failed, state.Status);
+            Assert.Equal(availableBefore, state.AvailableAt);
+        }
+
+        // And it is still there to be practised today.
+        var hub = await Client.GetFromJsonAsync<JsonElement>("/api/hub");
+        Assert.Equal(1, hub.GetProperty("skills").EnumerateArray()
+            .First(s => s.GetProperty("skill").GetString() == "READING")
+            .GetProperty("dueWordCount").GetInt32());
+    }
+
+    [SkippableFact]
+    public async Task An_answered_word_is_still_judged_normally()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var wordId = await AddWordAsync("research", "بحث علمي");
+
+        var result = await FinishAsync(await StartAsync("reading"));
+
+        var outcome = result.GetProperty("words").EnumerateArray()
+            .Single(w => w.GetProperty("wordId").GetGuid() == wordId);
+
+        // The guard above must not turn into "nothing ever fails or passes".
+        Assert.True(outcome.GetProperty("passed").GetBoolean());
+        Assert.Equal("LISTENING", outcome.GetProperty("nextSkill").GetString());
+        Assert.False(
+            outcome.TryGetProperty("untouched", out var untouched)
+            && untouched.GetBoolean());
+    }
+
+    // ── Practice must not stand in the way of real words ─────────────────────
+
+    [SkippableFact]
+    public async Task A_practice_session_gives_way_when_real_words_are_due()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var practice = await Client.PostAsync(
+            "/api/sessions/reading/start?practice=true", null);
+        practice.EnsureSuccessStatusCode();
+        var practiceId = (await practice.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("id").GetGuid();
+
+        await AddWordAsync("research", "بحث علمي");
+
+        var real = await StartAsync("reading");
+
+        // The learner asked for their pipeline and got it. Before this, they
+        // were handed the practice session back and had no way past it.
+        Assert.NotEqual(practiceId, real.GetProperty("id").GetGuid());
+        Assert.False(real.GetProperty("isPractice").GetBoolean());
+        Assert.Contains(
+            real.GetProperty("targetWords").EnumerateArray(),
+            w => w.GetProperty("text").GetString() == "research");
+    }
+
+    [SkippableFact]
+    public async Task A_practice_session_survives_a_start_that_had_nothing_to_offer()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var practice = await Client.PostAsync(
+            "/api/sessions/reading/start?practice=true", null);
+        practice.EnsureSuccessStatusCode();
+        var practiceId = (await practice.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("id").GetGuid();
+
+        // Nothing is due, so there is nothing to give way *to*. Dropping the
+        // practice here would cost the learner their place for no gain.
+        var real = await Client.PostAsync("/api/sessions/reading/start", null);
+        Assert.Equal(HttpStatusCode.Conflict, real.StatusCode);
+
+        var resumed = await Client.GetFromJsonAsync<JsonElement>(
+            $"/api/sessions/{practiceId}");
+        Assert.Equal(practiceId, resumed.GetProperty("id").GetGuid());
+    }
+
+    [SkippableFact]
+    public async Task A_practice_session_left_open_overnight_is_not_resumed()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var first = await Client.PostAsync(
+            "/api/sessions/reading/start?practice=true", null);
+        first.EnsureSuccessStatusCode();
+        var staleId = (await first.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("id").GetGuid();
+
+        Clock.Advance(TimeSpan.FromHours(25));
+
+        var second = await Client.PostAsync(
+            "/api/sessions/reading/start?practice=true", null);
+        second.EnsureSuccessStatusCode();
+        var fresh = await second.Content.ReadFromJsonAsync<JsonElement>();
+
+        // Sessions never expired at all, so one opened in April was still what
+        // the skill handed back in August.
+        Assert.NotEqual(staleId, fresh.GetProperty("id").GetGuid());
+    }
+
+    [SkippableFact]
+    public async Task Practice_resumed_the_same_day_still_returns_the_learner_to_it()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var first = await Client.PostAsync(
+            "/api/sessions/reading/start?practice=true", null);
+        first.EnsureSuccessStatusCode();
+        var id = (await first.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("id").GetGuid();
+
+        // The case the expiry must not break: away for lunch, not for a week.
+        Clock.Advance(TimeSpan.FromHours(3));
+
+        var second = await Client.PostAsync(
+            "/api/sessions/reading/start?practice=true", null);
+        second.EnsureSuccessStatusCode();
+        var resumed = await second.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(id, resumed.GetProperty("id").GetGuid());
     }
 }

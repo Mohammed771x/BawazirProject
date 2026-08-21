@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -10,6 +11,7 @@ import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/theme/skill_visuals.dart';
+import '../hub/hub_screen.dart';
 import '../../core/widgets/app_widgets.dart';
 import 'developer_widgets.dart';
 
@@ -59,12 +61,41 @@ class _Body extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.all(AppSpacing.md),
       children: [
+        // ── Testing tools ───────────────────────────────────────────────────
+        //
+        // The pipeline's two-day gaps are the behaviour the product exists to
+        // measure, and they make it impossible to demonstrate: seeing one word
+        // through five skills takes over a week of waiting. This brings the
+        // waiting forward (ADR-037).
+        SectionHeader(title: s.devTimeTravel),
+        _SkipDaysCard(userId: detail.summary.id),
+        const SizedBox(height: AppSpacing.lg),
+
+        // ── Contact ─────────────────────────────────────────────────────────
+        //
+        // Owner-only, and tap-to-copy: the reason it is here is that the next
+        // thing an Owner does after reading a report is reach the person who
+        // sent it, and gathering numbers for a group is the same act (ADR-053).
+        SectionHeader(title: s.devContact),
+        AppCard(
+          child: Column(
+            children: [
+              _CopyRow(label: s.email, value: detail.summary.email),
+              _CopyRow(
+                label: s.phoneNumber,
+                value: detail.summary.phone,
+                missing: s.devNoPhone,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: AppSpacing.lg),
+
         // ── Account ─────────────────────────────────────────────────────────
         SectionHeader(title: s.devAccount),
         AppCard(
           child: Column(
             children: [
-              _Row(label: s.email, value: detail.summary.email),
               _Row(
                 label: s.devJoined,
                 value: dates.format(detail.summary.createdAt.toLocal()),
@@ -512,6 +543,148 @@ class _LevelChip extends StatelessWidget {
         ),
         Text(value, style: context.text.titleSmall?.copyWith(color: color)),
       ],
+    );
+  }
+}
+
+/// The Owner's time skip.
+///
+/// Deliberately explains itself rather than being a bare button: it changes a
+/// learner's schedule, and anyone who finds it should be able to see what it
+/// will and will not do before pressing it.
+class _SkipDaysCard extends ConsumerStatefulWidget {
+  const _SkipDaysCard({required this.userId});
+
+  final String userId;
+
+  @override
+  ConsumerState<_SkipDaysCard> createState() => _SkipDaysCardState();
+}
+
+class _SkipDaysCardState extends ConsumerState<_SkipDaysCard> {
+  bool _busy = false;
+
+  Future<void> _skip(AppStrings s) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+
+    try {
+      final result = await ref
+          .read(wordOsApiProvider)
+          .adminAdvanceSchedule(widget.userId, days: 2);
+
+      // The learner's page and the hub both read schedules, so both are stale
+      // the moment this returns.
+      ref.invalidate(adminUserDetailProvider(widget.userId));
+      ref.invalidate(hubProvider);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(s.devSkipDaysDone(result.days, result.skillsDueNow)),
+      ));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.apiError(e.code, e.message))),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ref.watch(stringsProvider);
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(s.devSkipDaysHint, style: context.text.bodySmall),
+          const SizedBox(height: AppSpacing.sm),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: FilledButton.tonalIcon(
+              onPressed: _busy ? null : () => _skip(s),
+              icon: _busy
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.fast_forward_rounded, size: 18),
+              label: Text(s.devSkipDays),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A contact detail the Owner can lift straight out of the screen.
+///
+/// Copy rather than a `tel:` or `mailto:` link: the Owner is usually building
+/// a list, not placing a call, and a link would open an app they did not ask
+/// for. Nothing is copied automatically — it takes a tap.
+class _CopyRow extends ConsumerWidget {
+  const _CopyRow({
+    required this.label,
+    required this.value,
+    this.missing,
+  });
+
+  final String label;
+  final String? value;
+  final String? missing;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+    final text = value;
+    final has = text != null && text.isNotEmpty;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxs),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: context.text.labelSmall?.copyWith(
+                color: context.colors.onSurface.withValues(alpha: 0.6),
+              ),
+            ),
+          ),
+          Flexible(
+            child: Text(
+              has ? text : (missing ?? '—'),
+              textAlign: TextAlign.end,
+              style: context.text.bodySmall?.copyWith(
+                color: has
+                    ? null
+                    : context.colors.onSurface.withValues(alpha: 0.5),
+              ),
+            ),
+          ),
+          if (has) ...[
+            const SizedBox(width: AppSpacing.xxs),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              iconSize: 16,
+              tooltip: s.devCopied,
+              icon: const Icon(Icons.copy_rounded),
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: text));
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(SnackBar(content: Text(s.devCopied)));
+                }
+              },
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

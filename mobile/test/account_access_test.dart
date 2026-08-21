@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wordos/core/storage/app_preferences.dart';
@@ -103,6 +104,118 @@ void main() {
     expect(find.text('Welcome back'), findsNothing);
   });
 
+  testWidgets('the support button hands WhatsApp the right link',
+      (tester) async {
+    // The plugin is not present in a test binary, so the platform channel is
+    // answered here — which is also the only way to see *what* the app asks
+    // the phone to open (ADR-055).
+    final launched = <String>[];
+
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/url_launcher'),
+      (call) async {
+        if (call.method == 'launch' || call.method == 'launchUrl') {
+          launched.add((call.arguments as Map)['url'] as String);
+          return true;
+        }
+        if (call.method == 'canLaunch') return true;
+        return null;
+      },
+    );
+
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+            const MethodChannel('plugins.flutter.io/url_launcher'), null));
+
+    await bootAndSignIn(tester);
+
+    await tester.tap(find.byIcon(Icons.settings_outlined));
+    await tester.pumpAndSettle();
+
+    final support = find.text('Contact support');
+
+    // Dragged rather than scrollUntilVisible: the list disposes what it has
+    // scrolled past, so settling after it comes into view can dispose it again
+    // before the tap lands. Found and tapped in the same settled frame.
+    for (var attempt = 0; attempt < 12 && support.evaluate().isEmpty; attempt++) {
+      await tester.drag(find.byType(ListView).first, const Offset(0, -400));
+      await tester.pumpAndSettle();
+    }
+
+    expect(support, findsOneWidget,
+        reason: 'Settings should offer a way to reach support');
+
+    await tester.tap(support);
+    await tester.pumpAndSettle();
+
+    expect(launched, ['https://wa.me/917558973719'],
+        reason: 'one tap, straight to the chat — no dialog in between');
+  });
+
+  testWidgets('an account cannot be created without a phone number',
+      (tester) async {
+    // Required (ADR-054): an account the Owner cannot reach is one whose
+    // learner cannot be helped when they report a problem — which is the whole
+    // reason the number is collected.
+    await bootApp(tester);
+    await tester.pumpAndSettle();
+
+    final create = find.widgetWithText(TextButton, 'Create account');
+    await tester.ensureVisible(create);
+    await tester.pumpAndSettle();
+    await tester.tap(create);
+    await tester.pumpAndSettle();
+
+    final fields = find.byType(TextFormField);
+    await tester.enterText(fields.at(0), 'Salem');
+    await tester.enterText(fields.at(1), 'salem@wordos.test');
+    // Phone deliberately left empty.
+    await tester.enterText(fields.last, 'wordos123');
+
+    final submit = find.widgetWithText(FilledButton, 'Create account');
+    await tester.ensureVisible(submit);
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+
+    // Stopped at the form, with the reason said in the learner's language —
+    // not sent, refused by the server and shown as a generic failure.
+    expect(find.text('Enter your phone number so we can reach you.'),
+        findsOneWidget);
+    expect(find.text('Create your account'), findsWidgets,
+        reason: 'the learner should still be on the form');
+  });
+
+  testWidgets('punctuation is not a phone number', (tester) async {
+    await bootApp(tester);
+    await tester.pumpAndSettle();
+
+    final create = find.widgetWithText(TextButton, 'Create account');
+    await tester.ensureVisible(create);
+    await tester.pumpAndSettle();
+    await tester.tap(create);
+    await tester.pumpAndSettle();
+
+    final fields = find.byType(TextFormField);
+    await tester.enterText(fields.at(0), 'Salem');
+    await tester.enterText(fields.at(1), 'salem2@wordos.test');
+    // The field permits these characters as separators; on their own they are
+    // not a number, and the server refuses them for the same reason.
+    //
+    // Index 2: name, email, phone, password. The country code is a picker
+    // rather than a field, and this was written as `at(3)` — the password box —
+    // so the phone stayed empty and the test passed for the wrong reason.
+    await tester.enterText(fields.at(2), '()- ');
+    await tester.enterText(fields.last, 'wordos123');
+
+    final submit = find.widgetWithText(FilledButton, 'Create account');
+    await tester.ensureVisible(submit);
+    await tester.tap(submit);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Enter your phone number so we can reach you.'),
+        findsOneWidget);
+  });
+
   testWidgets('the sign-in link works even when nothing can be popped',
       (tester) async {
     // A learner arriving from the product tour lands on register with an empty
@@ -111,7 +224,13 @@ void main() {
     await bootApp(tester);
     await tester.pumpAndSettle();
 
-    await tester.tap(find.widgetWithText(TextButton, 'Create account'));
+    // Scrolled to first: the link sits at the foot of the form, and anything
+    // added above it — a notice, a banner — pushes it past the fold on a small
+    // screen, where a tap lands on nothing.
+    final create = find.widgetWithText(TextButton, 'Create account');
+    await tester.ensureVisible(create);
+    await tester.pumpAndSettle();
+    await tester.tap(create);
     await tester.pumpAndSettle();
     expect(find.text('Create your account'), findsWidgets);
 

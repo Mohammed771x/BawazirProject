@@ -106,7 +106,29 @@ public sealed record AiTargetWord(
     string Text,
     string Meaning,
     string Definition,
-    string PartOfSpeech);
+    string PartOfSpeech,
+    /// <summary>
+    /// Which form this is — <c>past tense</c>, <c>past participle</c>,
+    /// <c>-ing form</c>, <c>plural</c> — or null for the word itself.
+    /// </summary>
+    /// <remarks>
+    /// A learner who added <c>played</c> as the participle is practising "I
+    /// have played", so the passage has to put it in a perfect tense rather
+    /// than wherever the generator finds convenient (ADR-047).
+    /// </remarks>
+    string? Form = null,
+    /// <summary>
+    /// Whether the passage may use the plural instead of the singular.
+    /// </summary>
+    /// <remarks>
+    /// True only for a noun whose plural is the word plus <c>s</c> or
+    /// <c>es</c>: seeing <c>books</c> where <c>book</c> was expected teaches the
+    /// learner something and costs them nothing. False when the plural is a
+    /// different word — <c>mice</c>, <c>children</c> — because that is a word
+    /// they have not learned, and it is a vocabulary item of its own
+    /// (ADR-045).
+    /// </remarks>
+    bool MayPluralise = false);
 
 /// <param name="ReuseWords">
 /// Active vocabulary the generator should weave in where it fits naturally.
@@ -124,7 +146,7 @@ public sealed record ContentRequest(
     IReadOnlyList<AiTargetWord> Words,
     bool Listening,
     int ComprehensionCount,
-    IReadOnlyList<string> ReuseWords);
+    IReadOnlyList<AiTargetWord> ReuseWords);
 
 /// <summary>Three sentences around a target word, for inference from context.</summary>
 public sealed record GeneratedWordContext(
@@ -211,16 +233,49 @@ public sealed record WritingObservation(
 
 public sealed record SpeakingTranscriptTurn(bool FromAi, string Text);
 
+/// <summary>
+/// A word the learner all but used: they said another form of it (ADR-050).
+/// </summary>
+/// <param name="Word">The form they are practising — <c>went</c>.</param>
+/// <param name="Form">What that form is — "past tense".</param>
+/// <param name="Said">The form they actually used — <c>go</c>.</param>
+public sealed record SpeakingFormReminder(string Word, string Form, string Said);
+
 public sealed record SpeakingTurnRequest(
     string LearnerName,
     CefrLevel Level,
     IReadOnlyList<string> RemainingWords,
     IReadOnlyList<string> UsedWords,
-    IReadOnlyList<SpeakingTranscriptTurn> Transcript);
+    IReadOnlyList<SpeakingTranscriptTurn> Transcript,
+    /// <summary>
+    /// What the learner likes, for choosing between the situations a target
+    /// word could live in — never a reason to force one somewhere it does not
+    /// belong (ADR-040).
+    /// </summary>
+    IReadOnlyList<string>? Interests = null,
+    /// <summary>
+    /// The shape of each remaining word, so the question invites the form the
+    /// learner is actually practising (ADR-047) rather than the plain word.
+    /// </summary>
+    IReadOnlyList<AiTargetWord>? RemainingShapes = null,
+    /// <summary>
+    /// Words the learner reached for and got the form wrong (ADR-050). The
+    /// tutor names the step they missed instead of repeating the word at them.
+    /// </summary>
+    IReadOnlyList<SpeakingFormReminder>? FormReminders = null);
 
 public sealed record SpeakingObservation(
     string Reply,
-    IReadOnlyList<string> WordsUsedNaturally,
+    /// <summary>
+    /// Target words the learner only *named* — "let me use hook in a sentence"
+    /// — rather than used. Usually empty.
+    /// </summary>
+    /// <remarks>
+    /// Whether a word was used is read from the transcript, which cannot be
+    /// wrong about it. This is the one judgement the text cannot make, so it is
+    /// the only one asked of the model (ADR-048).
+    /// </remarks>
+    IReadOnlyList<string> WordsOnlyNamed,
     bool FromFallback,
     string PromptVersion = "",
     string Model = "",
@@ -254,7 +309,13 @@ public sealed record SpeakingWordObservation(
     bool GrammarAcceptable,
     bool MajorGrammarProblem,
     string Evidence,
-    string Feedback);
+    string Feedback,
+    /// <summary>
+    /// One English sentence with the word used well — their own repaired, or a
+    /// model to copy. What a learner needs after being told they were wrong
+    /// (ADR-048).
+    /// </summary>
+    string Better = "");
 
 public sealed record SpeakingEvaluation(
     IReadOnlyList<SpeakingWordObservation> Words,

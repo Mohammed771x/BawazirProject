@@ -61,6 +61,29 @@ class WordDetailScreen extends ConsumerWidget {
                       ],
                     ),
                     const SizedBox(height: AppSpacing.xxs),
+
+                    // The grammar of the entry, said plainly (ADR-056): what
+                    // kind of word it is, and which form — the two questions a
+                    // learner looking at `went` in their own list cannot
+                    // otherwise answer.
+                    Wrap(
+                      spacing: AppSpacing.xxs,
+                      runSpacing: AppSpacing.xxs,
+                      children: [
+                        if (word.partOfSpeech.trim().isNotEmpty)
+                          StatusPill(
+                            label: s.partOfSpeechLabel(word.partOfSpeech),
+                            color: context.colors.primary,
+                          ),
+                        if (s.wordFormLabel(word.form) case final form?)
+                          StatusPill(
+                            label: form,
+                            color: context.palette.warning,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.xxs),
+
                     Text(
                       word.meaning,
                       textDirection: TextDirection.rtl,

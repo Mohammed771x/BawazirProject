@@ -49,7 +49,8 @@ void main() {
 
     test('registering never yields an owner account', () async {
       final engine = MockEngine();
-      final auth = engine.register('new@wordos.app', 'wordos123', 'New');
+      final auth = engine.register('new@wordos.app', 'wordos123', 'New',
+            phoneCountryCode: '967', phoneNumber: '770000010');
 
       expect(auth.user.role, UserRole.user);
     });
@@ -149,6 +150,59 @@ void main() {
     });
   });
 
+  group('the time skip (ADR-037)', () {
+    test('a normal learner is refused, whoever the schedule belongs to',
+        () async {
+      final api = apiFor('demo@wordos.app', 'wordos123');
+      final me = await api.me();
+
+      // Their own schedule, even. Moving time is an Owner's tool, and hiding
+      // the button is not access control.
+      await expectLater(
+        api.adminAdvanceSchedule(me.id),
+        throwsA(isA<ApiException>()
+            .having((e) => e.code, 'code', 'FORBIDDEN')
+            .having((e) => e.statusCode, 'status', 403)),
+      );
+    });
+
+    test('the owner brings a waiting skill forward without waiting', () async {
+      final engine = MockEngine();
+      String? token;
+      final api = MockWordOsApi(engine: engine, tokenReader: () => token);
+
+      // A learner with a word part-way through the pipeline.
+      token = engine.login('demo@wordos.app', 'wordos123').token;
+      final learner = await api.me();
+
+      final before = await api.words();
+      expect(before.items, isNotEmpty);
+
+      token = engine.login('owner@wordos.app', 'wordos123').token;
+      final result = await api.adminAdvanceSchedule(learner.id, days: 2);
+
+      expect(result.days, 2);
+      expect(result.wordsShifted, before.total);
+      // Two days is exactly the gap, so whatever was waiting is now due.
+      expect(result.skillsDueNow, greaterThan(0));
+    });
+
+    test('a nonsense number of days is clamped, not obeyed', () async {
+      final engine = MockEngine();
+      String? token;
+      final api = MockWordOsApi(engine: engine, tokenReader: () => token);
+
+      token = engine.login('demo@wordos.app', 'wordos123').token;
+      final learner = await api.me();
+      token = engine.login('owner@wordos.app', 'wordos123').token;
+
+      for (final days in [0, -30, 999999999]) {
+        final result = await api.adminAdvanceSchedule(learner.id, days: days);
+        expect(result.days, inInclusiveRange(1, 30));
+      }
+    });
+  });
+
   group('routing and rendering', () {
     Future<void> openSettings(WidgetTester tester) async {
       await tester.tap(find.byIcon(Icons.settings_outlined));
@@ -240,6 +294,158 @@ void main() {
       }
     });
 
+    testWidgets('a learner writes to the owner and the owner reads it',
+        (tester) async {
+      // The whole point of the feature end to end: before this a learner who
+      // hit a problem had no way to tell anyone (ADR-053).
+      await bootApp(tester, surfaceSize: const Size(1200, 2600));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byType(TextFormField).first, 'demo@wordos.app');
+      await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
+      await tester.pumpAndSettle();
+
+      await openSettings(tester);
+      await tester.scrollUntilVisible(find.text('Message the team'), 250);
+      await tester.tap(find.text('Message the team'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byType(TextField).last, 'The microphone button does nothing.');
+      await tester.tap(find.widgetWithText(FilledButton, 'Send'));
+      await tester.pumpAndSettle();
+
+      // Confirmed to the learner, so they know it went somewhere.
+      expect(find.text('Sent — thank you.'), findsOneWidget);
+
+      // Now the Owner, who has never seen it.
+      await tester.pumpAndSettle(const Duration(seconds: 4));
+
+      await tester.tap(find.descendant(
+        of: find.byType(AppBar),
+        matching: find.byIcon(Icons.logout_rounded),
+      ));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Sign out'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byType(TextFormField).first, 'owner@wordos.app');
+      await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
+      await tester.pumpAndSettle();
+
+      await openSettings(tester);
+      await tester.scrollUntilVisible(find.text('Developer Dashboard'), 250);
+      await tester.tap(find.text('Developer Dashboard'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Feedback').last);
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      // Their words, and a way to answer them.
+      expect(find.text('The microphone button does nothing.'), findsOneWidget);
+      expect(find.text('demo@wordos.app'), findsWidgets);
+
+      // And it can be marked dealt with, then put back.
+      await tester.tap(find.text('Mark handled').first);
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Mark unread'), findsWidgets);
+    });
+
+    testWidgets('the numbers on screen say what they are', (tester) async {
+      // Every figure the dashboard draws is a count of something, and the
+      // screen has to say which something. "24 sessions · 11 passed · 4 failed"
+      // invites the reader to add the last two and get the first, which is not
+      // a sum that exists: a session covers several words (ADR-052).
+      await bootApp(tester, surfaceSize: const Size(1200, 2600));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byType(TextFormField).first, 'owner@wordos.app');
+      await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
+      await tester.pumpAndSettle();
+
+      await openSettings(tester);
+      await tester.scrollUntilVisible(find.text('Developer Dashboard'), 250);
+      await tester.tap(find.text('Developer Dashboard'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      // The overview tile that used to print the mean in raw seconds — "avg
+      // 2716s" for a population whose middle session is sixteen seconds long.
+      expect(
+        find.byWidgetPredicate((w) =>
+            w is Text && (w.data ?? '').startsWith('typical ')),
+        findsOneWidget,
+        reason: 'the session tile should report the typical session',
+      );
+
+      // The list is of accounts, because it contains the Owner's own. Calling
+      // it learners made it disagree with the overview about the same word.
+      await tester.tap(find.text('Users').last);
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byWidgetPredicate((w) =>
+            w is Text && (w.data ?? '').contains(' accounts')),
+        findsWidgets,
+        reason: 'the list counts accounts, not learners',
+      );
+
+      // A learner row reports the sessions it draws. The server never sent
+      // this field, so every row read "0 sessions" however much they had done.
+      final rows = find.byWidgetPredicate((w) =>
+          w is Text && (w.data ?? '').contains('sessions done'));
+      expect(rows, findsWidgets);
+
+      final drawn = tester
+          .widgetList<Text>(rows)
+          .map((t) => t.data!)
+          .toList();
+
+      expect(
+        drawn.any((line) => !line.contains('0 sessions done')),
+        isTrue,
+        reason: 'a learner with a history should not read as zero: $drawn',
+      );
+
+      // And the per-skill line names its units, so the three numbers are not
+      // read as one sum.
+      await tester.tap(find.text('Demo Learner').first);
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      final page = find.byType(ListView).first;
+      await tester.scrollUntilVisible(
+        find.text('Performance by skill'), 300,
+        scrollable: find.descendant(
+          of: page,
+          matching: find.byType(Scrollable),
+        ).first,
+      );
+
+      expect(
+        find.byWidgetPredicate((w) =>
+            w is Text && (w.data ?? '').contains('words:')),
+        findsWidgets,
+        reason: 'passed and failed are words, and the line should say so',
+      );
+    });
+
     testWidgets('the owner reaches the dashboard and its charts render',
         (tester) async {
       await bootApp(tester, surfaceSize: const Size(1200, 2600));
@@ -287,10 +493,22 @@ void main() {
       expect(find.text('Account'), findsOneWidget);
       expect(find.text('Sign-ins'), findsOneWidget);
 
-      await tester.drag(find.text('Account'), const Offset(0, -1400));
-      await tester.pumpAndSettle();
-      expect(find.text('Day by day'), findsOneWidget);
-      expect(find.text('Words got wrong'), findsOneWidget);
+      // Scrolled by content rather than by a fixed distance: a section added
+      // above these would otherwise make the drag stop short, and the test
+      // would report a missing chart when the chart is simply further down.
+      // Scrolled by content rather than by a fixed distance: a section added
+      // above these would otherwise make the drag stop short, and the test
+      // would report a missing chart when the chart is simply further down.
+      // `find.byType(ListView).first` — the page has more than one scrollable.
+      final page = find.byType(ListView).first;
+      for (final section in ['Day by day', 'Words got wrong']) {
+        await tester.scrollUntilVisible(find.text(section), 300,
+            scrollable: find.descendant(
+              of: page,
+              matching: find.byType(Scrollable),
+            ).first);
+        expect(find.text(section), findsOneWidget);
+      }
     });
   });
 }

@@ -16,6 +16,12 @@ abstract class WordOsApi {
     required String displayName,
     /// Digits only, without the plus. Kept separate from [phoneNumber] all the
     /// way to the database — see the server's `User.PhoneCountryCode`.
+    ///
+    /// **Required** (ADR-054): the server refuses a registration without a
+    /// number, because an account it cannot reach is one whose learner cannot
+    /// be helped when they report a problem. Still nullable on this signature
+    /// so the failure is the server's answer — `INVALID_PHONE` — rather than a
+    /// compile error that hides which rule was broken.
     String? phoneCountryCode,
     String? phoneNumber,
   });
@@ -171,6 +177,35 @@ abstract class WordOsApi {
   Future<AdminUserPage> adminUsers({String? query, int? days, int page = 0});
 
   Future<AdminUserDetail> adminUserDetail(String userId);
+
+  // ── Feedback (ADR-053) ─────────────────────────────────────────────────────
+
+  /// Sends a message from this learner to the Owner.
+  ///
+  /// Write-only for a learner: there is no call to read feedback back, their
+  /// own included. The Owner reads it in the dashboard, and nothing a learner
+  /// can call returns anybody's words but their own — which they already have.
+  Future<void> sendFeedback(String body);
+
+  /// The Owner's inbox: unhandled first, newest first.
+  ///
+  /// [handledOnly] null means everything; true or false filters. Owner-only,
+  /// and refused by the API for anyone else regardless of what the UI shows.
+  Future<FeedbackPage> adminFeedback({bool? handledOnly, int page = 0});
+
+  /// Marks one message dealt with, or puts it back.
+  ///
+  /// Reversible on purpose: an Owner reading a long list will mark the wrong
+  /// one eventually, and a message that cannot be un-handled is lost.
+  Future<void> adminSetFeedbackHandled(String id, bool handled);
+
+  /// Brings a learner's waiting skills forward, for testing the spaced gaps.
+  ///
+  /// Owner-only, and refused by the API for anyone else. It moves *scheduled*
+  /// dates only — nothing that already happened changes — and the server writes
+  /// it to the activity log, because a pipeline finished in an afternoon would
+  /// otherwise read as an extraordinary learner (ADR-037).
+  Future<ScheduleAdvance> adminAdvanceSchedule(String userId, {int days = 2});
 
   /// One learner's vocabulary, filtered by pipeline state — the Owner's view,
   /// which is deliberately the opposite of the learner's (Part 3).

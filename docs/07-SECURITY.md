@@ -251,6 +251,47 @@ pseudonymous id should be substituted.
 
 ---
 
+## 13. Availability
+
+Denial of service is a security property, and the cheapest attack on this
+service was never the network — it was the login form. Argon2id is memory-hard
+on purpose, so a few hundred concurrent sign-ins ask for gigabytes; rate
+limiting does not help, because it bounds one caller and an attack is many.
+
+Bounded now, per instance and by configuration (ADR-051):
+
+| resource | ceiling | over the ceiling |
+|---|---|---|
+| database connections | 40 (PostgreSQL allows 100) | queued in-process, then a timeout |
+| password hashes in flight | one per core | 503 `SERVER_BUSY` — never "wrong password" |
+| AI calls in flight | 24 | 503 `AI_BUSY`, session untouched |
+| connections | 2 000 | refused at the socket |
+| request body | 256 KiB | rejected |
+
+Two details matter beyond the numbers. A refused sign-in says the server is
+busy, never that the password was wrong: the credentials were never checked, and
+telling someone otherwise makes them reset a password that works. And the
+hashing queue is asynchronous — a blocking queue would let a burst of sign-ins
+hold every thread in the process, which is the denial of service the limit was
+meant to prevent.
+
+## 14. Learner-written text
+
+Feedback is the first place a learner's free text is stored and shown to someone
+else, so it is treated as data throughout (ADR-053):
+
+* **Bounded** at 4 000 characters at the client and again at the server, and
+  rate-limited — an unbounded write of free text is a way to fill a table.
+* **Stripped** of control characters; a NUL byte is refused with 400 rather than
+  reaching PostgreSQL, which rejects it outright (ADR-036).
+* **Never interpreted.** Stored as written, rendered as text. No markup, no link
+  handling, no HTML on the path, and nothing in it is ever treated as an
+  instruction — including by any AI prompt, which never sees it.
+* **Write-only for the author.** No endpoint returns feedback to a learner, not
+  even their own, so no client change can turn one learner's words into another
+  learner's screen. Reading is Owner-only and refused with 403.
+* The activity log records that a message was sent and never its contents.
+
 ## What an attacker gets from the client
 
 The honest summary, since the app ships to devices and can be decompiled:

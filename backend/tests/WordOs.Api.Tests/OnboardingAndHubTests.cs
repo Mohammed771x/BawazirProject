@@ -43,6 +43,8 @@ public class OnboardingAndHubTests(PostgresFixture db) : IAsyncLifetime
             email = $"hub-{Guid.NewGuid():N}@test.dev",
             password = "correct-horse-battery",
             displayName = "Learner",
+            phoneCountryCode = "967",
+            phoneNumber = "770000001",
         });
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();

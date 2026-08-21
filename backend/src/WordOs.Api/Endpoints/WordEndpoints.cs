@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using WordOs.Application.Lexicon;
+using WordOs.Application.Words;
 using WordOs.Domain.Common;
 using WordOs.Domain.Lexicon;
 using WordOs.Domain.Users;
@@ -28,6 +29,15 @@ public static class WordEndpoints
         [property: MaxLength(128)] string? Text,
         [property: MaxLength(256)] string? Meaning);
 
+    /// <param name="Form">
+    /// Which form of the word this entry is — <c>past</c>, <c>pastParticiple</c>,
+    /// <c>ing</c>, <c>plural</c> — or null when it is the word itself
+    /// (ADR-056).
+    ///
+    /// <para>Sent as a stable key, not a sentence: the client says it in the
+    /// learner's language (ADR-035). Derived from the sense id the entry was
+    /// built from rather than stored twice (ADR-045).</para>
+    /// </param>
     public sealed record WordResponse(
         Guid Id,
         string SenseId,
@@ -35,6 +45,7 @@ public static class WordEndpoints
         string Meaning,
         string DefinitionEn,
         string PartOfSpeech,
+        string? Form,
         string CefrLevel,
         string State,
         string? CurrentSkill,
@@ -322,7 +333,21 @@ public static class WordEndpoints
         db.ActivityEvents.Add(ActivityEvent.Record(
             userId.Value, ActivityType.WordAdded, clock.GetUtcNow(),
             entityId: word.Id));
-        await db.SaveChangesAsync(ct);
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        // Two taps on "add" arriving together: the duplicate check above passed
+        // for both, and the index refused the second. It is the same answer,
+        // reached a different way.
+        catch (DbUpdateException e)
+            when (UniqueViolation.On(e, "IX_words_UserId_SenseId"))
+        {
+            return Problems.Conflict(
+                "WORD_ALREADY_ADDED",
+                "You have already added this word with this meaning.");
+        }
 
         return Results.Ok(ToResponse(word));
     }
@@ -345,8 +370,7 @@ public static class WordEndpoints
         // A learner with a thousand words must not receive a thousand rows
         // (Part 3 §37); a client asking for an absurd page size does not get
         // to decide otherwise.
-        var pageIndex = Math.Max(0, page ?? 0);
-        var size = pageSize is null or <= 0 ? 50 : Math.Min(pageSize.Value, 100);
+        var paging = Page.From(page, pageSize, maxSize: 100);
 
         // Always scoped to the caller's own id from the token. A word id or
         // user id from the request is never trusted (docs/07-SECURITY.md §4).
@@ -387,17 +411,17 @@ public static class WordEndpoints
 
         var items = await query
             .OrderByDescending(w => w.AddedAt)
-            .Skip(pageIndex * size)
-            .Take(size)
+            .Skip(paging.Offset)
+            .Take(paging.Size)
             .ToListAsync(ct);
 
         return Results.Ok(new
         {
             items = items.Select(ToResponse).ToList(),
             total,
-            page = pageIndex,
-            pageSize = size,
-            hasMore = (pageIndex + 1) * size < total,
+            page = paging.Index,
+            pageSize = paging.Size,
+            hasMore = paging.HasMore(total),
         });
     }
 
@@ -453,6 +477,7 @@ public static class WordEndpoints
 
     private static WordResponse ToResponse(Word w) =>
         new(w.Id, w.SenseId, w.Text, w.Meaning, w.DefinitionEn, w.PartOfSpeech,
+            WordForms.FormKey(w),
             w.CefrLevel.ToWire(),
             w.State.ToWire(),
             w.CurrentSkill?.ToWire(),

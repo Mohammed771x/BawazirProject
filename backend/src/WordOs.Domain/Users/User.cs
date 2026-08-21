@@ -76,6 +76,24 @@ public class User
         ArgumentException.ThrowIfNullOrWhiteSpace(email);
         ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
 
+        // A number is required to create an account (ADR-054): an account the
+        // Owner cannot reach is an account that cannot be helped when its
+        // learner reports a problem.
+        //
+        // Checked on the digits rather than the input, because "()" and "- -"
+        // are text that contains no number. Enforced here as well as at the
+        // endpoint — the same two-layer rule the rest of this domain follows,
+        // so a new caller cannot create an unreachable account by forgetting.
+        var code = Digits(phoneCountryCode);
+        var number = Digits(phoneNumber);
+
+        if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(number))
+        {
+            throw new ArgumentException(
+                "A phone number is required to create an account.",
+                nameof(phoneNumber));
+        }
+
         var user = new User
         {
             Email = email.Trim().ToLowerInvariant(),
@@ -84,8 +102,8 @@ public class User
             DisplayName = string.IsNullOrWhiteSpace(displayName)
                 ? "Learner"
                 : displayName.Trim(),
-            PhoneCountryCode = Digits(phoneCountryCode),
-            PhoneNumber = Digits(phoneNumber),
+            PhoneCountryCode = code,
+            PhoneNumber = number,
             Role = role,
             CreatedAt = now,
         };

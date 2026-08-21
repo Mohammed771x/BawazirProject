@@ -29,6 +29,7 @@ class AppStrings {
   String get save => _('Save', 'حفظ');
   String get retry => _('Try again', 'إعادة المحاولة');
   String get close => _('Close', 'إغلاق');
+  String get copy => _('Copy', 'نسخ');
   String get finish => _('Finish', 'إنهاء');
   String get start => _('Start', 'ابدأ');
   String get skip => _('Skip', 'تخطي');
@@ -43,6 +44,11 @@ class AppStrings {
         'INVALID_CREDENTIALS' => _(
             'Wrong email or password.',
             'البريد الإلكتروني أو كلمة المرور غير صحيحة.',
+          ),
+        // The server's own rule, said in the learner's language (ADR-054).
+        'INVALID_PHONE' => _(
+            'Enter a valid phone number.',
+            'أدخل رقم هاتف صحيحًا.',
           ),
         'EMAIL_TAKEN' => _(
             'That email already has an account.',
@@ -155,6 +161,10 @@ class AppStrings {
 
   // Auth
   String get phoneNumber => _('Phone number', 'رقم الهاتف');
+  String get phoneRequired => _(
+        'Enter your phone number so we can reach you.',
+        'أدخل رقم هاتفك حتى نتمكن من التواصل معك.',
+      );
   String get signIn => _('Sign in', 'تسجيل الدخول');
   String get signUp => _('Create account', 'إنشاء حساب');
   String get signOut => _('Sign out', 'تسجيل الخروج');
@@ -404,19 +414,41 @@ class AppStrings {
   /// auxiliary is a different thing to learn than "will" as a noun. The
   /// generator answers for the sentence at hand, so the same word can be a
   /// verb in one passage and a noun in another.
+  /// Every code the lexicon actually stores, in both languages.
+  ///
+  /// The closed-class words are imported with short codes — `prep`, `det`,
+  /// `aux`, `modal` — and only the spelled-out names were listed here, so the
+  /// fallthrough printed the raw code at the learner: a word tagged `modal`
+  /// read as "modal" in an Arabic interface (ADR-056).
   String partOfSpeechLabel(String raw) => switch (raw.trim().toLowerCase()) {
         'noun' || 'n' => _('noun', 'اسم'),
         'verb' || 'v' => _('verb', 'فعل'),
+        // `s` is WordNet's adjective satellite — an adjective to a learner.
         'adjective' || 'adj' || 'a' || 's' => _('adjective', 'صفة'),
         'adverb' || 'adv' || 'r' => _('adverb', 'ظرف'),
-        'pronoun' => _('pronoun', 'ضمير'),
-        'preposition' => _('preposition', 'حرف جر'),
-        'conjunction' => _('conjunction', 'أداة ربط'),
-        'determiner' => _('determiner', 'أداة تعريف'),
-        'auxiliary' => _('auxiliary verb', 'فعل مساعد'),
-        'interjection' => _('interjection', 'أداة تعجّب'),
-        'numeral' => _('number', 'عدد'),
+        'pronoun' || 'pron' => _('pronoun', 'ضمير'),
+        'preposition' || 'prep' => _('preposition', 'حرف جر'),
+        'conjunction' || 'conj' => _('conjunction', 'أداة ربط'),
+        'determiner' || 'det' => _('determiner', 'أداة تعريف'),
+        'auxiliary' || 'aux' => _('auxiliary verb', 'فعل مساعد'),
+        'modal' => _('modal verb', 'فعل ناقص'),
+        'interjection' || 'intj' => _('interjection', 'أداة تعجّب'),
+        'particle' || 'part' => _('particle', 'أداة'),
+        'numeral' || 'num' => _('number', 'عدد'),
+        // Better an empty chip than a raw code shown to a learner.
         _ => raw,
+      };
+
+  /// Which form of the word this entry is (ADR-056).
+  ///
+  /// Null for a word in its plain form: a learner looking at `book` needs no
+  /// label telling them it is `book`.
+  String? wordFormLabel(String? key) => switch (key) {
+        'past' => _('past tense', 'الماضي'),
+        'pastParticiple' => _('past participle', 'اسم المفعول'),
+        'ing' => _('-ing form', 'صيغة ing'),
+        'plural' => _('plural', 'جمع'),
+        _ => null,
       };
 
   // Changing the level of a passage (§4). Said as "the same text, easier" —
@@ -513,6 +545,19 @@ class AppStrings {
         null => '',
       };
 
+  /// The heading above the rewrite a learner is shown after writing.
+  ///
+  /// Named for what it is: the same sentence at their level, not a red pen.
+  /// A learner who reads it as a correction concludes they made a mistake even
+  /// when they did not (ADR-038).
+  String atYourLevel(CefrLevel level) => _(
+        'Your sentence at ${level.label}',
+        'جملتك بمستوى ${level.label}',
+      );
+
+  /// Above the model sentence a learner can copy after a conversation.
+  String get sayItLikeThis => _('Say it like this', 'قُلها هكذا');
+
   String get writeSentence =>
       _('Write your sentence', 'اكتب جملتك');
   String get evaluating => _('Evaluating…', 'جارٍ التقييم…');
@@ -545,6 +590,8 @@ class AppStrings {
       _('Speak freely — tap when you finish', 'تحدّث براحتك — اضغط عند الانتهاء');
   String get typeInstead => _('Type instead', 'اكتب بدلًا من ذلك');
   String get useVoice => _('Use voice', 'استخدم الصوت');
+  String get discardRecording =>
+      _('Delete and record again', 'احذف وسجّل من جديد');
   String get replayTurn => _('Say that again', 'أعد ما قلته');
   // ── Spoken placement ──────────────────────────────────────────────────────
   String get answerOutLoud => _('Answer out loud', 'أجب بصوتك');
@@ -640,6 +687,62 @@ class AppStrings {
   String get language => _('Language', 'اللغة');
   String get developerTools => _('Developer tools', 'أدوات المطوّر');
 
+  // ── Feedback (ADR-053) ─────────────────────────────────────────────────────
+  String get feedbackSection => _('Help', 'المساعدة');
+  String get feedbackTitle =>
+      _('Message the team', 'راسل فريق التطبيق');
+  String get feedbackHint => _(
+        'Report a problem or suggest something',
+        'أبلغ عن مشكلة أو اقترح شيئًا',
+      );
+  String get feedbackPrompt => _(
+        'Tell us what happened. We read every message.',
+        'اكتب لنا ما حدث. نقرأ كل رسالة.',
+      );
+  String get feedbackPlaceholder => _(
+        'What went wrong, or what would you like to see?',
+        'ما الذي حدث؟ أو ما الذي تودّ رؤيته؟',
+      );
+  String get feedbackSend => _('Send', 'إرسال');
+  String get feedbackSending => _('Sending…', 'جارٍ الإرسال…');
+  String get feedbackSent =>
+      _('Sent — thank you.', 'تم الإرسال — شكرًا لك.');
+  String get feedbackFailed => _(
+        'That could not be sent. Try again in a moment.',
+        'تعذّر الإرسال. حاول بعد لحظة.',
+      );
+
+  String get supportTitle =>
+      _('Contact support', 'تواصل مع الدعم');
+  String get supportHint => _(
+        'Chat with the developer on WhatsApp',
+        'محادثة مع المطوّر عبر واتساب',
+      );
+  String get supportUnavailable => _(
+        'WhatsApp could not be opened. You can reach us on this number:',
+        'تعذّر فتح واتساب. يمكنك التواصل معنا على هذا الرقم:',
+      );
+
+  // The Owner's side of it.
+  String get devFeedback => _('Feedback', 'الملاحظات');
+  String get devFeedbackTitle => _('User feedback', 'ملاحظات المستخدمين');
+  String get devFeedbackHint => _(
+        'What learners have written, unread first.',
+        'ما كتبه المتعلمون، غير المقروء أولًا.',
+      );
+  String get devFeedbackEmpty =>
+      _('No messages yet.', 'لا توجد رسائل بعد.');
+  String devFeedbackUnread(int count) => _(
+        '$count unread',
+        '$count غير مقروءة',
+      );
+  String get devFeedbackMarkHandled => _('Mark handled', 'تمّت المعالجة');
+  String get devFeedbackMarkNew => _('Mark unread', 'أعِدها غير مقروءة');
+  String get devFeedbackHandled => _('Handled', 'مُعالجة');
+  String get devContact => _('Contact', 'التواصل');
+  String get devNoPhone => _('No number given', 'لم يُدخل رقمًا');
+  String get devCopied => _('Copied', 'تم النسخ');
+
   // Owner / developer dashboard
   String get developerDashboard =>
       _('Developer Dashboard', 'لوحة تحكم المطوّر');
@@ -658,9 +761,14 @@ class AppStrings {
       _('Showing: $range', 'المعروض: $range');
   String get devSearchUsers =>
       _('Search by name or email', 'ابحث بالاسم أو البريد');
+  /// Accounts, not learners.
+  ///
+  /// This list shows every account including the Owner's own, while the
+  /// overview counts learners alone — so calling both "learners" made two
+  /// screens disagree about the same word (185 here, 180 there).
   String devUsersFound(int count) => _(
-        count == 1 ? '1 learner' : '$count learners',
-        count == 1 ? 'متعلّم واحد' : '$count متعلّم',
+        count == 1 ? '1 account' : '$count accounts',
+        count == 1 ? 'حساب واحد' : '$count حساب',
       );
   String get devNoUsersMatch =>
       _('No learners match', 'لا يوجد متعلّمون مطابقون');
@@ -701,8 +809,16 @@ class AppStrings {
       _('Words / learner / day', 'كلمات لكل متعلم يوميًا');
   String devWordsTotal(int count) => _('$count total', '$count إجمالًا');
   String get devAvgSessions => _('Sessions / learner', 'جلسات لكل متعلم');
-  String devAvgDuration(int seconds) =>
-      _('avg ${seconds}s', 'المتوسط $secondsث');
+  /// The typical session, formatted as a person would say it.
+  ///
+  /// Was the mean, printed in raw seconds — which read "avg 2716s" for a
+  /// population whose middle session is sixteen seconds long.
+  String devTypicalDuration(int seconds) {
+    final text = seconds >= 60
+        ? _('${seconds ~/ 60}m ${seconds % 60}s', '${seconds ~/ 60}د ${seconds % 60}ث')
+        : _('${seconds}s', '$secondsث');
+    return _('typical $text', 'المعتاد $text');
+  }
   String get devPipelineCompletion =>
       _('Pipeline completion', 'إكمال المسار');
   String get devPipelineCompletionHint =>
@@ -718,8 +834,8 @@ class AppStrings {
   String get devFirstAttempt =>
       _('First-attempt accuracy', 'دقة المحاولة الأولى');
   String get devFirstAttemptHint => _(
-        'Share of words passed without needing a retry.',
-        'نسبة الكلمات التي نجحت دون إعادة.',
+        'Of the words this skill has decided, the share that passed without a retry.',
+        'من الكلمات التي حُسم أمرها في هذه المهارة، نسبة ما نجح دون إعادة.',
       );
   String get devFailureDistribution =>
       _('Where failures land', 'أين تتركز الإخفاقات');
@@ -740,8 +856,8 @@ class AppStrings {
       );
   String get devOwnerRole => _('Owner', 'مالك');
   String devUserRowSummary(int words, int active, int sessions) => _(
-        '$words words · $active active · $sessions sessions',
-        '$words كلمة · $active نشطة · $sessions جلسة',
+        '$words words · $active active · $sessions sessions done',
+        '$words كلمة · $active نشطة · $sessions جلسة مكتملة',
       );
   String devLastActive(String when) =>
       _('Last active $when', 'آخر نشاط $when');
@@ -755,6 +871,22 @@ class AppStrings {
 
   // Owner → user detail
   String get devAccount => _('Account', 'الحساب');
+
+  // ── The time skip (ADR-037) ────────────────────────────────────────────────
+  String get devTimeTravel => _('Testing tools', 'أدوات الاختبار');
+  String get devSkipDays => _('Skip 2 days', 'تقديم يومين');
+  String get devSkipDaysHint => _(
+        'The pipeline waits two days between one skill and the next. This brings '
+        'this learner\'s waiting skills forward so the gap can be tested without '
+        'waiting — nothing that already happened changes, and the skip is recorded.',
+        'يفصل المسار يومين بين مهارة وأخرى. هذا يقدّم المهارات المنتظرة لهذا '
+        'المتعلّم حتى تُختبر الفجوة دون انتظار — لا يتغيّر شيء مما حدث فعلًا، '
+        'والتقديم يُسجَّل.',
+      );
+  String devSkipDaysDone(int days, int due) => _(
+        'Moved $days days forward — $due skills are available now.',
+        'تم التقديم $days يومين — $due مهارة متاحة الآن.',
+      );
   String get devJoined => _('Joined', 'تاريخ الانضمام');
   String get devLastActiveLabel => _('Last active', 'آخر نشاط');
   String get devSignIns => _('Sign-ins', 'مرات الدخول');
@@ -773,9 +905,12 @@ class AppStrings {
         'Sessions completed, and words passed versus failed.',
         'الجلسات المكتملة والكلمات الناجحة مقابل الفاشلة.',
       );
+  /// Three numbers that do not add up, because they are not the same thing:
+  /// a session covers several words, so sessions can never be the sum of the
+  /// two word counts beside them. The unit is now said out loud.
   String devSkillStatLine(int sessions, int passed, int failed) => _(
-        '$sessions sessions · $passed passed · $failed failed',
-        '$sessions جلسة · $passed ناجحة · $failed فاشلة',
+        '$sessions sessions · words: $passed passed, $failed failed',
+        '$sessions جلسة · الكلمات: $passed ناجحة، $failed فاشلة',
       );
   String get devDaily => _('Day by day', 'يومًا بيوم');
   String get devDailyHint => _(

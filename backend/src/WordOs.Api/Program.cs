@@ -42,9 +42,66 @@ var connectionString =
          wrong instance.
          """);
 
-builder.Services.AddDbContext<WordOsDbContext>(options =>
+// ── Capacity ─────────────────────────────────────────────────────────────────
+//
+// What this process is allowed to consume, so that too many learners at once
+// makes the service *slower* rather than broken (ADR-051). Every value is
+// configurable, because the right number depends on the machine and on how
+// many instances share the database (rule R3).
+var capacity = builder.Configuration.GetSection(CapacityOptions.SectionName)
+    .Get<CapacityOptions>() ?? new CapacityOptions();
+
+builder.Services.AddSingleton(capacity);
+
+// What the socket layer will hold. Left unbounded, a burst is accepted in full
+// and then starves itself: every connection gets a sliver of the machine and
+// none of them finish. A ceiling means the ones that got in are served
+// properly, and the rest are refused at the door — which a client can retry.
+builder.WebHost.ConfigureKestrel(options =>
 {
-    options.UseNpgsql(connectionString);
+    if (capacity.MaxConcurrentConnections > 0)
+        options.Limits.MaxConcurrentConnections = capacity.MaxConcurrentConnections;
+
+    // A transcript is a few hundred characters. Anything of this size is a
+    // mistake or an attempt to make the server allocate on demand.
+    options.Limits.MaxRequestBodySize = capacity.MaxRequestBodyBytes;
+});
+
+// The database is a shared, finite resource: PostgreSQL accepts a fixed number
+// of connections and every instance of this service draws from the same pool.
+// Left to its defaults, one instance claims up to 100 — the whole of a stock
+// server — and the next connection anyone asks for, from any process, fails
+// with `53300: remaining connection slots are reserved`. Measured at 200
+// concurrent readers before this was set: the database ran out, and learners
+// got a 500.
+//
+// A bounded pool moves that queue inside this process, where waiting is cheap
+// and ordered, instead of letting it become an error at the far end.
+var dataSource = new Npgsql.NpgsqlConnectionStringBuilder(connectionString)
+{
+    MaxPoolSize = capacity.DatabaseConnections,
+    // A connection that cannot be had is worth waiting a few seconds for; a
+    // request that waits for ever is a thread held hostage.
+    Timeout = capacity.DatabaseConnectionWaitSeconds,
+    // Long enough for the heaviest report, short enough that a stuck query
+    // does not hold a connection all day.
+    CommandTimeout = capacity.DatabaseCommandTimeoutSeconds,
+}.ConnectionString;
+
+// Pooled: a DbContext is created and thrown away on every request, and at a
+// thousand learners that allocation is worth avoiding. The behaviour is
+// identical — the same scoped lifetime, reset between uses.
+builder.Services.AddDbContextPool<WordOsDbContext>(options =>
+{
+    options.UseNpgsql(dataSource, npgsql =>
+        // A network blip, a failover, a restarted database: transient by
+        // definition, and previously a 500 in the learner's face. Retried
+        // here, where the retry is invisible and safe.
+        npgsql.EnableRetryOnFailure(
+            maxRetryCount: capacity.DatabaseRetries,
+            maxRetryDelay: TimeSpan.FromSeconds(capacity.DatabaseRetryDelaySeconds),
+            errorCodesToAdd: null));
+
     // Parameter values carry a learner's writing and their email, so they must
     // never reach a log — off in every environment, Development included
     // (docs/07-SECURITY.md §9).
@@ -69,7 +126,15 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(
     builder.Configuration.GetSection("WordOs").Get<WordOsConfiguration>()
     ?? new WordOsConfiguration());
-builder.Services.AddSingleton<IPasswordHasher, Argon2PasswordHasher>();
+// Bounded rather than unlimited: Argon2id costs 19 MiB and a core per
+// verification, so an unthrottled sign-in queue is a way to exhaust the machine
+// (ADR-051). A hash waits its turn; a wait too long becomes a "busy, try
+// again", never a wrong-password answer.
+builder.Services.AddSingleton<IPasswordHasher>(_ =>
+    new ThrottledPasswordHasher(
+        new Argon2PasswordHasher(),
+        capacity.EffectivePasswordHashes,
+        capacity.PasswordHashWaitSeconds));
 builder.Services.AddSingleton<JwtTokenService>();
 builder.Services.AddScoped<LevelEngine>();
 builder.Services.AddSingleton<IFreeResponseScorer, HeuristicFreeResponseScorer>();
@@ -95,10 +160,18 @@ builder.Services.AddHttpClient<HttpAiContentService>((provider, client) =>
 
 // Registered through the resilient wrapper, never directly: a Gemini outage
 // must degrade a session, not end it.
+//
+// The throttle is a singleton and the wrapper is not — the ceiling has to be
+// shared by every request in the process, which is the whole point of it, while
+// the decorator below it stays per-request as it always was (ADR-051).
+builder.Services.AddSingleton(_ => new AiCallGate(
+    capacity.ConcurrentAiCalls, capacity.AiCallWaitSeconds));
+
 builder.Services.AddScoped<IAiContentService>(provider =>
-    new ResilientAiContentService(
-        provider.GetRequiredService<HttpAiContentService>(),
-        provider.GetRequiredService<ILogger<ResilientAiContentService>>()));
+    provider.GetRequiredService<AiCallGate>().Wrap(
+        new ResilientAiContentService(
+            provider.GetRequiredService<HttpAiContentService>(),
+            provider.GetRequiredService<ILogger<ResilientAiContentService>>())));
 
 // ── Authentication ───────────────────────────────────────────────────────────
 var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
@@ -216,6 +289,21 @@ builder.Services.AddProblemDetails();
 
 var app = builder.Build();
 
+// The schema is deliberately NOT migrated here (ADR-062).
+//
+// Tried, and the database refused it — correctly. This service connects as
+// `wordos_app`, which holds no DDL rights at all; owning the schema is
+// `wordos_migrator`'s job and nothing else's (docs/07-SECURITY.md §10). Making
+// startup migration work would mean handing the running service a credential
+// that can drop every table, to save a command that is run once per release.
+//
+// Migrations are applied from a developer's machine before the deploy:
+//
+//     ConnectionStrings__WordOs="…migrator…" dotnet ef database update \
+//       --project src/WordOs.Infrastructure --startup-project src/WordOs.Api
+//
+// See docs/09-DEPLOYMENT.md.
+
 // A malformed query or route value is the caller's mistake, not the server's.
 // ASP.NET raises it as an exception *after* the endpoint filter chain, so
 // without this every `?days=abc` — anything typed into a numeric field, or any
@@ -232,6 +320,17 @@ app.UseExceptionHandler(new ExceptionHandlerOptions
                 StatusCodes.Status400BadRequest,
                 "INVALID_PARAMETER",
                 "One of the values in that request could not be read."),
+            // Overload, not failure: the work was never attempted, so the
+            // honest answer is "ask again shortly" rather than a wrong-password
+            // or a generic fault (ADR-051).
+            PasswordHashingBusyException => (
+                StatusCodes.Status503ServiceUnavailable,
+                "SERVER_BUSY",
+                "The server is busy right now. Try again in a moment."),
+            AiCapacityException => (
+                StatusCodes.Status503ServiceUnavailable,
+                "AI_BUSY",
+                "The lesson service is busy right now. Try again in a moment."),
             _ => (
                 StatusCodes.Status500InternalServerError,
                 "INTERNAL_ERROR",
@@ -272,11 +371,20 @@ app.UseRateLimiter();
 // means "the app is up" and "the app can serve" stay distinguishable.
 app.MapGet("/health/live", () => Results.Ok(new { status = "ok" }));
 
-app.MapGet("/health/ready", async (WordOsDbContext db, CancellationToken ct) =>
+app.MapGet("/health/ready", async (
+    WordOsDbContext db, AiCallGate gate, CancellationToken ct) =>
 {
     var canConnect = await db.Database.CanConnectAsync(ct);
     return canConnect
-        ? Results.Ok(new { status = "ok", database = "connected" })
+        // How much headroom is left, so a load balancer or a person watching a
+        // dashboard can see saturation coming instead of discovering it from
+        // the learners (ADR-051).
+        ? Results.Ok(new
+        {
+            status = "ok",
+            database = "connected",
+            aiSlotsFree = gate.Available,
+        })
         // No exception detail: a probe must not disclose the host, the database
         // name or the credentials.
         : Results.Problem(
@@ -293,6 +401,7 @@ app.MapSessionEndpoints();
 app.MapWeeklyReviewEndpoints();
 app.MapWordEndpoints();
 app.MapAdminEndpoints();
+app.MapFeedbackEndpoints();
 
 app.Run();
 

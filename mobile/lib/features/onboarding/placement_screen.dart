@@ -6,6 +6,8 @@ import '../../core/api/wordos_api.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/audio/speech_provider.dart';
+import '../../core/audio/speech_recognition_service.dart';
+import '../../core/audio/speech_service.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/widgets/speaker_button.dart';
 import 'spoken_answer_field.dart';
@@ -30,6 +32,14 @@ enum _Phase { intro, question, submitting, result, error }
 class _PlacementScreenState extends ConsumerState<PlacementScreen> {
   final TextEditingController _freeText = TextEditingController();
 
+  /// Held rather than looked up when needed.
+  ///
+  /// `ref.read` is illegal once the widget is disposed and throws while the
+  /// tree is being finalised, which aborts the frame and takes any navigation
+  /// happening at that moment with it (ADR-058).
+  SpeechService? _speech;
+  SpeechRecognitionService? _recognition;
+
   _Phase _phase = _Phase.intro;
   PlacementStep? _step;
   PlacementResult? _result;
@@ -41,9 +51,53 @@ class _PlacementScreenState extends ConsumerState<PlacementScreen> {
   bool _busy = false;
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _speech = ref.read(speechServiceProvider);
+    _recognition = ref.read(speechRecognitionProvider);
+  }
+
+  @override
   void dispose() {
+    // Leaving the test stops it talking and stops it listening. A clip that
+    // carries on over the next screen, or a microphone still open behind it,
+    // is the app not having noticed the learner left (ADR-058).
+    _stopMedia();
     _freeText.dispose();
     super.dispose();
+  }
+
+  /// An answer handler that knows which question it belongs to (ADR-058).
+  ///
+  /// The microphone does not stop the instant it is asked to. A learner who
+  /// leaves it open and presses Next gets one more result from the recogniser
+  /// afterwards — and with nothing to say otherwise, it landed in whichever
+  /// question was on screen by then. Reported from the device: the microphone
+  /// had correctly stopped, and the box above the next question still held the
+  /// previous answer.
+  ///
+  /// The item is captured when the handler is built, so a late result can be
+  /// recognised as belonging to a question the learner has already left, and
+  /// dropped. Cancelling the recogniser is not enough on its own: a result
+  /// already in flight arrives regardless.
+  ValueChanged<String> _answerFor(PlacementStep step) {
+    final itemId = step.item?.id;
+
+    return (value) {
+      if (!mounted || _step?.item?.id != itemId) return;
+      setState(() => _answer = value);
+    };
+  }
+
+  /// Silences whatever this question was doing.
+  ///
+  /// Called on every move — starting, advancing, finishing, leaving — because
+  /// each of those ends the question that owned the audio and the microphone.
+  /// Fire-and-forget: nothing downstream waits on a clip stopping, and awaiting
+  /// it inside `dispose` is not allowed anyway.
+  void _stopMedia() {
+    _speech?.stop().ignore();
+    _recognition?.cancel().ignore();
   }
 
   Future<void> _run(Future<void> Function() body) async {
@@ -64,6 +118,7 @@ class _PlacementScreenState extends ConsumerState<PlacementScreen> {
   }
 
   Future<void> _start() => _run(() async {
+        _stopMedia();
         setState(() {
           _phase = _Phase.submitting;
           _errorMessage = null;
@@ -82,6 +137,11 @@ class _PlacementScreenState extends ConsumerState<PlacementScreen> {
         final step = _step;
         final item = step?.item;
         if (step == null || item == null) return;
+
+        // The answer is in; this question is over. Reported from the device:
+        // the listening clip played on over the next question, and the
+        // microphone stayed open into it (ADR-058).
+        _stopMedia();
 
         final next = await ref.read(wordOsApiProvider).answerPlacement(
               sessionId: step.sessionId,
@@ -129,11 +189,16 @@ class _PlacementScreenState extends ConsumerState<PlacementScreen> {
               onRetry: _start,
             ),
           _Phase.question => _QuestionView(
+              // Keyed by the item, so every question builds its own answer
+              // field. Without this the same State is reused and the last
+              // answer's text — and its open microphone — carry into the next
+              // question (ADR-058).
+              key: ValueKey(_step!.item?.id ?? _step!.sessionId),
               step: _step!,
               answer: _answer,
               freeText: _freeText,
               busy: _busy,
-              onAnswer: (value) => setState(() => _answer = value),
+              onAnswer: _answerFor(_step!),
               onNext: _submitAnswer,
             ),
         },
@@ -193,6 +258,7 @@ class _IntroView extends ConsumerWidget {
 
 class _QuestionView extends ConsumerWidget {
   const _QuestionView({
+    super.key,
     required this.step,
     required this.answer,
     required this.freeText,

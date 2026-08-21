@@ -40,8 +40,10 @@ Those classes are closed, so the list is finite; edit it and re-run with
 report before touching the database.
 
 **Idempotent.** The import stages into a temp table inside one transaction, then
-`INSERT … ON CONFLICT ("SenseId") DO UPDATE`. Re-running updates rows in place;
-it never duplicates and never leaves the table half-replaced. Verified: two
+`INSERT … ON CONFLICT ("SenseId") DO UPDATE`, and finally deletes rows the build
+no longer produces. Re-running updates rows in place, removes what the rules have
+disowned, and never leaves the table half-replaced. A row a learner has already
+added to their vocabulary is kept whatever the rules now say. Verified: two
 consecutive runs both end at 175,611 rows.
 
 ## Sources
@@ -53,6 +55,7 @@ consecutive runs both end at 175,611 rows.
 | [Open English WordNet](https://en-word.net/) | 2025 | Senses, synsets, definitions | CC BY 4.0 |
 | [Arabic WordNet](https://github.com/Salah-Sal/arabic-wordnet-v4) | 4.0/4.1 | Arabic meaning per synset | CC BY 4.0 |
 | `importer/FunctionWords.cs` | — | The 167 closed-class words WordNet has no entries for | Written here |
+| `importer/Inflections.cs` | — | The forms of a word — `went`, `going`, `mice` — from WordNet's `form` lists, rules, and two short authored lists | Written here |
 
 Versions are **pinned**, not `latest`: a silent upstream change would alter
 learners' vocabulary levels, and the lexicon must be rebuildable byte-for-byte.

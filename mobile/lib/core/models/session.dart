@@ -709,6 +709,9 @@ class WordOutcome {
     required this.becameActive,
     this.firstAttemptCorrect = false,
     this.attemptsInSession = 1,
+    this.feedback,
+    this.evidence,
+    this.better,
   });
 
   final String wordId;
@@ -719,6 +722,19 @@ class WordOutcome {
   final SkillType? nextSkill;
   final DateTime? nextEligibleAt;
   final bool becameActive;
+
+  /// What the conversation showed about this word, addressed to the learner.
+  ///
+  /// Speaking only, and the point of the result screen there: a learner told
+  /// only that a word failed has learned that they failed and nothing else
+  /// (ADR-048).
+  final String? feedback;
+
+  /// Their own words containing it, quoted back.
+  final String? evidence;
+
+  /// One English sentence using the word well — theirs repaired, or a model.
+  final String? better;
 
   /// Only a first-attempt success passes the skill (demo review §31). A word
   /// answered correctly on a later attempt is still reinforced in-session, but
@@ -741,6 +757,9 @@ class WordOutcome {
         becameActive: json['becameActive'] as bool? ?? false,
         firstAttemptCorrect: json['firstAttemptCorrect'] as bool? ?? false,
         attemptsInSession: (json['attemptsInSession'] as num?)?.toInt() ?? 1,
+        feedback: json['feedback'] as String?,
+        evidence: json['evidence'] as String?,
+        better: json['better'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -765,6 +784,7 @@ class SessionResult {
     required this.comprehensionTotal,
     required this.words,
     required this.durationMs,
+    this.summary,
   });
 
   final String sessionId;
@@ -773,6 +793,9 @@ class SessionResult {
   final int comprehensionTotal;
   final List<WordOutcome> words;
   final int durationMs;
+
+  /// How the whole conversation went. Speaking only.
+  final String? summary;
 
   int get passedCount => words.where((w) => w.passed).length;
 
@@ -788,6 +811,7 @@ class SessionResult {
           .map((e) => WordOutcome.fromJson(e as Map<String, dynamic>))
           .toList(),
       durationMs: (json['durationMs'] as num?)?.toInt() ?? 0,
+      summary: json['summary'] as String?,
     );
   }
 

@@ -267,6 +267,65 @@ public class ImportedLexiconTests : IAsyncLifetime
         Assert.Equal(-1, entry.FrequencyRank);
     }
 
+    [SkippableTheory]
+    // The forms a learner meets and has to recognise separately (ADR-045).
+    [InlineData("went", "go")]
+    [InlineData("gone", "go")]
+    [InlineData("going", "go")]
+    [InlineData("taken", "take")]
+    [InlineData("walked", "walk")]
+    [InlineData("lunged", "lunge")]
+    [InlineData("mice", "mouse")]
+    [InlineData("children", "child")]
+    [InlineData("women", "woman")]
+    public async Task The_forms_of_a_word_are_words(string form, string lemma)
+    {
+        Skip.IfNot(_skipReason is null, _skipReason);
+
+        var entry = await Db.LexiconEntries.FirstOrDefaultAsync(
+            l => l.TextNormalized == form && l.Lemma == lemma);
+
+        Assert.NotNull(entry);
+        Assert.Contains("form=", entry!.SourceFlags);
+
+        // It says what it is, in both languages — a learner adding "went"
+        // should see that it is the past of "go", not a bare word.
+        Assert.Contains(lemma, entry.DefinitionEn);
+        Assert.False(string.IsNullOrWhiteSpace(entry.MeaningAr));
+    }
+
+    [SkippableTheory]
+    // A plural that is the word with an `s` on the end is the same word.
+    [InlineData("books")]
+    [InlineData("cities")]
+    [InlineData("boxes")]
+    public async Task A_regular_plural_is_not_a_separate_word(string plural)
+    {
+        Skip.IfNot(_skipReason is null, _skipReason);
+
+        var added = await Db.LexiconEntries.AnyAsync(
+            l => l.TextNormalized == plural && l.SourceFlags.Contains("form=pl"));
+
+        Assert.False(added, $"\"{plural}\" should not be its own entry");
+    }
+
+    [SkippableTheory]
+    // A rule that read "nothing listed" as "regular" would have made these.
+    [InlineData("readed")]
+    [InlineData("costed")]
+    [InlineData("hurted")]
+    [InlineData("spreaded")]
+    [InlineData("broadcasted")]
+    // Not "putted": that is the past of *putt*, the golf verb, and it is real.
+    public async Task No_invented_past_tenses(string nonsense)
+    {
+        Skip.IfNot(_skipReason is null, _skipReason);
+
+        Assert.False(
+            await Db.LexiconEntries.AnyAsync(l => l.TextNormalized == nonsense),
+            $"\"{nonsense}\" is not a word");
+    }
+
     [SkippableFact]
     public async Task Every_arabic_gloss_has_a_searchable_form()
     {

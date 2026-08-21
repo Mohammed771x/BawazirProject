@@ -1,0 +1,8 @@
+# Test-only. Never installed in a deployment — `requirements.txt` is what runs
+# the service, and it is deliberately kept to what the service itself needs.
+#
+#   .venv/bin/pip install -r requirements-dev.txt
+#   .venv/bin/python -m pytest
+pytest==8.4.2
+# FastAPI's TestClient is built on it.
+httpx==0.28.1

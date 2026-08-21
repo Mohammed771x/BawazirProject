@@ -26,7 +26,27 @@ public sealed class AiServiceOptions
     /// </remarks>
     public string Token { get; init; } = string.Empty;
 
-    public int TimeoutSeconds { get; init; } = 90;
+    /// <summary>
+    /// How long one AI call may take before the fallback answers instead.
+    /// </summary>
+    /// <remarks>
+    /// This has to stay comfortably <b>under</b> the client's own receive
+    /// timeout, and it did not. Both were 90 seconds, so a hung AI service was
+    /// measured returning at 90.08s while the Flutter client
+    /// (<c>http_wordos_api.dart</c>) gave up at 90.00s — the learner saw "the
+    /// server took too long" and the whole
+    /// <see cref="ResilientAiContentService"/> fallback, which had done its job
+    /// perfectly, was never seen by anyone.
+    ///
+    /// Twenty-five seconds leaves the client over a minute of headroom, so the
+    /// degraded-but-usable session actually arrives. A generation that has not
+    /// answered in twenty-five seconds was not going to rescue the session
+    /// anyway: the measured healthy call takes eight to nine.
+    ///
+    /// Raising this above the client's receive timeout re-creates the bug —
+    /// they are one setting in two places, and they move together.
+    /// </remarks>
+    public int TimeoutSeconds { get; init; } = 25;
 }
 
 /// <summary>
@@ -67,10 +87,24 @@ public sealed class HttpAiContentService(
                 meaning = w.Meaning,
                 definition = w.Definition,
                 part_of_speech = w.PartOfSpeech,
+                // Which form it is, and whether the passage may pluralise it
+                // (ADR-047).
+                form = w.Form,
+                may_pluralise = w.MayPluralise,
             }),
             listening = request.Listening,
             comprehension_count = request.ComprehensionCount,
-            reuse_words = request.ReuseWords,
+            // Shaped like the target words, so a form the learner knows comes
+            // back in that form (ADR-047).
+            reuse_words = request.ReuseWords.Select(w => new
+            {
+                text = w.Text,
+                meaning = w.Meaning,
+                definition = w.Definition,
+                part_of_speech = w.PartOfSpeech,
+                form = w.Form,
+                may_pluralise = w.MayPluralise,
+            }),
         };
 
         var response = await PostAsync<ContentDto>("/ai/content", payload, ct);
@@ -92,6 +126,10 @@ public sealed class HttpAiContentService(
                 meaning = w.Meaning,
                 definition = w.Definition,
                 part_of_speech = w.PartOfSpeech,
+                // Which form it is, and whether the passage may pluralise it
+                // (ADR-047).
+                form = w.Form,
+                may_pluralise = w.MayPluralise,
             }),
             comprehension_count = request.ComprehensionCount,
         };
@@ -165,12 +203,29 @@ public sealed class HttpAiContentService(
                 from_ai = t.FromAi,
                 text = t.Text,
             }),
+            interests = request.Interests ?? [],
+            // What each remaining word is, so the question invites that form
+            // (ADR-047), and which words the learner nearly reached (ADR-050).
+            remaining_shapes = (request.RemainingShapes ?? []).Select(w => new
+            {
+                text = w.Text,
+                meaning = w.Meaning,
+                part_of_speech = w.PartOfSpeech,
+                form = w.Form,
+                may_pluralise = w.MayPluralise,
+            }),
+            form_reminders = (request.FormReminders ?? []).Select(r => new
+            {
+                word = r.Word,
+                form = r.Form,
+                said = r.Said,
+            }),
         };
 
         var response = await PostAsync<SpeakingDto>("/ai/speaking/turn", payload, ct);
 
         return new SpeakingObservation(
-            response.Reply, response.WordsUsedNaturally, FromFallback: false,
+            response.Reply, response.WordsOnlyNamed, FromFallback: false,
             PromptVersion: response.PromptVersion,
             Model: response.Model,
             Tokens: response.Tokens);
@@ -205,7 +260,7 @@ public sealed class HttpAiContentService(
             response.Words.Select(w => new SpeakingWordObservation(
                 w.Word, w.Used, w.MeaningCorrect, w.Understandable,
                 w.GrammarAcceptable, w.MajorGrammarProblem,
-                w.Evidence, w.Feedback)).ToList(),
+                w.Evidence, w.Feedback, w.Better)).ToList(),
             response.Summary,
             FromFallback: false,
             PromptVersion: response.PromptVersion,
@@ -325,7 +380,7 @@ public sealed class HttpAiContentService(
 
     private sealed record SpeakingDto(
         string Reply,
-        List<string> WordsUsedNaturally,
+        List<string> WordsOnlyNamed,
         string PromptVersion,
         string Model,
         int Tokens);
@@ -364,7 +419,8 @@ public sealed class HttpAiContentService(
         bool GrammarAcceptable,
         bool MajorGrammarProblem,
         string Evidence,
-        string Feedback);
+        string Feedback,
+        string Better = "");
 }
 
 public sealed class AiServiceException(string message) : Exception(message);

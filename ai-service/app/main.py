@@ -12,10 +12,13 @@ can reach the port from spending the API budget.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import secrets
+import threading
 import time
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -48,9 +51,10 @@ def require_service_token(
 ) -> None:
     """Only the backend may call this service.
 
-    Skipped when no token is configured, which keeps local development simple —
-    but the service refuses to be useful in that state to anyone off-host,
-    because it should never be exposed directly.
+    Skipped when no token is configured — which now takes an explicit
+    ``AI_ALLOW_UNAUTHENTICATED=true`` to reach, because startup refuses a
+    missing token outright (see ``config._require_service_token``). Leaving the
+    variable unset used to land here silently and accept every caller.
     """
     if not SETTINGS.service_token:
         return
@@ -72,6 +76,14 @@ class TargetWord(BaseModel):
     meaning: str = Field(max_length=256)
     definition: str = Field(default="", max_length=1024)
     part_of_speech: str = Field(default="", max_length=32)
+    # Which form the learner is practising — "past participle", "plural" — or
+    # nothing for the word itself. The passage has to use *that* form, because
+    # that is what they added (ADR-047).
+    form: str | None = Field(default=None, max_length=32)
+    # Whether the passage may write it in the plural. True only when the plural
+    # is the word plus s/es: `books` teaches a `book` learner something, `mice`
+    # is a word they have not met.
+    may_pluralise: bool = False
 
 
 class ContentRequest(BaseModel):
@@ -84,7 +96,9 @@ class ContentRequest(BaseModel):
     comprehension_count: int = Field(default=5, ge=1, le=10)
     # Active vocabulary to re-encounter, not to test. Bounded like every other
     # list here so an oversized request cannot inflate the prompt.
-    reuse_words: list[str] = Field(default_factory=list, max_length=10)
+    # Either a bare word or one carrying the form the learner knows it in —
+    # `gone` the participle should come back as `gone` (ADR-047).
+    reuse_words: list[str | TargetWord] = Field(default_factory=list, max_length=10)
 
 
 class WordContext(BaseModel):
@@ -161,17 +175,38 @@ class TranscriptTurn(BaseModel):
     text: str = Field(max_length=4000)
 
 
+class FormReminder(BaseModel):
+    """A word the learner all but used: they said another form of it.
+
+    "I go there every year" is not `went`, but it is one step away — and "try to
+    use went" does not say which step (ADR-050).
+    """
+
+    word: str = Field(max_length=128)
+    form: str = Field(max_length=32)
+    said: str = Field(max_length=128)
+
+
 class SpeakingRequest(BaseModel):
+    # Colours the conversation; never decides whether a word is asked for.
+    interests: list[str] = Field(default_factory=list, max_length=20)
     learner_name: str = Field(max_length=120)
     level: str = Field(max_length=8)
     remaining_words: list[str] = Field(default_factory=list, max_length=15)
     used_words: list[str] = Field(default_factory=list, max_length=15)
     transcript: list[TranscriptTurn] = Field(default_factory=list, max_length=40)
+    # What each remaining word is — the past tense, a plural, or the plain word
+    # (ADR-047). A question that invites the wrong form cannot be answered with
+    # the word being practised.
+    remaining_shapes: list[TargetWord] = Field(default_factory=list, max_length=15)
+    form_reminders: list[FormReminder] = Field(default_factory=list, max_length=15)
 
 
 class SpeakingResponse(BaseModel):
     reply: str
-    words_used_naturally: list[str]
+    # The one judgement a reader of the transcript cannot make: whether a word
+    # that appears there was used or merely named (ADR-048). Usually empty.
+    words_only_named: list[str]
     prompt_version: str
     model: str
     tokens: int
@@ -206,6 +241,8 @@ class SpeakingWordObservation(BaseModel):
     major_grammar_problem: bool
     evidence: str = ""
     feedback: str = ""
+    # The model sentence: their own words repaired, or one to copy (ADR-048).
+    better: str = ""
 
 
 class PlacementAnswerIn(BaseModel):
@@ -275,17 +312,23 @@ def generate_content(request: ContentRequest) -> ContentResponse:
         words=[w.model_dump() for w in request.words],
         listening=request.listening,
         comprehension_count=request.comprehension_count,
-        reuse_words=request.reuse_words,
+        reuse_words=[
+            w if isinstance(w, str) else w.model_dump()
+            for w in request.reuse_words
+        ],
     )
 
-    payload = _generate_json(prompt, prompts.READING_SCHEMA)
-    return _shape_content(payload, prompts.READING_PROMPT_VERSION, started)
+    generated = _generate_json(prompt, prompts.READING_SCHEMA)
+    return _shape_content(
+        generated.payload, prompts.READING_PROMPT_VERSION, started,
+        generated.tokens)
 
 
 def _shape_content(
     payload: dict,
     prompt_version: str,
     started: float,
+    tokens: int,
 ) -> ContentResponse:
     """Turns a raw generation payload into the response both callers return.
 
@@ -334,7 +377,6 @@ def _shape_content(
     ]
 
     elapsed = int((time.monotonic() - started) * 1000)
-    tokens = _last_tokens
     log.info(
         "content prompt=%s sentences=%d questions=%d tokens=%d %dms",
         prompt_version, len(sentences), len(questions), tokens, elapsed,
@@ -389,8 +431,10 @@ def relevel_content(request: RelevelRequest) -> ContentResponse:
         comprehension_count=request.comprehension_count,
     )
 
-    payload = _generate_json(prompt, prompts.READING_SCHEMA)
-    return _shape_content(payload, prompts.RELEVEL_PROMPT_VERSION, started)
+    generated = _generate_json(prompt, prompts.READING_SCHEMA)
+    return _shape_content(
+        generated.payload, prompts.RELEVEL_PROMPT_VERSION, started,
+        generated.tokens)
 
 
 @app.post(
@@ -403,7 +447,7 @@ def evaluate_writing(request: WritingRequest) -> WritingResponse:
 
     Deliberately returns no pass/fail — the backend owns that decision (R2).
     """
-    payload = _generate_json(
+    generated = _generate_json(
         prompts.writing_prompt(
             word=request.word,
             meaning=request.meaning,
@@ -416,7 +460,8 @@ def evaluate_writing(request: WritingRequest) -> WritingResponse:
         temperature=0.2,
     )
 
-    log.info("writing word=%s tokens=%d", request.word, _last_tokens)
+    payload, tokens = generated
+    log.info("writing word=%s tokens=%d", request.word, tokens)
 
     return WritingResponse(
         used_word=bool(payload.get("used_word")),
@@ -428,7 +473,7 @@ def evaluate_writing(request: WritingRequest) -> WritingResponse:
         suggestion=(payload.get("suggestion") or None),
         prompt_version=prompts.WRITING_PROMPT_VERSION,
         model=SETTINGS.gemini_model,
-        tokens=_last_tokens,
+        tokens=tokens,
     )
 
 
@@ -438,45 +483,88 @@ def evaluate_writing(request: WritingRequest) -> WritingResponse:
     dependencies=[Depends(require_service_token)],
 )
 def speaking_turn(request: SpeakingRequest) -> SpeakingResponse:
-    payload = _generate_json(
+    generated = _generate_json(
         prompts.speaking_turn_prompt(
             learner_name=request.learner_name,
             level=request.level,
             remaining_words=request.remaining_words,
             used_words=request.used_words,
             transcript=[t.model_dump() for t in request.transcript],
+            interests=request.interests,
+            remaining_shapes=[w.model_dump() for w in request.remaining_shapes],
+            form_reminders=[r.model_dump() for r in request.form_reminders],
         ),
         prompts.SPEAKING_TURN_SCHEMA,
         temperature=0.8,
     )
 
+    payload, tokens = generated
     log.info("speaking remaining=%d tokens=%d",
-             len(request.remaining_words), _last_tokens)
+             len(request.remaining_words), tokens)
 
     return SpeakingResponse(
         reply=str(payload.get("reply", "")),
-        words_used_naturally=[
-            str(w) for w in payload.get("words_used_naturally", [])
+        words_only_named=[
+            str(w) for w in payload.get("words_only_named", [])
         ],
         prompt_version=prompts.SPEAKING_PROMPT_VERSION,
         model=SETTINGS.gemini_model,
-        tokens=_last_tokens,
+        tokens=tokens,
     )
 
 
 # ── Provider plumbing ────────────────────────────────────────────────────────
 
-_last_tokens = 0
+
+# How many model calls this worker will have in flight at once, and how long a
+# request waits for a slot before being turned away (ADR-051).
+#
+# These endpoints are synchronous, so Starlette runs them on a thread pool and
+# every in-flight call holds a thread and its own memory for the seconds Gemini
+# takes. Without a ceiling the queue is unbounded: arrivals keep being accepted,
+# each one waits longer than the last, and the client times out on work the
+# server is still dutifully doing. A refusal after two seconds is a better
+# answer than a timeout after ninety.
+_MAX_IN_FLIGHT = max(1, int(os.environ.get("WORDOS_AI_MAX_IN_FLIGHT", "16")))
+_ADMISSION_WAIT_SECONDS = float(
+    os.environ.get("WORDOS_AI_ADMISSION_WAIT", "2.0"))
+
+_in_flight = threading.BoundedSemaphore(_MAX_IN_FLIGHT)
 
 
-def _generate_json(prompt: str, schema: dict, temperature: float = 0.7) -> dict:
-    """Calls Gemini and records the token cost.
+class Generated(NamedTuple):
+    """One model answer and what it cost.
+
+    The cost travels *with* the answer. It used to be left in a module-level
+    global for the endpoint to pick up afterwards — which works exactly as long
+    as one request is in flight at a time. These endpoints are synchronous, so
+    Starlette runs them on a thread pool: two learners arriving together read
+    each other's token counts, and the token count is the experiment's own
+    measurement (ADR-051).
+    """
+
+    payload: dict
+    tokens: int
+
+
+def _generate_json(
+    prompt: str, schema: dict, temperature: float = 0.7
+) -> Generated:
+    """Calls Gemini and returns the answer with its token cost.
 
     A provider failure becomes a 502 with a stable code: the backend needs to
     distinguish "AI unavailable" from "bad request" so it can fall back rather
     than fail the learner's session.
     """
-    global _last_tokens
+    if not _in_flight.acquire(timeout=_ADMISSION_WAIT_SECONDS):
+        log.warning("at capacity: %d calls in flight", _MAX_IN_FLIGHT)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "AI_BUSY",
+                "message": "The AI service is at capacity. Try again shortly.",
+            },
+        )
 
     try:
         response = CLIENT.generate(
@@ -488,12 +576,13 @@ def _generate_json(prompt: str, schema: dict, temperature: float = 0.7) -> dict:
     except GeminiError as exc:
         log.warning("gemini failure: %s", exc)
         raise _upstream(str(exc)) from exc
+    finally:
+        _in_flight.release()
 
-    _last_tokens = (response.prompt_tokens or 0) + (response.output_tokens or 0)
+    tokens = (response.prompt_tokens or 0) + (response.output_tokens or 0)
 
-    import json
     try:
-        return json.loads(response.text)
+        return Generated(json.loads(response.text), tokens)
     except json.JSONDecodeError as exc:
         log.warning("unparseable JSON from Gemini: %s", response.text[:200])
         raise _upstream("Gemini returned unparseable JSON") from exc
@@ -527,7 +616,7 @@ def speaking_evaluate(request: SpeakingEvalRequest) -> SpeakingEvalResponse:
     and per-turn evaluation would also multiply the cost of a session by the
     number of things the learner says.
     """
-    payload = _generate_json(
+    generated = _generate_json(
         prompts.speaking_eval_prompt(
             learner_name=request.learner_name,
             level=request.level,
@@ -540,6 +629,8 @@ def speaking_evaluate(request: SpeakingEvalRequest) -> SpeakingEvalResponse:
         # not pass one evening and fail the next.
         temperature=0.1,
     )
+
+    payload, tokens = generated
 
     reported = {
         str(w.get("word", "")).strip().lower(): w
@@ -559,12 +650,16 @@ def speaking_evaluate(request: SpeakingEvalRequest) -> SpeakingEvalResponse:
             grammar_acceptable=bool(row.get("grammar_acceptable")),
             major_grammar_problem=bool(row.get("major_grammar_problem")),
             evidence=str(row.get("evidence", ""))[:500],
-            feedback=str(row.get("feedback", ""))[:500],
+            # Room for two or three sentences of teaching: the feedback is now
+            # what the learner reads after a conversation, not a one-liner
+            # (ADR-048).
+            feedback=str(row.get("feedback", ""))[:1200],
+            better=str(row.get("better", ""))[:400],
         ))
 
     log.info(
         "speaking eval words=%d turns=%d tokens=%d",
-        len(request.words), len(request.transcript), _last_tokens,
+        len(request.words), len(request.transcript), tokens,
     )
 
     return SpeakingEvalResponse(
@@ -572,7 +667,7 @@ def speaking_evaluate(request: SpeakingEvalRequest) -> SpeakingEvalResponse:
         summary=str(payload.get("summary", ""))[:1000],
         prompt_version=prompts.SPEAKING_EVAL_PROMPT_VERSION,
         model=SETTINGS.gemini_model,
-        tokens=_last_tokens,
+        tokens=tokens,
     )
 
 
@@ -594,7 +689,7 @@ def placement_evaluate(request: PlacementEvalRequest) -> PlacementEvalResponse:
     """
     started = time.monotonic()
 
-    payload = _generate_json(
+    generated = _generate_json(
         prompts.placement_eval_prompt(
             skill=request.skill,
             answers=[a.model_dump() for a in request.answers],
@@ -603,6 +698,8 @@ def placement_evaluate(request: PlacementEvalRequest) -> PlacementEvalResponse:
         # A placement result should not depend on the evening it was taken.
         temperature=0.1,
     )
+
+    payload, tokens = generated
 
     rated = {
         str(a.get("item_id", "")).strip(): a
@@ -632,5 +729,7 @@ def placement_evaluate(request: PlacementEvalRequest) -> PlacementEvalResponse:
         summary=str(payload.get("summary") or ""),
         prompt_version=prompts.PLACEMENT_EVAL_PROMPT_VERSION,
         model=SETTINGS.gemini_model,
-        tokens=payload.get("_tokens", 0),
+        # Was reading a key the payload never had, so placement always reported
+        # zero cost — the one AI call whose price nobody could see.
+        tokens=tokens,
     )

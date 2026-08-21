@@ -52,6 +52,8 @@ public class AnalyticsTests(PostgresFixture db) : IAsyncLifetime
             email = $"{prefix}-{Guid.NewGuid():N}@test.dev",
             password = "correct-horse-battery",
             displayName = "Learner",
+            phoneCountryCode = "967",
+            phoneNumber = "770000001",
         });
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -78,6 +80,8 @@ public class AnalyticsTests(PostgresFixture db) : IAsyncLifetime
             email,
             password = "correct-horse-battery",
             displayName = "Owner",
+            phoneCountryCode = "967",
+            phoneNumber = "770000005",
         });
         register.EnsureSuccessStatusCode();
 
@@ -144,6 +148,167 @@ public class AnalyticsTests(PostgresFixture db) : IAsyncLifetime
 
         (await Client.PostAsync($"/api/sessions/{sessionId}/complete", null))
             .EnsureSuccessStatusCode();
+    }
+
+    /// <summary>The Reading row of the overview, plus the totals around it.</summary>
+    private async Task<(int Sessions, int Passed, int Failed, int Decided,
+        int FirstAttempt, int Learners, int Words)> ReadingStatsAsync(
+        string? asOwner = null)
+    {
+        if (asOwner is not null) await SignInAsOwnerAsync(asOwner);
+
+        var overview = await Client.GetFromJsonAsync<JsonElement>(
+            "/api/admin/overview");
+
+        var reading = overview.GetProperty("skillStats").EnumerateArray()
+            .First(x => x.GetProperty("skill").GetString() == "READING");
+
+        return (
+            reading.GetProperty("sessionsCompleted").GetInt32(),
+            reading.GetProperty("wordsPassed").GetInt32(),
+            reading.GetProperty("wordsFailed").GetInt32(),
+            reading.GetProperty("wordsDecided").GetInt32(),
+            reading.GetProperty("firstAttemptPasses").GetInt32(),
+            overview.GetProperty("userCount").GetInt32(),
+            overview.GetProperty("wordsAddedTotal").GetInt32());
+    }
+
+    // ── The figures have to mean what they say (ADR-052) ─────────────────────
+
+    [SkippableFact]
+    public async Task An_owners_own_testing_is_not_reported_as_how_learners_are_doing()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        // One learner, one session.
+        await SignInAsync("scoped-learner");
+        await AddWordAsync("research", "بحث علمي");
+        await RunReadingAsync(pass: true);
+
+        // Then the Owner does the same thing, which is what an Owner is for:
+        // trying the product. Their work used to land in every numerator while
+        // the denominator counted learners alone — on the real database that
+        // was 47 of 288 sessions and 114 of 392 skill decisions, a developer's
+        // afternoon reported as how the audience is doing.
+        //
+        // Asserted as a delta, not an absolute: the overview is a figure about
+        // everybody, and the test database is shared with the whole run.
+        await SignInAsOwnerAsync("scoped-owner");
+
+        var before = await ReadingStatsAsync();
+
+        // The Owner now does exactly what the learner did.
+        await AddWordAsync("theory", "نظرية");
+        await RunReadingAsync(pass: true);
+
+        var after = await ReadingStatsAsync();
+
+        // Nothing moved. These figures are about learners, and an Owner trying
+        // the product is not one.
+        Assert.Equal(before.Sessions, after.Sessions);
+        Assert.Equal(before.Passed, after.Passed);
+        Assert.Equal(before.Learners, after.Learners);
+        Assert.Equal(before.Words, after.Words);
+    }
+
+    [SkippableFact]
+    public async Task First_attempt_accuracy_divides_words_by_words()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        var before = await ReadingStatsAsync(asOwner: "denominator-owner");
+
+        // One word, failed and then — days later, after the gap — passed. The
+        // second decision is appended to the event log directly, because the
+        // spaced gap is precisely what stops a second session happening today.
+        await SignInAsync("denominator-learner");
+        var wordId = await AddWordAsync("research", "بحث علمي");
+        await RunReadingAsync(pass: false);
+
+        await using (var context = db.CreateContext())
+        {
+            await context.Database.ExecuteSqlAsync(
+                $"INSERT INTO word_events (\"Id\", \"WordId\", \"Type\", \"Skill\", \"CreatedAt\") VALUES ({Guid.NewGuid()}, {wordId}, 'SkillPassed', 'Reading', {DateTimeOffset.UtcNow})");
+        }
+
+        var after = await ReadingStatsAsync(asOwner: "denominator-owner-2");
+
+        // Two decisions arrived, about one word.
+        Assert.Equal(2, after.Passed + after.Failed - before.Passed - before.Failed);
+        Assert.Equal(1, after.Decided - before.Decided);
+
+        // And it is not a first-attempt pass, because it failed first. Divided
+        // by attempts rather than words, this is the arithmetic that understated
+        // Speaking as 67% where the answer was 86%.
+        Assert.Equal(0, after.FirstAttempt - before.FirstAttempt);
+    }
+
+    [SkippableFact]
+    public async Task The_learner_list_reports_the_sessions_it_draws()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        var learnerId = await SignInAsync("listed-learner");
+        await AddWordAsync("research", "بحث علمي");
+        await RunReadingAsync(pass: true);
+
+        await SignInAsOwnerAsync("listed-owner");
+
+        var page = await Client.GetFromJsonAsync<JsonElement>(
+            "/api/admin/users?page=0&pageSize=200");
+
+        var row = page.GetProperty("items").EnumerateArray()
+            .First(u => u.GetProperty("id").GetGuid() == learnerId);
+
+        // The client has always drawn this number. The server had never sent
+        // it, so every learner read "0 sessions" however much they had done.
+        Assert.Equal(1, row.GetProperty("sessionsCompleted").GetInt32());
+
+        // And "last active" is the last thing they did, not their last sign-in:
+        // a learner who registers and then studies has no second login, and was
+        // sorted and shown as though they had never come back.
+        Assert.NotEqual(JsonValueKind.Null, row.GetProperty("lastActiveAt").ValueKind);
+    }
+
+    [SkippableFact]
+    public async Task Today_is_the_learners_day_not_the_servers()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        var learnerId = await SignInAsync("timezone-learner");
+        await AddWordAsync("research", "بحث علمي");
+
+        await SignInAsOwnerAsync("timezone-owner");
+
+        var detail = await Client.GetFromJsonAsync<JsonElement>(
+            $"/api/admin/users/{learnerId}");
+
+        // A word added right now is a word added today. Under a UTC boundary
+        // this read zero for every learner between local midnight and 3am —
+        // observed on a real account: six words added, "0 today" reported.
+        Assert.Equal(1, detail.GetProperty("wordsAddedToday").GetInt32());
+    }
+
+    [SkippableFact]
+    public async Task The_typical_session_is_reported_beside_the_average()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        await SignInAsync("duration-learner");
+        await AddWordAsync("research", "بحث علمي");
+        await RunReadingAsync(pass: true);
+
+        await SignInAsOwnerAsync("duration-owner");
+
+        var overview = await Client.GetFromJsonAsync<JsonElement>(
+            "/api/admin/overview");
+
+        // Both are present. A session is resumable, so the mean is dragged by
+        // sessions finished the next morning — median 16 seconds against a mean
+        // of 45 minutes on real data — and the dashboard shows the median.
+        Assert.True(overview.TryGetProperty("medianSessionDurationMs", out var median));
+        Assert.True(median.GetInt32() >= 0);
+        Assert.True(overview.TryGetProperty("averageSessionDurationMs", out _));
     }
 
     // ── Overview ─────────────────────────────────────────────────────────────
@@ -401,10 +566,13 @@ public class AnalyticsTests(PostgresFixture db) : IAsyncLifetime
                 $"""UPDATE activity_events SET "CreatedAt" = now() - interval '30 days' WHERE "UserId" = {quietId}""");
         }
 
+        // Searched, not paged. This test is about the window; a learner whose
+        // last activity was a month ago now sorts to the end of the list
+        // (ADR-052), and the run's own accounts fill any page before them.
         var today = await Client.GetFromJsonAsync<JsonElement>(
-            "/api/admin/users?days=1");
+            "/api/admin/users?days=1&q=quiet");
         var everyone = await Client.GetFromJsonAsync<JsonElement>(
-            "/api/admin/users");
+            "/api/admin/users?q=quiet");
 
         var todayIds = today.GetProperty("items").EnumerateArray()
             .Select(u => u.GetProperty("id").GetGuid()).ToList();

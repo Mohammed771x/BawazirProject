@@ -104,6 +104,12 @@ by the API; hiding a menu item is not access control.
   match; a productive skill cannot be placed until the learner has actually produced
   language (ADR-026).
 * Speaking items arrive as `SPOKEN` and are answered with the microphone.
+* **Every question ends when the learner leaves it** (ADR-058). Answering, restarting,
+  finishing or leaving the screen stops the clip and closes the microphone, and each
+  question builds its own answer field — so nothing typed, heard or recorded on one
+  question follows the learner to the next. A result the recogniser was still preparing
+  when the microphone stopped is recognised as belonging to the question it was spoken
+  for, and dropped.
 * **The result is phrased as an estimate, not a verdict.** The learner is told where
   their practice will start, before any band is shown; nothing says "you are a
   beginner".
@@ -123,8 +129,15 @@ The learner types into one field, **in English or in Arabic**:
   back: `يذهب` → `go`. Diacritics, tatweel and the alef/ya/ta-marbuta families are
   folded on both sides, because Arabic WordNet vocalises 45,000 of its glosses and
   nobody types the marks (ADR-034).
-* **Any real English word resolves.** Irregular forms find their headword
-  (`went` → `go`, `children` → `child`); one-letter words (`a`, `I`) are matched exactly;
+* **The forms of a word are words.** `went`, `gone`, `going`, `taken`, `walked`,
+  `mice`, `children` and `women` are entries in their own right, each saying what it
+  is — *past tense of "go"* / *(الماضي)* — so a learner can add and practise a form
+  as its own vocabulary item (ADR-045). Where the past and the participle share a
+  spelling — `played`, `said` — both are offered, because "I played" and "I have
+  played" are two things to learn (ADR-046); where only one role is real, only that
+  one appears (`beaten` is never the past of `beat`). English has no future form to
+  add: "will play" is `will` plus the base. A plural that is just the word plus `s`
+  is not a word: no `books`, no `cities`. One-letter words (`a`, `I`) are matched exactly;
   and the 167 closed-class words WordNet does not carry — pronouns, articles,
   auxiliaries, modals, prepositions, conjunctions, question words — are authored into
   the lexicon and ranked ahead of their homographs, so `are` is the verb and not a unit
@@ -145,7 +158,9 @@ suggestions and an explanation — never an "add it anyway" button.
 
 Every session is generated server-side, stored, and replayed on resume — so a crash, a
 backgrounded app or a lost connection returns the learner to where they were rather
-than to a different passage.
+than to a different passage. A session **records the words it is for** when it starts,
+so resuming one returns the same words even for Speaking, which is a conversation and
+has no items to recover them from (ADR-039).
 
 ### Shared behaviour
 
@@ -153,11 +168,20 @@ than to a different passage.
   to three attempts; a first-attempt miss still fails that word for that skill. A
   comprehension question is asked once — the answer has already been shown, so asking
   again teaches nothing (ADR-031).
-* **Level control.** Before the questions begin, the learner can change the level of
-  the session. Reading and Listening **re-tell the same passage** at the new level
-  rather than generating a different one, and the questions are regenerated with it
-  (ADR-030). Speaking changes level for the next turn. The choice writes through to
-  Settings — and never to the validated level (R6).
+* **Level control.** The learner can change the level of the session from inside it.
+  Reading and Listening **re-tell the same passage** at the new level rather than
+  generating a different one, and their questions are regenerated with it — but only
+  before the questions begin (ADR-030). Speaking and Writing have no passage to
+  re-tell, so their level changes at any point and applies to what happens next: the
+  tutor's reply, or the rewrite. In a conversation the band is spelled out for the
+  model rather than named — A1 is short sentences of the commonest words with one
+  clause, C2 is fully idiomatic — so dropping the level makes the *very next line*
+  easier (ADR-044). Spelling has no level of its own (ADR-008).
+
+  The choice **writes through to the learner's profile immediately**, so Settings and
+  the Hub show it the moment they look (ADR-038) — and it moves the *user-selected*
+  level only. The validated level is earned from performance, and a tap is not
+  performance (R6).
 * **Typography and direction.** English content is pinned left-to-right whatever the
   interface language is; Arabic meanings render right-to-left. The header carries the
   skill and its level badge at reading size.
@@ -168,13 +192,19 @@ than to a different passage.
 ### Reading
 
 A generated passage on one of the learner's interests, at their level, containing the
-session's target words. Then five comprehension questions, then one question per target
+session's target words — each in the shape the learner is practising (ADR-047). A word
+added as the past participle appears as the past participle; a noun whose plural is
+just an `s` may appear either way, because `book` and `books` are one word; a noun whose
+plural is a different word (`mouse` → `mice`) appears exactly as given, because the
+plural is a separate vocabulary item they have not been taught. Active words reused in
+the passage follow the same rule. Then five comprehension questions, then one question per target
 word about *that use of it*, not the dictionary entry.
 
 Every word of the passage is tappable and answers instantly with the meaning it carries
 **in that sentence** plus its part of speech, because the generator glosses its own
-passage as it writes it (ADR-029). Any tapped word can be added to the pipeline on the
-spot.
+passage as it writes it (ADR-029) — and a **re-told** passage is glossed exactly the
+same way, so changing the level does not turn taps back into dictionary lookups
+(ADR-039). Any tapped word can be added to the pipeline on the spot.
 
 ### Listening
 
@@ -193,14 +223,71 @@ level moves — because its only job is that nobody walks into a conversation ab
 they cannot recall (§26). No words due means no warm-up.
 
 Then a **conversation**, not a list of questions: a tutor that reacts to what was said
-and steers toward the remaining words. The microphone is **push-to-talk** — the tutor
+and steers toward the remaining words — by working backwards from each word to a
+situation where a person would really say it, changing the subject when the current one
+cannot carry it, and never bolting "try to use this word" onto an unrelated question
+(ADR-040). The learner's interests choose between the situations a word could live in;
+they never force a word somewhere it does not belong. Answering without the word is a
+good answer, and the word gets another opening later. The microphone is **push-to-talk** — the tutor
 greets, the mic stays off, the learner presses to speak, speaks for as long as they
-like with no silence cut-off, and presses again when done (ADR-028).
+like with no silence cut-off, and presses again when done (ADR-028). A **bin** sits
+beside it while they are talking: it throws the recording away and offers the
+microphone again, so a fumbled sentence never has to be sent (ADR-059).
 
-Judgement happens **once, at the end, on the whole conversation** (ADR-019). A word
-passes on substantial use, not on mention (ADR-016). **Pronunciation is never scored**:
-the transcript comes from speech recognition, so a "mispronunciation" is
-indistinguishable from a recogniser error (ADR-020).
+During the conversation the tutor tracks what has actually been said: once a word has
+been used in a sentence of the learner's own, it drops off the list and the tutor moves
+to the next one — **even if the sentence is wrong**, because moving on is about *use* and
+how well it was used is judged at the end (ADR-041). Naming a word — "let me use *hook*
+in a sentence" — is not using it, and does not (ADR-040).
+
+The conversation is about **the words the session was opened for**, and only those. A
+word that reaches Speaking while it is open — added by the learner, or finished
+elsewhere — waits for the next conversation (ADR-039, ADR-050).
+
+The tutor knows what each of those words *is*: the past tense, a plural, or the plain
+word (ADR-047), so the question it asks can actually be answered with the form being
+practised. And when the learner reaches for a word and gets the form wrong — "I **go**
+to my village every year" where the word is `went` — it names the step they missed
+rather than repeating the word at them: *"Almost — I need the past tense: 'went'."* It
+stays on that word and lets them try the same idea again (ADR-050).
+
+Every practising turn ends by saying which word to use: *Try to use the word "…" in your
+answer.* The learner cannot see the list, and guessing which word is wanted is not the
+exercise. When the last word lands the tutor closes instead: what they did well, and
+goodbye — never another question about a word they have just finished (ADR-042).
+
+Judgement happens **once, at the end, on the whole conversation** (ADR-019), one verdict
+per word:
+
+* **used, meant correctly, understandable, no grammar breakdown → passes.** Ordinary
+  grammar slips are recorded and ignored: "I research about AI yesterday" has the wrong
+  tense, the right meaning, and passes (§32).
+* **wrong meaning, or grammar broken enough to obscure it → fails**, and that word alone
+  comes back in Speaking after the usual gap. Nothing else about the word is disturbed
+  (rule R5).
+
+Whether a word was used at all is read from the transcript, which cannot be wrong about
+it; the model is asked only whether a word that appears was being *named* rather than
+used. Only the quality of the use is the judge's call.
+
+**What counts as saying it** (ADR-049). The word has to be there as a whole word —
+`booking` and `bookshop` are not `book`, and the tutor asks again. But a plain noun's
+regular plural *is* the word: answer "I read three **books**" and `book` is done, because
+`book` and `books` are one word to a learner and asking again reads as not listening.
+Anything else is a different word with a pipeline of its own — `mice` is not `mouse`
+(ADR-045), and `researched` is not `research`. Whether the plural counts is the same
+fact the passage checks before writing one (ADR-047). A spelling the learner holds
+twice — `book` the object and `book` the verb (ADR-046) — is one thing to say: said
+once, both move on.
+
+**The result is a lesson, not a scoreboard** (ADR-048), and it is written **to** the
+learner rather than about them — "you used it well", never "the learner used" (ADR-059).
+Every word comes back with what
+the learner did with it, why it was wrong when it was, that it returns another day, their
+own words quoted, and one English sentence to copy — in their language, at their level. A word passes on substantial use, not on mention
+(ADR-016). **Pronunciation is never scored**: the transcript comes from speech
+recognition, so a "mispronunciation" is indistinguishable from a recogniser error
+(ADR-020).
 
 ### Writing
 
@@ -209,10 +296,22 @@ sentence about the learner's own life. The AI reports observations — was the w
 with the intended meaning, in a grammatically appropriate position, understandably —
 and **the domain decides**: a small grammar slip never fails correct usage (§32).
 
+The learner is then shown their own sentence **as a writer at their level would put
+it** — same idea, same content, raised or simplified to match the band, with the target
+word kept. This is what the level control on this screen is for, and it is not a
+grammar correction: the same sentence comes back plainer at A2 and more elaborate at
+C1, and the card says "Your sentence at B2" rather than anything resembling a red pen
+(ADR-038).
+
 ### Spelling
 
-The word is written from a clue, with letter tiles below B2 and free typing above. The
-tile pool holds decoys, so finishing the pool is not the same as spelling the word.
+The word is written from a clue, exactly as the learner added it — Spelling never
+varies the form, because here the spelling *is* the question (ADR-047). Letter tiles
+below B2, free typing above. The
+tile pool holds decoys, so finishing the pool is not the same as spelling the word — and
+it holds a **space** tile for a two-word entry like *alarm clock*, which otherwise could
+not be spelled at all. Spelling is judged on the letters, not the spacing: `alarmclock`
+and `alarm clock` both count (ADR-042).
 
 The clue is the first rung of a **hint ladder**, and every press of "hint" steps down
 exactly one rung (ADR-032):
@@ -269,6 +368,17 @@ One searchable, paginated list. Pipeline state is deliberately not a set of tabs
 learner sees their vocabulary, not the machinery. Search runs server-side over the word
 and its meaning, so `بحث` and `research` find the same row. Each word opens on its own
 history: which skills it has passed, when it is next due, every attempt and event.
+
+Every entry says **what kind of word it is** — noun, verb, adjective, adverb, and the
+closed classes down to *فعل مساعد* and *فعل ناقص* — and, when the entry is an inflection
+rather than the plain word, **which form**: *فعل · الماضي* for `went`, *فعل · اسم
+المفعول* for `played` (ADR-056). Both are said in the learner's language, never as the
+lexicon's own codes. A plain word carries no form label, because nobody needs telling
+that `book` is `book`.
+
+This exists because a list can hold `go`, `went`, `gone` and `going` at once (ADR-045),
+and `book` the noun beside `book` the verb (ADR-046) — four rows and two rows that the
+spelling alone cannot tell apart.
 
 ---
 
@@ -345,6 +455,68 @@ Reachable only by an Owner account, and refused by the API for everyone else.
   vocabulary by pipeline state, and the placement evidence behind each level with
   initial-versus-current bands.
 * **One word** — its entire history from the event log.
+**What the numbers mean** (ADR-052). Every figure here is about *learners*: an Owner
+trying the product is excluded from all of them, because the denominators count
+learners and mixing the two reported a developer's afternoon as how the audience is
+doing. The learner list is the one exception, and says so — it counts **accounts**,
+since it contains the Owner's own.
+
+Units are stated rather than implied. A per-skill line reads *"24 sessions · words: 11
+passed, 4 failed"*: sessions are sessions, the other two are attempts on words, and the
+three never sum because one session covers several words. First-attempt accuracy is
+measured over **words the skill has decided** — not over attempts, which every retry
+inflates while the numerator cannot move.
+
+"Today" is the learner's day, at a configured product-wide offset (default +3), not
+the server's and not UTC: under a UTC boundary every morning before 3am belonged to
+yesterday, and a learner who had added six words was told they had added none.
+
+The session-length tile reports the **typical** session rather than the mean. A session
+is resumable by design (ADR-039), so one finished the next morning is a duration in
+hours — measured: median 16 seconds, mean 45 minutes, longest 46 hours.
+
+* **Feedback** — what learners have written, unhandled first (ADR-053). Each message
+  shows their words unedited, who wrote them, their email and phone, and the build it
+  was sent from. Marking one handled is reversible, and handled messages fade rather
+  than vanish — a list that empties as it is read gives no way back to one marked by
+  mistake. Learners write and can never read: no call anywhere returns feedback to a
+  learner, their own included.
+* **Contact** — on each learner's page, their email and phone, tap to copy. Owner-only,
+  and there because the next thing after reading a report is reaching the person who
+  sent it.
+* **Skip 2 days** — brings that learner's waiting skills forward so the spaced
+  gaps can be tested without waiting a week (ADR-037). It moves scheduled dates
+  only, never anything that already happened, and the skip is written to the
+  activity log so a pipeline finished in an afternoon cannot be mistaken for an
+  extraordinary learner. Owner-only, and refused for an ordinary learner even on
+  their own schedule.
+
+---
+
+## 12b. Reaching a person
+
+Registration requires a **phone number** (ADR-054) — feedback is only as useful as the
+Owner's ability to answer it, and a bug report from someone nobody can reach is a
+problem that cannot be followed up. The rule applies to creating an account, never to
+having one: accounts made before it continue to work untouched.
+
+Settings carries **Message the team**: one field, one button, and a confirmation that
+it arrived. It exists because there was previously no way for a learner to report
+anything at all, and a learner who hits a bug and can tell nobody simply stops — which
+is the one failure this experiment cannot afford, because it leaves no measurement
+behind (ADR-053).
+
+Beside it sits **Contact support**, which opens WhatsApp on the developer's number in
+one tap — no dialog, no form (ADR-055). The two are deliberately different things: the
+message box is for something that can wait and be read later, the button is for a
+learner who is stuck now. If WhatsApp cannot be opened, the number is shown so they can
+copy it.
+
+The message is stored as written and shown to the Owner as text. It is never
+interpreted — no markup, no links, no HTML anywhere on the path — bounded at 4 000
+characters at both ends, and stripped of the control characters PostgreSQL refuses.
+The build and platform travel with it so a crash report arrives with a version
+attached. The activity log records *that* they wrote, never what they wrote.
 
 ---
 

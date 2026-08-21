@@ -5,6 +5,17 @@ import '../../core/models/models.dart';
 ///
 /// DISPOSABLE — replaced in Phase 6 by the Python AI service (`/ai/word-analysis`).
 class MockDictionary {
+  /// Which form a sense id names, by the same suffix rule the server uses
+  /// (ADR-045, ADR-056). Null for a plain entry.
+  static String? formOf(String? senseId) => switch (
+      senseId?.split('#').last) {
+        'pst' => 'past',
+        'pp' => 'pastParticiple',
+        'ing' => 'ing',
+        'pl' => 'plural',
+        _ => null,
+      };
+
   const MockDictionary._();
 
   static const Map<String, List<WordCandidate>> entries = {

@@ -19,6 +19,7 @@ class SkillStat {
     required this.wordsPassed,
     required this.wordsFailed,
     required this.firstAttemptPasses,
+    required this.wordsDecided,
   });
 
   final SkillType skill;
@@ -30,14 +31,25 @@ class SkillStat {
   /// "First Attempt Accuracy" metric.
   final int firstAttemptPasses;
 
+  /// Distinct words this skill has decided — passed or failed at least once.
+  final int wordsDecided;
+
+  /// Attempts, not words: a word that failed twice and then passed is three
+  /// of these and one of [wordsDecided].
   int get wordsAttempted => wordsPassed + wordsFailed;
 
   double get passRate => wordsAttempted == 0 ? 0 : wordsPassed / wordsAttempted;
 
   double get failRate => wordsAttempted == 0 ? 0 : wordsFailed / wordsAttempted;
 
+  /// Share of words that passed this skill without ever failing it.
+  ///
+  /// Over [wordsDecided] — words — because the numerator counts words. Divided
+  /// by attempts instead, as it used to be, Speaking read 67% where the answer
+  /// is 86%: every retry inflated the denominator by one while the numerator
+  /// could not move.
   double get firstAttemptAccuracy =>
-      wordsAttempted == 0 ? 0 : firstAttemptPasses / wordsAttempted;
+      wordsDecided == 0 ? 0 : firstAttemptPasses / wordsDecided;
 
   factory SkillStat.fromJson(Map<String, dynamic> json) => SkillStat(
         skill: SkillType.fromWire(json['skill'] as String?),
@@ -45,6 +57,7 @@ class SkillStat {
         wordsPassed: (json['wordsPassed'] as num?)?.toInt() ?? 0,
         wordsFailed: (json['wordsFailed'] as num?)?.toInt() ?? 0,
         firstAttemptPasses: (json['firstAttemptPasses'] as num?)?.toInt() ?? 0,
+        wordsDecided: (json['wordsDecided'] as num?)?.toInt() ?? 0,
       );
 
   Map<String, dynamic> toJson() => {
@@ -53,6 +66,7 @@ class SkillStat {
         'wordsPassed': wordsPassed,
         'wordsFailed': wordsFailed,
         'firstAttemptPasses': firstAttemptPasses,
+        'wordsDecided': wordsDecided,
       };
 }
 
@@ -119,6 +133,29 @@ class InterestCount {
 }
 
 /// Global picture across all users (`MVP Core.txt` §57).
+/// What a time skip actually moved.
+class ScheduleAdvance {
+  const ScheduleAdvance({
+    required this.days,
+    required this.wordsShifted,
+    required this.skillsDueNow,
+  });
+
+  final int days;
+  final int wordsShifted;
+
+  /// How many skills are available *now* as a result — so the dashboard can
+  /// say what the skip unlocked rather than only that it worked.
+  final int skillsDueNow;
+
+  factory ScheduleAdvance.fromJson(Map<String, dynamic> json) =>
+      ScheduleAdvance(
+        days: json['days'] as int? ?? 0,
+        wordsShifted: json['wordsShifted'] as int? ?? 0,
+        skillsDueNow: json['skillsDueNow'] as int? ?? 0,
+      );
+}
+
 class AdminOverview {
   const AdminOverview({
     required this.userCount,
@@ -128,6 +165,7 @@ class AdminOverview {
     required this.averageWordsPerUserPerDay,
     required this.averageSessionsPerUser,
     required this.averageSessionDurationMs,
+    required this.medianSessionDurationMs,
     required this.pipelineCompletionRate,
     required this.skillStats,
     required this.levelDistributions,
@@ -142,6 +180,13 @@ class AdminOverview {
   final double averageWordsPerUserPerDay;
   final double averageSessionsPerUser;
   final int averageSessionDurationMs;
+
+  /// The middle session's duration — the one a person would recognise.
+  ///
+  /// Shown instead of the mean: a session is resumable, so one finished the
+  /// next morning is a duration in hours, and a handful of those moved the
+  /// mean from 16 seconds to 45 minutes.
+  final int medianSessionDurationMs;
 
   /// Share of words that started the pipeline and reached Active.
   final double pipelineCompletionRate;
@@ -174,6 +219,8 @@ class AdminOverview {
             (json['averageSessionsPerUser'] as num?)?.toDouble() ?? 0,
         averageSessionDurationMs:
             (json['averageSessionDurationMs'] as num?)?.toInt() ?? 0,
+        medianSessionDurationMs:
+            (json['medianSessionDurationMs'] as num?)?.toInt() ?? 0,
         pipelineCompletionRate:
             (json['pipelineCompletionRate'] as num?)?.toDouble() ?? 0,
         skillStats: (json['skillStats'] as List<dynamic>? ?? const [])
@@ -197,6 +244,7 @@ class AdminOverview {
         'averageWordsPerUserPerDay': averageWordsPerUserPerDay,
         'averageSessionsPerUser': averageSessionsPerUser,
         'averageSessionDurationMs': averageSessionDurationMs,
+        'medianSessionDurationMs': medianSessionDurationMs,
         'pipelineCompletionRate': pipelineCompletionRate,
         'skillStats': skillStats.map((e) => e.toJson()).toList(),
         'levelDistributions': levelDistributions.map((e) => e.toJson()).toList(),
@@ -498,6 +546,7 @@ class AdminUserSummary {
     required this.wordsTotal,
     required this.wordsActive,
     required this.sessionsCompleted,
+    this.phone,
   });
 
   final String id;
@@ -509,6 +558,12 @@ class AdminUserSummary {
   final int wordsTotal;
   final int wordsActive;
   final int sessionsCompleted;
+
+  /// International form, Owner-only, null when they gave no number (ADR-053).
+  ///
+  /// Here so the Owner reading a bug report can reach the person who sent it —
+  /// and, as asked for, gather numbers for a group.
+  final String? phone;
 
   factory AdminUserSummary.fromJson(Map<String, dynamic> json) =>
       AdminUserSummary(
@@ -524,6 +579,7 @@ class AdminUserSummary {
         wordsTotal: (json['wordsTotal'] as num?)?.toInt() ?? 0,
         wordsActive: (json['wordsActive'] as num?)?.toInt() ?? 0,
         sessionsCompleted: (json['sessionsCompleted'] as num?)?.toInt() ?? 0,
+        phone: json['phone'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -536,6 +592,7 @@ class AdminUserSummary {
         'wordsTotal': wordsTotal,
         'wordsActive': wordsActive,
         'sessionsCompleted': sessionsCompleted,
+        'phone': phone,
       };
 }
 
@@ -719,4 +776,107 @@ class AdminUserDetail {
         'signInCount': signInCount,
         'levelChanges': levelChanges.map((e) => e.toJson()).toList(),
       };
+}
+
+/// One message a learner sent the Owner (ADR-053).
+///
+/// The body is whatever they typed. It is rendered as text and never
+/// interpreted — there is no markup, no link handling and no HTML anywhere in
+/// this path.
+class FeedbackMessage {
+  const FeedbackMessage({
+    required this.id,
+    required this.body,
+    required this.handled,
+    required this.createdAt,
+    required this.senderName,
+    required this.senderEmail,
+    this.senderId,
+    this.senderPhone,
+    this.appVersion,
+    this.platform,
+  });
+
+  final String id;
+  final String body;
+  final bool handled;
+  final DateTime createdAt;
+
+  final String senderName;
+  final String senderEmail;
+
+  /// Null when the account has been removed since — the message survives it.
+  final String? senderId;
+
+  /// International form, or null when they never gave one.
+  final String? senderPhone;
+
+  /// What they were running, so "it crashed" comes with a build attached.
+  final String? appVersion;
+  final String? platform;
+
+  factory FeedbackMessage.fromJson(Map<String, dynamic> json) {
+    final user = json['user'] as Map<String, dynamic>?;
+
+    return FeedbackMessage(
+      id: json['id'] as String,
+      body: json['body'] as String? ?? '',
+      handled: (json['status'] as String?)?.toUpperCase() == 'HANDLED',
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '')?.toUtc() ??
+              DateTime.now().toUtc(),
+      senderId: user?['id'] as String?,
+      senderName: user?['displayName'] as String? ?? '',
+      senderEmail: user?['email'] as String? ?? '',
+      senderPhone: _phone(user),
+      appVersion: json['appVersion'] as String?,
+      platform: json['platform'] as String?,
+    );
+  }
+
+  static String? _phone(Map<String, dynamic>? user) {
+    final number = user?['phoneNumber'] as String?;
+    if (number == null || number.isEmpty) return null;
+    final code = user?['phoneCountryCode'] as String? ?? '';
+    return '+$code$number';
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'body': body,
+        'status': handled ? 'HANDLED' : 'NEW',
+        'createdAt': createdAt.toIso8601String(),
+        'appVersion': appVersion,
+        'platform': platform,
+        'user': {
+          'id': senderId,
+          'displayName': senderName,
+          'email': senderEmail,
+          if (senderPhone != null) 'phoneNumber': senderPhone,
+        },
+      };
+}
+
+/// A page of feedback, with the count that decides whether the tab shows a dot.
+class FeedbackPage {
+  const FeedbackPage({
+    required this.items,
+    required this.total,
+    required this.unread,
+    required this.hasMore,
+  });
+
+  final List<FeedbackMessage> items;
+  final int total;
+  final int unread;
+  final bool hasMore;
+
+  factory FeedbackPage.fromJson(Map<String, dynamic> json) => FeedbackPage(
+        items: (json['items'] as List<dynamic>? ?? [])
+            .map((e) => FeedbackMessage.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        total: (json['total'] as num?)?.toInt() ?? 0,
+        unread: (json['unread'] as num?)?.toInt() ?? 0,
+        hasMore: json['hasMore'] as bool? ?? false,
+      );
 }

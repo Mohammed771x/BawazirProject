@@ -208,6 +208,19 @@ public class Word
 
     public void MarkReviewed(DateTimeOffset now) => LastReviewedAt = now;
 
+    /// <summary>
+    /// Brings every waiting skill of this word forward by <paramref name="days"/>.
+    /// </summary>
+    /// <remarks>
+    /// The Owner's testing tool (ADR-037). It shifts *scheduled* dates only, so
+    /// a word waiting for its two-day gap becomes available and a word that has
+    /// already passed or failed stays exactly as it is.
+    /// </remarks>
+    public void AdvanceSchedule(int days)
+    {
+        foreach (var state in Skills) state.AdvanceSchedule(days);
+    }
+
     public void RecordSkillStarted(SkillType skill, DateTimeOffset now) =>
         _events.Add(WordEvent.Create(Id, WordEventType.SkillStarted, skill, now));
 }

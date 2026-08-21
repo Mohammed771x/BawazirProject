@@ -1,5 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace WordOs.Api.Endpoints;
 
@@ -40,6 +42,66 @@ public static class Problems
     /// </summary>
     public static IResult Unavailable(string code, string message) =>
         Error(StatusCodes.Status503ServiceUnavailable, code, message);
+}
+
+/// <summary>
+/// One page of a listing, with every bound already applied.
+/// </summary>
+/// <remarks>
+/// Both numbers arrive from the query string, so both are hostile until
+/// clamped. The size was already capped; the page number was not, and
+/// <c>pageIndex * size</c> is <see cref="int"/> arithmetic —
+/// <c>?page=2147483647</c> overflowed to a negative offset, EF refused it, and
+/// a mistyped URL came back as <c>500 INTERNAL_ERROR</c> from three endpoints.
+///
+/// The multiplication is done in <see cref="long"/> and clamped, so a page past
+/// the end of the data is simply an empty page, which is what it means.
+/// </remarks>
+public readonly record struct Page(int Index, int Size, int Offset)
+{
+    public static Page From(int? page, int? pageSize, int maxSize)
+    {
+        var size = pageSize is null or <= 0 ? 50 : Math.Min(pageSize.Value, maxSize);
+        var index = Math.Max(0, page ?? 0);
+        var offset = (long)index * size;
+
+        return new Page(
+            index, size, offset > int.MaxValue ? int.MaxValue : (int)offset);
+    }
+
+    /// <summary>Whether anything follows this page. Also overflow-safe.</summary>
+    public bool HasMore(int total) => (long)Index * Size + Size < total;
+}
+
+/// <summary>
+/// Turns a uniqueness violation into the answer the check-then-insert above it
+/// meant to give.
+/// </summary>
+/// <remarks>
+/// Every "is this taken?" followed by "insert it" has a gap between the two,
+/// and two requests from the same person fit inside it comfortably — a
+/// double-tapped Register button on a slow connection is the ordinary case, not
+/// an attack. Measured before this existed: six concurrent registrations of one
+/// email produced one <c>200</c> and five <c>500 INTERNAL_ERROR</c>, and the
+/// same shape of burst on <c>POST /words</c> did the same.
+///
+/// The database was never in danger — the unique index held, and exactly one
+/// row was written each time. What was wrong was the answer: the learner saw
+/// "something went wrong" for a condition the API has a precise word for, then
+/// retried and got <c>EMAIL_TAKEN</c>, which reads like the account broke.
+///
+/// So the pre-check stays (it is the fast, common path and gives the better
+/// message), and this catches the race behind it. Matching on the index name
+/// rather than the bare SQLSTATE matters: an unrelated uniqueness violation is
+/// a real fault and must keep surfacing as one.
+/// </remarks>
+public static class UniqueViolation
+{
+    public static bool On(DbUpdateException e, string indexName) =>
+        e.InnerException is PostgresException
+        {
+            SqlState: PostgresErrorCodes.UniqueViolation,
+        } postgres && postgres.ConstraintName == indexName;
 }
 
 public static class ClaimsPrincipalExtensions

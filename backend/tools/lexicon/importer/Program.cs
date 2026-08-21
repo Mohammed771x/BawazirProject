@@ -83,12 +83,16 @@ else
     var senses = LexiconSources.ReadOewnSenses(oewnDir);
     Console.WriteLine($"{senses.Count:N0} senses");
 
+    Console.Write("reading inflected forms … ");
+    var forms = LexiconSources.ReadOewnForms(oewnDir);
+    Console.WriteLine($"{forms.Count:N0} words with an irregular form");
+
     Console.Write("reading Arabic WordNet … ");
     var arabic = LexiconSources.ReadArabicBySynset(awnXml);
     Console.WriteLine($"{arabic.Count:N0} synsets with Arabic");
 
     Console.Write("joining … ");
-    (rows, stats) = LexiconBuilder.Build(senses, synsets, arabic, cefr);
+    (rows, stats) = LexiconBuilder.Build(senses, synsets, arabic, cefr, forms: forms);
     Console.WriteLine($"{rows.Count:N0} rows");
 
     // Pronouns, auxiliaries, articles, prepositions and question words are not in
@@ -123,6 +127,29 @@ if (dryRun)
     foreach (var sample in rows.Where(r => r.TextNormalized == "book").Take(4))
         Console.WriteLine($"  sample  {sample.Text,-12} {sample.PartOfSpeech}  " +
                           $"{sample.CefrLevel?.ToWire() ?? "—",-6} {sample.MeaningAr}");
+
+    // The forms, which are the point of the run: what a rule got wrong once is
+    // worth reading before 216,000 rows are written.
+    Console.WriteLine();
+    foreach (var lemma in new[]
+             {
+                 "go", "take", "walk", "lunge", "read", "cost", "put", "stop",
+                 "study", "mouse", "child", "woman", "book", "city",
+                 // The three shapes of a single listed form: both roles, the
+                 // participle alone, and the past alone.
+                 "say", "beat", "run", "win",
+             })
+    {
+        var forms = rows
+            .Where(r => string.Equals(r.Lemma, lemma, StringComparison.OrdinalIgnoreCase)
+                        && r.SourceFlags.Contains("form="))
+            .Select(r => $"{r.Text.ToLowerInvariant()} [{r.SourceFlags.Split("form=")[1]}]")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(t => t)
+            .ToList();
+
+        Console.WriteLine($"  {lemma,-8} → {(forms.Count == 0 ? "(no forms added)" : string.Join(", ", forms))}");
+    }
     Console.WriteLine($"\nDry run complete in {sw.Elapsed.TotalSeconds:F1}s.");
     return 0;
 }
@@ -253,11 +280,32 @@ await using (var merge = connection.CreateCommand())
     affected = await merge.ExecuteNonQueryAsync();
 }
 
+// Rows the build no longer produces. Without this the table only ever grows:
+// a rule that stops emitting `beaten` as a past tense leaves the old row behind,
+// and the learner goes on seeing something the importer has already disowned.
+//
+// A row a learner has added is kept whatever the rules now say — their
+// vocabulary is theirs, and it copied what it needed at the time.
+int removed;
+await using (var prune = connection.CreateCommand())
+{
+    prune.CommandText =
+        """
+        DELETE FROM lexicon_entries e
+        WHERE NOT EXISTS (
+                  SELECT 1 FROM lexicon_staging s WHERE s."SenseId" = e."SenseId")
+          AND NOT EXISTS (
+                  SELECT 1 FROM words w WHERE w."SenseId" = e."SenseId");
+        """;
+    prune.CommandTimeout = 600;
+    removed = await prune.ExecuteNonQueryAsync();
+}
+
 await using (var count = connection.CreateCommand())
 {
     count.CommandText = "SELECT count(*) FROM lexicon_entries;";
     var total = (long)(await count.ExecuteScalarAsync() ?? 0L);
-    Console.WriteLine($"  merged {affected:N0} rows; table now holds {total:N0}");
+    Console.WriteLine($"  merged {affected:N0} rows, removed {removed:N0} stale; table now holds {total:N0}");
 }
 
 await transaction.CommitAsync();

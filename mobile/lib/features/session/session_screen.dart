@@ -14,6 +14,8 @@ import '../../core/theme/app_tokens.dart';
 import '../../core/theme/skill_visuals.dart';
 import '../../core/widgets/app_widgets.dart';
 import '../../core/widgets/speaker_button.dart';
+import '../auth/session_controller.dart';
+import '../hub/hub_screen.dart';
 import 'session_widgets.dart';
 import 'word_lookup_sheet.dart';
 
@@ -222,13 +224,48 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       if (widget.skill == SkillType.speaking && _chat.isNotEmpty) {
         if (_speakingBriefed) _resumeSpeaking();
       }
+
+      // Every question answered, and the session never closed — the app was
+      // killed between the last answer and the result screen, or a connection
+      // dropped there. The server rightly keeps such a session open, so it is
+      // handed back on the next visit with nothing left to ask: no current
+      // item, and a screen that waits for one for ever.
+      //
+      // There is nothing to ask, so there is nothing to wait for. Finishing it
+      // is what the learner was one tap away from doing.
+      if (_needsFinishing) {
+        await _complete();
+        return;
+      }
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e;
         _loading = false;
       });
+    } catch (e) {
+      // Anything that is not a refusal from the server — a malformed response,
+      // a bug here — must still end the wait. A spinner with no end is worse
+      // than an error: it says nothing, and there is no way out of it but to
+      // kill the app.
+      if (!mounted) return;
+      setState(() {
+        _error = ApiException('UNEXPECTED', e.toString());
+        _loading = false;
+      });
     }
+  }
+
+  /// True when the session has been answered through but never closed.
+  bool get _needsFinishing {
+    final session = _session;
+    final progress = _progress;
+    if (session == null || progress == null || _result != null) return false;
+
+    // A conversation has no items to count; it ends by its own rules.
+    if (widget.skill == SkillType.speaking) return false;
+
+    return progress.nextItemId == null && progress.remaining == 0;
   }
 
   /// Picks the conversation back up from whatever the tutor last said.
@@ -362,6 +399,27 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
     if (!mounted) return;
     if (!started) setState(() => _voice = _VoicePhase.unavailable);
+  }
+
+  /// Throws away what was said and offers the microphone again (ADR-059).
+  ///
+  /// The second tap on the microphone sends, and until now that was the only
+  /// way out of a recording: a learner who fumbled a sentence had to send the
+  /// fumble and let the tutor answer it. This is the other exit — the words are
+  /// dropped, nothing is sent, no AI call is spent, and the turn is theirs to
+  /// take again.
+  Future<void> _discardListening() async {
+    if (!mounted || _voice != _VoicePhase.listening) return;
+
+    // `cancel`, not `stopAndRead`: stopping asks the recogniser for its result,
+    // and the point here is that there is not going to be one.
+    await _mic.cancel();
+    if (!mounted) return;
+
+    setState(() {
+      _voice = _VoicePhase.idle;
+      _heard = '';
+    });
   }
 
   /// Closes the microphone and sends whatever was said.
@@ -521,12 +579,19 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     // next thing the tutor says, so it can change at any point and takes
     // effect immediately (§4). A passage is in front of the learner, so its
     // level locks once the questions begin.
-    final canChange = widget.skill == SkillType.speaking
-        ? !_speakingFinished
-        : !_contentDone &&
-            (session.content?.canChangeLevel ?? false) &&
-            (widget.skill == SkillType.reading ||
-                widget.skill == SkillType.listening);
+    // Speaking and Writing have no passage to replace: the level is an input
+    // to what happens next — the tutor's reply, or the rewrite the learner is
+    // shown — so it can change at any point and takes effect immediately.
+    // Reading and Listening put a text in front of the learner, so their level
+    // locks once the questions begin. Spelling has no level of its own
+    // (ADR-008).
+    final canChange = switch (widget.skill) {
+      SkillType.speaking => !_speakingFinished,
+      SkillType.writing => _result == null,
+      SkillType.reading || SkillType.listening => !_contentDone &&
+          (session.content?.canChangeLevel ?? false),
+      _ => false,
+    };
 
     final badge = LevelBadge(
       label: session.levelUsed.label,
@@ -621,14 +686,22 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         _lastAnswer = null;
         _selectedOption = null;
 
-        // A conversation keeps its transcript: only the level changed, and the
-        // learner is mid-sentence with the tutor. A passage was replaced, so
-        // its questions start again from the first.
-        if (widget.skill != SkillType.speaking) {
+        // A conversation and a writing task keep their place: only the level
+        // changed. A passage was replaced, so its questions start again from
+        // the first.
+        if (widget.skill != SkillType.speaking &&
+            widget.skill != SkillType.writing) {
           _currentItemId =
               session.items.isEmpty ? null : session.items.first.id;
         }
       });
+
+      // The level the learner just chose is now their level for this skill, on
+      // the server. Settings and the hub both render it from the cached
+      // profile, so without this they keep showing the old band until the next
+      // sign-in — the learner changes it here and finds it unchanged there.
+      await ref.read(sessionProvider.notifier).refresh();
+      ref.invalidate(hubProvider);
     } on ApiException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -814,7 +887,21 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   Widget _questionView(AppStrings s, Color color) {
     final session = _session!;
     final item = _currentItem;
-    if (item == null) return BusyView(message: s.loading);
+
+    // Reached only if the queue and the pointer disagree. Finishing is the
+    // honest response: there is no question to show, and a spinner here waits
+    // for something that is never coming.
+    if (item == null) {
+      return Center(
+        child: Padding(
+          padding: AppSpacing.page,
+          child: FilledButton(
+            onPressed: _busy ? null : _complete,
+            child: Text(s.finish),
+          ),
+        ),
+      );
+    }
 
     final progress = _progress;
 
@@ -983,9 +1070,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                       size: 18, color: context.palette.warning),
                   const SizedBox(width: AppSpacing.xs),
                   Expanded(
-                    child: Text(
-                      evaluation.suggestion!,
-                      style: context.text.bodySmall,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          s.atYourLevel(_session!.levelUsed),
+                          style: context.text.labelSmall
+                              ?.copyWith(color: context.palette.warning),
+                        ),
+                        const SizedBox(height: AppSpacing.xxs),
+                        EnglishText(
+                          evaluation.suggestion!,
+                          style: context.text.bodySmall,
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -1481,6 +1579,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             Expanded(
               child: Text(label, style: context.text.titleSmall),
             ),
+            // Only while there is something to throw away. A bin beside an
+            // idle microphone offers to delete nothing, and a learner reading
+            // it wonders what they are about to lose.
+            if (phase == _VoicePhase.listening)
+              IconButton(
+                onPressed: () => unawaited(_discardListening()),
+                tooltip: s.discardRecording,
+                icon: const Icon(Icons.delete_outline_rounded),
+                color: context.palette.danger,
+              ),
           ],
         ),
         const SizedBox(height: AppSpacing.xs),
@@ -1634,6 +1742,16 @@ class _LetterTile extends StatelessWidget {
   final bool used;
   final VoidCallback? onTap;
 
+  /// A space is a tile like any other, and needs to look like one: an empty
+  /// square reads as a rendering fault, and a learner spelling "alarm clock"
+  /// has to see what they are tapping.
+  ///
+  /// It is shaped like a keyboard's space bar rather than a letter square —
+  /// three tiles wide — because that is the shape a learner already knows
+  /// means "space", and a square carrying an icon does not. Everything else
+  /// about it is unchanged: one tap places it exactly as a letter does.
+  bool get _isSpace => letter.trim().isEmpty;
+
   @override
   Widget build(BuildContext context) {
     return Opacity(
@@ -1644,7 +1762,9 @@ class _LetterTile extends StatelessWidget {
           onTap: used ? null : onTap,
           borderRadius: AppRadii.chipBorder,
           child: Container(
-            width: 46,
+            // Three letter tiles and the two gaps between them, so the bar
+            // lines up with the rest of the pool instead of floating.
+            width: _isSpace ? 46 * 3 + AppSpacing.xs * 2 : 46,
             height: 52,
             alignment: Alignment.center,
             decoration: BoxDecoration(
@@ -1652,10 +1772,13 @@ class _LetterTile extends StatelessWidget {
               borderRadius: AppRadii.chipBorder,
               border: Border.all(color: context.palette.border),
             ),
-            child: Text(
-              letter,
-              style: context.text.titleLarge,
-            ),
+            child: _isSpace
+                ? Icon(
+                    Icons.space_bar_rounded,
+                    size: 20,
+                    color: context.colors.onSurface.withValues(alpha: 0.55),
+                  )
+                : Text(letter, style: context.text.titleLarge),
           ),
         ),
       ),

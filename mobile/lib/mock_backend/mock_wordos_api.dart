@@ -44,7 +44,13 @@ class MockWordOsApi implements WordOsApi {
     String? phoneCountryCode,
     String? phoneNumber,
   }) =>
-      _delay(() => engine.register(email, password, displayName));
+      _delay(() => engine.register(
+            email,
+            password,
+            displayName,
+            phoneCountryCode: phoneCountryCode,
+            phoneNumber: phoneNumber,
+          ));
 
   @override
   Future<AuthResponse> login({
@@ -240,4 +246,20 @@ class MockWordOsApi implements WordOsApi {
   @override
   Future<AdminUserDetail> adminUserDetail(String userId) =>
       _delay(() => engine.adminUserDetail(_user, userId));
+
+  @override
+  Future<ScheduleAdvance> adminAdvanceSchedule(String userId, {int days = 2}) =>
+      _delay(() => engine.adminAdvanceSchedule(_user, userId, days: days));
+
+  @override
+  Future<void> sendFeedback(String body) =>
+      _delay(() => engine.sendFeedback(_user, body));
+
+  @override
+  Future<FeedbackPage> adminFeedback({bool? handledOnly, int page = 0}) =>
+      _delay(() => engine.adminFeedback(_user, handledOnly: handledOnly));
+
+  @override
+  Future<void> adminSetFeedbackHandled(String id, bool handled) =>
+      _delay(() => engine.adminSetFeedbackHandled(_user, id, handled));
 }

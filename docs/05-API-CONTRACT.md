@@ -36,7 +36,7 @@ abstraction and the Phase-1 mock both implement exactly this; Phase 5 makes it r
 
 | Method | Path | Body → Response |
 |---|---|---|
-| POST | `/auth/register` | `{email, password, displayName}` → `AuthResponse` |
+| POST | `/auth/register` | `{email, password, displayName, phoneCountryCode, phoneNumber}` → `AuthResponse` — the number is **required** (ADR-054) |
 | POST | `/auth/login` | `{email, password}` → `AuthResponse` |
 | POST | `/auth/refresh` | `{refreshToken}` → `AuthResponse` (rotates the token) |
 | POST | `/auth/logout` | — → `204` |
@@ -229,7 +229,15 @@ handed one item at a time instead of a fixed list.
   "id":"w_1", "senseId":"oewn-03862676-n",
   "text":"operating system", "meaning":"نظام تشغيل",
   "definitionEn":"software that manages hardware and software resources",
-  "partOfSpeech":"noun", "cefrLevel":"B1", "state":"LEARNING",
+  // `partOfSpeech` is the lexicon's own code — `n`, `v`, `a`, `r`, and the
+  // closed-class `prep`/`det`/`pron`/`conj`/`aux`/`modal`/`intj`/`part`. The
+  // client names it in the learner's language; it is never shown raw (ADR-056).
+  //
+  // `form` says which inflection this entry is — "past", "pastParticiple",
+  // "ing", "plural" — or is absent for the plain word. A key, not a sentence,
+  // for the same reason: the learner reads it in their own language (ADR-035).
+  "partOfSpeech":"noun", "form":null,
+  "cefrLevel":"B1", "state":"LEARNING",
   "currentSkill":"READING", "addedAt":"2026-08-12T09:10:00Z",
   "nextEligibleAt":"2026-08-12T09:10:00Z", "exposureCount":0,
   "skills":[ {"skill":"READING","status":"AVAILABLE","availableAt":"…","attempts":0},
@@ -249,23 +257,58 @@ handed one item at a time instead of a fixed list.
 | POST | `/sessions/{id}/answer` | `{itemId, answer}` → `AnswerResult` |
 | POST | `/sessions/{id}/writing` | `{itemId, answer}` → `WritingEvaluation` |
 | POST | `/sessions/{id}/speaking/turn` | `{transcript}` → `SpeakingTurn` |
+| POST | `/sessions/{id}/level` | `{level}` → `SkillSession` — re-levels the session (ADR-030, ADR-038) |
 | POST | `/sessions/{id}/complete` | — → `SessionResult` |
 | POST | `/sessions/{id}/abandon` | — → `204` |
+
+> **`POST /sessions/{id}/level`** behaves differently by skill, because the
+> skills differ in what a level *is*:
+>
+> * **Reading, Listening** — the same passage is re-told at the new level and its
+>   questions regenerated. Refused with `SESSION_STARTED` once the learner has
+>   answered anything, because re-telling replaces the items their answers belong
+>   to.
+> * **Speaking, Writing** — nothing is regenerated. The level is an input to what
+>   happens next: the tutor's next reply, or the rewrite the learner is shown
+>   after they write. Allowed at any point.
+> * **Spelling** — `LEVEL_NOT_ADJUSTABLE`. It carries no CEFR band of its own;
+>   its content follows Reading (ADR-008).
+>
+> In every allowed case the chosen level is also written to the learner's
+> **user-selected** level for that skill, so Settings and the Hub agree with the
+> session. The **system-validated** level is untouched: it is earned from
+> performance, and a tap is not performance (R6).
 
 `GET /sessions/{id}` exists because the client holds no session state (R1):
 after a crash or a backgrounded app it asks the server where it was. The stored
 content is replayed, never regenerated — a second generation would produce a
 different passage.
 
-`start` returns `409 NO_WORDS_DUE` when the spaced gap has not elapsed. Starting
-a session **abandons** any unfinished session for the same skill, so words are
-never consumed twice. `abandon` deletes the session and leaves its words due.
+`start` returns `409 NO_WORDS_DUE` when the spaced gap has not elapsed. An
+unfinished session for the same skill is **resumed**, so words are never
+consumed twice, and that is now enforced by a unique index rather than by a
+check — simultaneous starts yield one session and one AI call, and the losers
+receive the winner's session (ADR-063). A request that arrives while the winner is
+still generating gets `409 SESSION_STARTING` — the session exists but has
+nothing in it yet, and handing back a half-built one would be an empty screen.
+`409 SESSION_RACE` covers the vanishing case where the winner finishes in
+between. Both mean the same thing to a client: ask again in a moment.
+
+`abandon` deletes the session and leaves its words due. It refuses a session
+that has already been completed — `409 SESSION_COMPLETE`, the same answer every
+other session route gives — because deleting a finished session destroys the
+record of what happened in it.
 
 `?practice=true` asks instead for a session with no vocabulary attached — real
 content and real comprehension questions, `isPractice: true`, no target words,
 and no effect on any word or level (ADR-023). Reading and Listening only;
 anything else still answers `409`. Never substituted silently: a plain `start`
 with nothing due is still `NO_WORDS_DUE`.
+
+An open practice session **stands aside** for a `start` that asks for real words
+when any are due, and expires after `PracticeSessionExpiryHours` (24). It is
+kept when nothing is due — being told there is nothing to do must not also cost
+the learner the practice they were half-way through.
 
 Rate limits: `start`, `writing` and `speaking/turn` cost Gemini tokens and carry
 the tight budget; `answer` and `complete` do not and are covered by the global
@@ -368,7 +411,7 @@ per-user limiter.
 { "aiMessage":"Interesting — how does an operating system help you?",
   "isFinal": false,
   "wordsUsed":["operating system"],   // recognised across the whole transcript
-  "remaining":["interface"] }
+  "remaining":["interface"] }         // this session's words only (ADR-050)
 
 // SessionResult
 { "sessionId":"s_1", "skill":"READING",
@@ -381,6 +424,16 @@ per-user limiter.
   "durationMs": 214000,
   "usedAiFallback": false }
 ```
+
+Two flags mean **nothing was applied to this word**, and neither is a failure:
+
+| Flag | Meaning |
+|---|---|
+| `superseded` | The word moved on elsewhere — finished at this skill in another session, or its schedule was brought forward. This session is no longer the one deciding (ADR-043). |
+| `untouched` | This session never asked about the word: no item of its own was attempted, or — for Speaking — the learner never took a turn. Completing early no longer fails words nobody was shown (ADR-063). |
+
+In both cases `newStatus` and `nextEligibleAt` describe the word as it stands,
+`passed` is `false`, and the client shows neither a pass nor a fail.
 
 ### The in-session learning loop
 
@@ -462,6 +515,7 @@ limit (R8). `start` returns `409 NO_WORDS_IN_PERIOD` when the week was empty.
 | GET | `/admin/users?q=&days=&page=&pageSize=` | `{items:[AdminUserSummary], total, page, pageSize, hasMore}` |
 | GET | `/admin/users/{id}` | `AdminUserDetail` |
 | GET | `/admin/users/{id}/words?state=&q=&page=` | `{items:[AdminWord], total, hasMore}` |
+| POST | `/admin/users/{id}/advance-schedule` | `{days}` (1–30, default 2) → `{days, wordsShifted, skillsDueNow}` — brings waiting skills forward for testing; moves scheduled dates only and is logged (ADR-037) |
 | GET | `/admin/users/{id}/placement` | placement evidence + initial-vs-current levels |
 | GET | `/admin/words/{wordId}` | one word's journey, for any learner |
 
@@ -506,12 +560,23 @@ activity log (ADR-025) — the raw trail behind every figure beside it.
   "userCount": 12, "activeToday": 5, "activeThisWeek": 9,
   "wordsAddedTotal": 431,
   "averageWordsPerUserPerDay": 6.4,
+  // Learners only, here and in every figure below: an Owner trying the product
+  // is not part of how the audience is doing (ADR-052).
   "averageSessionsPerUser": 11.2, "averageSessionDurationMs": 214000,
+  // The middle session. Shown in preference to the mean, which a handful of
+  // sessions finished the next morning drag by two orders of magnitude.
+  "medianSessionDurationMs": 16000,
   "pipelineCompletionRate": 0.34,        // added → Active
   "aiFallbackRate": 0.02,                // AI calls scored by the fallback
   "skillStats": [
+    // `sessionsCompleted` counts sessions; `wordsPassed`/`wordsFailed` count
+    // *attempts* on words. The three never sum — a session covers several
+    // words — and `wordsDecided` is the count first-attempt accuracy belongs
+    // over: distinct words this skill has passed or failed at least once
+    // (ADR-052).
     { "skill":"READING", "sessionsCompleted":48,
-      "wordsPassed":41, "wordsFailed":7, "firstAttemptPasses":38 }
+      "wordsPassed":41, "wordsFailed":7,
+      "firstAttemptPasses":38, "wordsDecided":44 }
   ],
   "levelDistributions": [                // SPELLING is absent — no CEFR band
     { "skill":"READING", "counts": { "A2": 3, "B1": 6, "B2": 3 } }
@@ -522,7 +587,30 @@ activity log (ADR-025) — the raw trail behind every figure beside it.
   ]
 }
 
+// ── Feedback (ADR-053) ───────────────────────────────────────────────────────
+//
+// | POST  | `/feedback`                | `{body, appVersion?, platform?}` → `{id, sentAt}` |
+// | GET   | `/admin/feedback?status=`  | → `{items, total, unread, page, hasMore}` |
+// | PATCH | `/admin/feedback/{id}`     | `{handled}` → `{id, status, handledAt}` |
+//
+// Asymmetric on purpose: any signed-in learner may POST, and there is no call
+// anywhere that returns feedback to a learner — their own included. Reading is
+// Owner-only and refused with 403 for everyone else. `body` is capped at 4 000
+// characters and stripped of control characters; it is stored as written and
+// rendered as text, never interpreted.
+
+// FeedbackMessage
+{ "id":"f_1", "body":"The microphone does nothing.", "status":"NEW",
+  "createdAt":"…", "handledAt":null,
+  "appVersion":"1.2.0", "platform":"ios",
+  "user": { "id":"u_2", "displayName":"سالم", "email":"a@b.c",
+            "phoneCountryCode":"967", "phoneNumber":"770112233" } }
+
 // AdminUserSummary
+// `lastActiveAt` is the last thing the account *did*, from the activity log —
+// not its last sign-in, which is one moment and misses a week of study after
+// it (§34–§35, ADR-052). `sessionsCompleted` had been specified here from the
+// start and simply never implemented, so the client read every row as zero.
 { "id":"u_2", "displayName":"Ahmed Bawazir", "email":"a@b.c", "role":"USER",
   "createdAt":"…", "lastActiveAt":"…",
   "wordsTotal":63, "wordsActive":12, "sessionsCompleted":31 }

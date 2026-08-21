@@ -316,8 +316,10 @@ class MockContentGenerator {
   /// backend builds (Part 2 §36–§37). A pool holding exactly the right letters
   /// can be cleared by using every tile, which is not spelling.
   List<String> _letterPool(String word) {
-    final letters = word.replaceAll(' ', '').toLowerCase().split('');
-    final decoyCount = (letters.length ~/ 2).clamp(3, 6);
+    // The spaces are tiles too: "alarm clock" is one vocabulary item, and a
+    // pool without them cannot spell it (ADR-042).
+    final letters = word.toLowerCase().split('');
+    final decoyCount = (letters.where((l) => l != ' ').length ~/ 2).clamp(3, 6);
 
     final used = letters.toSet();
     final available = 'abcdefghijklmnopqrstuvwxyz'

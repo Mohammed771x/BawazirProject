@@ -101,6 +101,63 @@ void main() {
       expect(speech.closed, isTrue, reason: 'the second tap ends the turn');
     });
 
+    testWidgets('the bin throws the turn away instead of sending it',
+        (tester) async {
+      final tts = _FakeTts();
+      final speech = _FakeSpeech(
+        ['Umm, I mean, the research, no wait.'],
+        tts: tts,
+      );
+
+      await _pumpSpeaking(tester, tts, speech);
+
+      final spokenByTutor = tts.spoken.length;
+
+      await tester.tap(find.bySemanticsLabel('voice'));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      // A fumbled sentence. Until now the only way out was to send it and let
+      // the tutor answer the fumble (ADR-059).
+      expect(find.text('Umm, I mean, the research, no wait.'), findsWidgets,
+          reason: 'the learner should see what was heard');
+
+      await tester.tap(find.byIcon(Icons.delete_outline_rounded));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // Thrown away: not read, not sent, no AI call spent.
+      expect(speech.cancelled, isTrue,
+          reason: 'the recording should be cancelled, not read');
+      expect(speech.closed, isFalse,
+          reason: 'nothing should have been read off the microphone');
+      expect(tts.spoken.length, spokenByTutor,
+          reason: 'the tutor should not have answered a discarded turn');
+
+      // And the words are gone from the screen.
+      expect(find.text('Umm, I mean, the research, no wait.'), findsNothing);
+
+      // The microphone is offered again, which is the whole point.
+      expect(find.text('Tap to speak'), findsWidgets);
+
+      await tester.tap(find.bySemanticsLabel('voice'));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(speech.listenCount, 2,
+          reason: 'the learner should be able to record again');
+    });
+
+    testWidgets('there is nothing to throw away before the learner speaks',
+        (tester) async {
+      final tts = _FakeTts();
+      final speech = _FakeSpeech(['I do research every week.'], tts: tts);
+
+      await _pumpSpeaking(tester, tts, speech);
+
+      // A bin beside an idle microphone offers to delete nothing, and a
+      // learner reading it wonders what they are about to lose.
+      expect(find.byIcon(Icons.delete_outline_rounded), findsNothing);
+    });
+
     testWidgets('the microphone never opens while the tutor is talking',
         (tester) async {
       final tts = _FakeTts();
@@ -210,7 +267,8 @@ Future<(MockEngine, MockUser)> _pumpSpeaking(
   // pipeline through the UI is what the integration journeys are for; this test
   // is about the voice loop, so the word is walked there through the engine.
   final engine = MockEngine();
-  final auth = engine.register('voice@test.dev', 'wordos123', 'Voice');
+  final auth = engine.register('voice@test.dev', 'wordos123', 'Voice',
+        phoneCountryCode: '967', phoneNumber: '770000013');
   final user = engine.requireUser(auth.token);
   engine.addWord(user, MockDictionary.entries['research']!.first);
 
@@ -398,6 +456,12 @@ class _FakeSpeech implements SpeechRecognitionService {
   @override
   Future<void> stop() async {}
 
+  /// Whether the recording was thrown away rather than read.
+  bool cancelled = false;
+
   @override
-  Future<void> cancel() async {}
+  Future<void> cancel() async {
+    cancelled = true;
+    _pending = null;
+  }
 }

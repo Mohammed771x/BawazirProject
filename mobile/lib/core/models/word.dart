@@ -134,6 +134,7 @@ class Word {
     required this.partOfSpeech,
     required this.cefrLevel,
     required this.state,
+    this.form,
     required this.currentSkill,
     required this.addedAt,
     required this.nextEligibleAt,
@@ -146,6 +147,14 @@ class Word {
   final String meaning;
   final String definitionEn;
   final String partOfSpeech;
+
+  /// Which form of the word this entry is — `past`, `pastParticiple`, `ing`,
+  /// `plural` — or null when it is the word itself (ADR-056).
+  ///
+  /// A key, not a sentence: the learner reads it in their own language, and
+  /// the server does not know which that is.
+  final String? form;
+
   final CefrLevel cefrLevel;
   final WordState state;
   final SkillType? currentSkill;
@@ -166,6 +175,7 @@ class Word {
         meaning: json['meaning'] as String? ?? '',
         definitionEn: json['definitionEn'] as String? ?? '',
         partOfSpeech: json['partOfSpeech'] as String? ?? '',
+        form: json['form'] as String?,
         cefrLevel: CefrLevel.fromWire(json['cefrLevel'] as String?),
         state: WordState.fromWire(json['state'] as String?),
         currentSkill: json['currentSkill'] == null
@@ -187,6 +197,7 @@ class Word {
         'meaning': meaning,
         'definitionEn': definitionEn,
         'partOfSpeech': partOfSpeech,
+        'form': form,
         'cefrLevel': cefrLevel.wire,
         'state': state.wire,
         'currentSkill': currentSkill?.wire,

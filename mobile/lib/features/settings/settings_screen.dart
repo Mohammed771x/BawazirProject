@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -9,6 +10,7 @@ import '../../core/api/wordos_api.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/storage/preferences_providers.dart';
+import '../../core/support/support_contact.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/theme/skill_visuals.dart';
 import '../../core/widgets/app_widgets.dart';
@@ -78,6 +80,17 @@ class SettingsScreen extends ConsumerWidget {
           const SizedBox(height: AppSpacing.lg),
           SectionHeader(title: s.appearance),
           const _AppearanceCard(),
+          const SizedBox(height: AppSpacing.lg),
+          // How a learner reaches a person (ADR-053). Before this there was no
+          // way at all — no address, no support screen — so someone who hit a
+          // problem could only stop using the app, and nobody would learn why.
+          SectionHeader(title: s.feedbackSection),
+          const _FeedbackCard(),
+          const SizedBox(height: AppSpacing.xs),
+          // Straight to a person on WhatsApp (ADR-055). Beside the message box
+          // rather than instead of it: one is for something that can wait and
+          // be read later, the other for a learner who is stuck right now.
+          const _SupportCard(),
           const SizedBox(height: AppSpacing.lg),
           // Owner-only doorway. A normal account never renders this, and the
           // route guard plus the API's role check both refuse it anyway
@@ -456,4 +469,248 @@ class _OwnerEntryCard extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// "Tell us what went wrong" — the learner's half of feedback (ADR-053).
+///
+/// A dialog rather than a screen: the whole interaction is one field and one
+/// button, and a route would put a back stack between a learner and the thing
+/// they were about to describe.
+class _FeedbackCard extends ConsumerWidget {
+  const _FeedbackCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+
+    return AppCard(
+      onTap: () => _composeFeedback(context, ref),
+      child: Row(
+        children: [
+          Icon(Icons.forum_rounded, color: context.colors.primary),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(s.feedbackTitle, style: context.text.titleSmall),
+                Text(
+                  s.feedbackHint,
+                  style: context.text.labelSmall?.copyWith(
+                    color: context.colors.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.chevron_right_rounded),
+        ],
+      ),
+    );
+  }
+}
+
+Future<void> _composeFeedback(BuildContext context, WidgetRef ref) async {
+  final sent = await showDialog<bool>(
+    context: context,
+    builder: (_) => const _FeedbackDialog(),
+  );
+
+  if (sent == true && context.mounted) {
+    final s = ref.read(stringsProvider);
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(s.feedbackSent)));
+  }
+}
+
+/// Stateful because the controller has to outlive the frames the dialog spends
+/// animating away — a disposed controller read during that is what closed the
+/// app the last time a dialog owned one (ADR-036).
+class _FeedbackDialog extends ConsumerStatefulWidget {
+  const _FeedbackDialog();
+
+  @override
+  ConsumerState<_FeedbackDialog> createState() => _FeedbackDialogState();
+}
+
+class _FeedbackDialogState extends ConsumerState<_FeedbackDialog> {
+  final _controller = TextEditingController();
+  bool _sending = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _send() async {
+    final body = _controller.text.trim();
+    if (body.isEmpty) return;
+
+    setState(() {
+      _sending = true;
+      _error = null;
+    });
+
+    try {
+      await ref.read(wordOsApiProvider).sendFeedback(body);
+      if (mounted) Navigator.of(context).pop(true);
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() {
+          _sending = false;
+          // The server's own sentence, localised by its code where the app
+          // knows it (ADR-035).
+          _error = ref.read(stringsProvider).apiError(e.code, e.message);
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _sending = false;
+          _error = ref.read(stringsProvider).feedbackFailed;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ref.watch(stringsProvider);
+
+    return AlertDialog(
+      title: Text(s.feedbackTitle),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            s.feedbackPrompt,
+            style: context.text.bodySmall?.copyWith(
+              color: context.colors.onSurface.withValues(alpha: 0.7),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            minLines: 4,
+            maxLines: 8,
+            // The same ceiling the server enforces, so a long message is
+            // stopped where it is written rather than rejected after sending.
+            maxLength: 4000,
+            textInputAction: TextInputAction.newline,
+            decoration: InputDecoration(
+              hintText: s.feedbackPlaceholder,
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              _error!,
+              style: context.text.labelSmall
+                  ?.copyWith(color: context.palette.danger),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed:
+              _sending ? null : () => Navigator.of(context).pop(false),
+          child: Text(s.cancel),
+        ),
+        FilledButton(
+          onPressed: _sending ? null : _send,
+          child: Text(_sending ? s.feedbackSending : s.feedbackSend),
+        ),
+      ],
+    );
+  }
+}
+
+/// "Contact the developer" — one tap into WhatsApp (ADR-055).
+///
+/// No dialog and no confirmation: the learner asked to talk to someone, and a
+/// question in between is a question they did not ask for.
+class _SupportCard extends ConsumerWidget {
+  const _SupportCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+
+    return AppCard(
+      onTap: () => _openSupport(context, ref),
+      child: Row(
+        children: [
+          Icon(Icons.support_agent_rounded, color: context.palette.success),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(s.supportTitle, style: context.text.titleSmall),
+                Text(
+                  s.supportHint,
+                  style: context.text.labelSmall?.copyWith(
+                    color: context.colors.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.chevron_right_rounded),
+        ],
+      ),
+    );
+  }
+}
+
+Future<void> _openSupport(BuildContext context, WidgetRef ref) async {
+  final opened = await SupportContact.openWhatsApp();
+  if (opened || !context.mounted) return;
+
+  // WhatsApp is not installed, or the device refused to hand the link on. The
+  // learner still gets the number — a button that does nothing is worse than
+  // no button, and copying it is the thing they were about to do anyway.
+  final s = ref.read(stringsProvider);
+
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text(s.supportTitle),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(s.supportUnavailable),
+          const SizedBox(height: AppSpacing.sm),
+          SelectableText(
+            SupportContact.displayNumber,
+            // The number is a Latin string in an Arabic interface; without
+            // this it inherits the page direction and reads back to front.
+            textDirection: TextDirection.ltr,
+            style: Theme.of(dialogContext).textTheme.titleMedium,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () async {
+            await Clipboard.setData(
+                const ClipboardData(text: SupportContact.displayNumber));
+            if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+          },
+          child: Text(s.copy),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: Text(s.close),
+        ),
+      ],
+    ),
+  );
 }

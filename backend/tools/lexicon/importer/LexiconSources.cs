@@ -209,6 +209,53 @@ public static class LexiconSources
     /// Reads every (word, sense, synset) triple from the
     /// <c>entries-*.json</c> files.
     /// </summary>
+    /// <summary>
+    /// The inflected forms Open English WordNet records, by word and part of
+    /// speech.
+    /// </summary>
+    /// <remarks>
+    /// It lists a form only when its spelling is not the plain rule —
+    /// <c>went</c>, <c>swimming</c>, <c>mice</c> — and lists nothing for
+    /// <c>walk</c> or <c>book</c>. That silence is information: it says the
+    /// forms are regular, which is exactly the distinction the product draws
+    /// between a form worth learning and a word with an <c>s</c> on the end
+    /// (ADR-045).
+    /// </remarks>
+    public static Dictionary<(string Word, string Pos), List<string>> ReadOewnForms(
+        string oewnDir)
+    {
+        var forms = new Dictionary<(string, string), List<string>>();
+
+        foreach (var path in Directory.EnumerateFiles(oewnDir, "entries-*.json"))
+        {
+            using var stream = File.OpenRead(path);
+            using var doc = JsonDocument.Parse(stream);
+
+            foreach (var wordEntry in doc.RootElement.EnumerateObject())
+            {
+                if (wordEntry.Value.ValueKind != JsonValueKind.Object) continue;
+
+                foreach (var posEntry in wordEntry.Value.EnumerateObject())
+                {
+                    if (posEntry.Value.ValueKind != JsonValueKind.Object) continue;
+                    if (!posEntry.Value.TryGetProperty("form", out var formArray)
+                        || formArray.ValueKind != JsonValueKind.Array) continue;
+
+                    var listed = formArray.EnumerateArray()
+                        .Select(f => f.GetString())
+                        .Where(f => !string.IsNullOrWhiteSpace(f))
+                        .Select(f => f!.Replace('_', ' ').Trim())
+                        .ToList();
+
+                    if (listed.Count > 0)
+                        forms[(wordEntry.Name, posEntry.Name)] = listed;
+                }
+            }
+        }
+
+        return forms;
+    }
+
     public static List<OewnSense> ReadOewnSenses(string oewnDir)
     {
         var senses = new List<OewnSense>();

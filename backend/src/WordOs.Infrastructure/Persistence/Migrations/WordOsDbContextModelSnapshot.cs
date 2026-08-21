@@ -517,10 +517,23 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                     b.Property<bool>("UsedAiFallback")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("UsedWordsJson")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("WordIdsJson")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("UserId", "Skill")
+                        .IsUnique()
+                        .HasDatabaseName("ix_skill_sessions_one_open_per_skill")
+                        .HasFilter("\"IsComplete\" = false");
 
                     b.HasIndex("UserId", "Skill", "IsComplete");
 
@@ -560,6 +573,47 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                     b.HasIndex("UserId", "CreatedAt");
 
                     b.ToTable("activity_events", (string)null);
+                });
+
+            modelBuilder.Entity("WordOs.Domain.Users.FeedbackMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AppVersion")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("HandledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Platform")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status", "CreatedAt");
+
+                    b.HasIndex("UserId", "CreatedAt");
+
+                    b.ToTable("feedback_messages", (string)null);
                 });
 
             modelBuilder.Entity("WordOs.Domain.Users.RefreshToken", b =>
@@ -937,6 +991,15 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("WordOs.Domain.Users.ActivityEvent", b =>
+                {
+                    b.HasOne("WordOs.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("WordOs.Domain.Users.FeedbackMessage", b =>
                 {
                     b.HasOne("WordOs.Domain.Users.User", null)
                         .WithMany()

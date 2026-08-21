@@ -24,13 +24,17 @@ public static class AuthEndpoints
         [property: Required, MinLength(8), MaxLength(128)] string Password,
         // No character-set restriction: "أحمد سعيد" is a name.
         [property: Required, MaxLength(120)] string DisplayName,
-        // Optional so existing clients keep working; validated in shape when
-        // present. The calling code is kept separate from the number — see
+        // Required (ADR-054). An account with no number is an account the
+        // Owner cannot reach when the learner reports a problem, and reaching
+        // them is the whole reason the field exists. Existing accounts are
+        // untouched — this is a rule about creating one, not about having one.
+        //
+        // The calling code is kept separate from the number — see
         // User.PhoneCountryCode for why.
-        [property: MaxLength(6), RegularExpression(@"^\+?[0-9]{1,5}$")]
-        string? PhoneCountryCode = null,
-        [property: MaxLength(20), RegularExpression(@"^[0-9 ()\-]{4,20}$")]
-        string? PhoneNumber = null);
+        [property: Required, MaxLength(6), RegularExpression(@"^\+?[0-9]{1,5}$")]
+        string PhoneCountryCode,
+        [property: Required, MaxLength(20), RegularExpression(@"^[0-9 ()\-]{4,20}$")]
+        string PhoneNumber);
 
     public sealed record LoginRequest(
         [property: Required, MaxLength(320)] string Email,
@@ -118,11 +122,22 @@ public static class AuthEndpoints
                 "EMAIL_TAKEN", "This email is already registered.");
         }
 
+        // A number made only of punctuation passes the shape check — "()- " is
+        // four permitted characters and no digits — and the domain rightly
+        // refuses it. Caught here so the caller gets a 400 that says which
+        // field, rather than an exception that becomes a 500 (ADR-054).
+        if (!request.PhoneNumber.Any(char.IsAsciiDigit)
+            || !request.PhoneCountryCode.Any(char.IsAsciiDigit))
+        {
+            return Problems.BadRequest(
+                "INVALID_PHONE", "Enter a valid phone number.");
+        }
+
         // Role is never taken from the request. Registration always creates a
         // learner; there is no client-reachable path to Owner
         // (docs/07-SECURITY.md §3).
         var user = User.Register(
-            email, hasher.Hash(request.Password), request.DisplayName,
+            email, await hasher.HashAsync(request.Password, ct), request.DisplayName,
             config, now,
             phoneCountryCode: request.PhoneCountryCode,
             phoneNumber: request.PhoneNumber);
@@ -138,7 +153,20 @@ public static class AuthEndpoints
             now,
             issued.RefreshExpiresAt));
 
-        await db.SaveChangesAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        // The `AnyAsync` above answered honestly and then a simultaneous
+        // registration of the same email got there first — the ordinary
+        // double-tap. The index is what actually decides, so its verdict gets
+        // the same answer the pre-check would have given.
+        catch (DbUpdateException e)
+            when (UniqueViolation.On(e, "IX_users_Email"))
+        {
+            return Problems.Conflict(
+                "EMAIL_TAKEN", "This email is already registered.");
+        }
 
         return Results.Ok(ToAuthResponse(user, issued));
     }
@@ -167,8 +195,8 @@ public static class AuthEndpoints
         // is still verified against a dummy when the user is missing, so the
         // timing does not give it away either.
         var valid = user is not null
-            ? hasher.Verify(request.Password, user.PasswordHash)
-            : hasher.Verify(request.Password, DummyHash.Value) && false;
+            ? await hasher.VerifyAsync(request.Password, user.PasswordHash, ct)
+            : await hasher.VerifyAsync(request.Password, DummyHash.Value, ct) && false;
 
         if (user is null || !valid)
         {

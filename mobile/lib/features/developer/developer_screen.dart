@@ -42,6 +42,14 @@ final adminUsersProvider = FutureProvider.autoDispose<AdminUserPage>(
       ),
 );
 
+/// What learners have written to the Owner (ADR-053).
+///
+/// Unfiltered: unread first, newest first, which is the order the screen exists
+/// to show. A filter would hide the thing the tab is for.
+final adminFeedbackProvider = FutureProvider.autoDispose<FeedbackPage>(
+  (ref) => ref.watch(wordOsApiProvider).adminFeedback(),
+);
+
 /// The Owner area: **not** part of the learner's Settings and not reachable by
 /// a normal account. The router keeps non-owners out of the route, and the API
 /// refuses the calls regardless of what the client does (`MockAdmin`).
@@ -54,7 +62,7 @@ class DeveloperScreen extends ConsumerStatefulWidget {
 
 class _DeveloperScreenState extends ConsumerState<DeveloperScreen>
     with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 3, vsync: this);
+  late final TabController _tabs = TabController(length: 4, vsync: this);
 
   @override
   void dispose() {
@@ -74,6 +82,7 @@ class _DeveloperScreenState extends ConsumerState<DeveloperScreen>
           tabs: [
             Tab(text: s.devOverview),
             Tab(text: s.devUsers),
+            Tab(text: s.devFeedback),
             Tab(text: s.developerTools),
           ],
         ),
@@ -83,6 +92,7 @@ class _DeveloperScreenState extends ConsumerState<DeveloperScreen>
         children: const [
           _OverviewTab(),
           _UsersTab(),
+          _FeedbackTab(),
           _ToolsTab(),
         ],
       ),
@@ -276,8 +286,8 @@ class _OverviewTab extends ConsumerWidget {
               MetricTile(
                 label: s.devAvgSessions,
                 value: data.averageSessionsPerUser.toStringAsFixed(1),
-                caption: s.devAvgDuration(
-                  (data.averageSessionDurationMs / 1000).round(),
+                caption: s.devTypicalDuration(
+                  (data.medianSessionDurationMs / 1000).round(),
                 ),
               ),
               MetricTile(
@@ -660,6 +670,186 @@ class _ToolsTab extends ConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The Owner's inbox (ADR-053).
+///
+/// Each message carries who wrote it and how to reach them, because the next
+/// thing an Owner does after reading a bug report is answer the person — and
+/// the number is the one the learner gave at registration, not one collected
+/// for this.
+class _FeedbackTab extends ConsumerWidget {
+  const _FeedbackTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+    final feedback = ref.watch(adminFeedbackProvider);
+
+    return feedback.when(
+      loading: () => BusyView(message: s.loading),
+      error: (e, _) => ErrorView(
+        message: e is ApiException ? e.message : s.somethingWentWrong,
+        retryLabel: s.retry,
+        onRetry: () => ref.invalidate(adminFeedbackProvider),
+      ),
+      data: (page) {
+        if (page.items.isEmpty) {
+          return EmptyState(
+            icon: Icons.forum_outlined,
+            title: s.devFeedbackEmpty,
+          );
+        }
+
+        return ListView.separated(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          itemCount: page.items.length + 1,
+          separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.xs),
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+                child: SectionHeader(
+                  title: s.devFeedbackTitle,
+                  subtitle: page.unread > 0
+                      ? s.devFeedbackUnread(page.unread)
+                      : s.devFeedbackHint,
+                ),
+              );
+            }
+
+            return _FeedbackCard(message: page.items[index - 1]);
+          },
+        );
+      },
+    );
+  }
+}
+
+class _FeedbackCard extends ConsumerWidget {
+  const _FeedbackCard({required this.message});
+
+  final FeedbackMessage message;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+    final handled = message.handled;
+
+    return AppCard(
+      // Handled messages stay visible and fade rather than disappearing: a
+      // list that empties as it is read gives the Owner no way back to
+      // something they marked by mistake.
+      color: handled ? null : context.palette.warningSurface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  message.senderName.isEmpty
+                      ? message.senderEmail
+                      : message.senderName,
+                  style: context.text.titleSmall,
+                ),
+              ),
+              if (handled)
+                StatusPill(
+                  label: s.devFeedbackHandled,
+                  color: context.palette.success,
+                ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xxs),
+
+          // Their words, as text. Never interpreted: no markup, no links, no
+          // HTML anywhere on this path.
+          Text(message.body, style: context.text.bodyMedium),
+
+          const SizedBox(height: AppSpacing.xs),
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.xxs,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _Contact(label: message.senderEmail, icon: Icons.mail_outline),
+              if (message.senderPhone != null)
+                _Contact(
+                    label: message.senderPhone!,
+                    icon: Icons.phone_outlined),
+              Text(
+                _stamp(message.createdAt, message.platform, message.appVersion),
+                style: context.text.labelSmall?.copyWith(
+                  color: context.colors.onSurface.withValues(alpha: 0.55),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xxs),
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: TextButton(
+              onPressed: () async {
+                await ref
+                    .read(wordOsApiProvider)
+                    .adminSetFeedbackHandled(message.id, !handled);
+                ref.invalidate(adminFeedbackProvider);
+              },
+              child: Text(handled
+                  ? s.devFeedbackMarkNew
+                  : s.devFeedbackMarkHandled),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// When it arrived, and what it arrived from — "it crashed" is twice as
+  /// useful with a build beside it.
+  static String _stamp(DateTime at, String? platform, String? version) {
+    final when = at.toLocal().toString().split('.').first;
+    final build = [platform, version].whereType<String>().join(' ');
+    return build.isEmpty ? when : '$when · $build';
+  }
+}
+
+/// One tappable contact detail: tap to copy, because the Owner's next step is
+/// pasting it into a phone book or a group.
+class _Contact extends ConsumerWidget {
+  const _Contact({required this.label, required this.icon});
+
+  final String label;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+
+    return InkWell(
+      onTap: () async {
+        await Clipboard.setData(ClipboardData(text: label));
+        if (context.mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(s.devCopied)));
+        }
+      },
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: context.colors.onSurface.withValues(alpha: 0.55)),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: context.text.labelSmall?.copyWith(
+              color: context.colors.onSurface.withValues(alpha: 0.75),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

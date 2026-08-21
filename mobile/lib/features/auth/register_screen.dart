@@ -88,6 +88,14 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
                 controller: _phone,
                 label: s.phoneNumber,
                 arabic: s.locale.languageCode == 'ar',
+                // Required (ADR-054). Checked on the digits, because "()-" is
+                // punctuation the field permits and not a number — the server
+                // refuses the same thing, and a form that lets it through only
+                // moves the rejection somewhere less helpful.
+                validator: (v) {
+                  final digits = (v ?? '').replaceAll(RegExp(r'[^0-9]'), '');
+                  return digits.length < 6 ? s.phoneRequired : null;
+                },
               ),
               const SizedBox(height: AppSpacing.sm),
               TextFormField(

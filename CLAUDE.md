@@ -68,10 +68,37 @@ Architecture:
 - **`lib/core/storage/app_preferences.dart`** holds the *only* device-owned state: UI language
   and theme (ADR-010). Everything else is server state. Default language is **Arabic**.
 
-Sign in as `owner@wordos.app / wordos123` to reach the **Developer Dashboard**
-(Settings → Developer Dashboard): overview analytics, users, per-user drill-down, and the
-mock-only "skip 2 days" control for demonstrating the spaced-gap behaviour without waiting.
-A normal account cannot reach it — the route is guarded *and* the API returns 403 (`MockAdmin`).
+**The local stack.** `./wordos start` brings up the AI service and the API and
+reports where they are; `./wordos stop` shuts both down; `./wordos status` says
+what is running and whether the address the app was built to call is still this
+Mac's. PostgreSQL is deliberately untouched — the script did not start it. When
+the Mac's network address changes, `./wordos ip` writes the new one into the
+Xcode config.
+
+**Running on a device from Xcode.** `--dart-define` values reach an Xcode build
+through `DART_DEFINES` in `ios/Flutter/Generated.xcconfig` — which Flutter
+rewrites, including when Xcode runs the build itself. A build configured from the
+command line and then started with Xcode's Run button therefore loses its defines
+and silently falls back to the mock backend: the seeded demo account signs in and
+a real one is refused as "wrong email or password". So the device defines live in
+`ios/Flutter/Debug.xcconfig`, which is checked in and never regenerated. Change
+the address there, not on the command line. `./wordos status` is what says
+whether the address the app was built to call is still this Mac's — the sign-in
+screen used to say so too, and no longer does (ADR-060).
+
+**Against the mock**, sign in as `owner@wordos.app / wordos123` to reach the
+**Developer Dashboard** (Settings → Developer Dashboard): overview analytics, users,
+per-user drill-down, and the "skip 2 days" control for demonstrating the spaced-gap
+behaviour without waiting. Those two accounts are seeded inside `lib/mock_backend/` and
+exist nowhere else.
+
+**Against the real backend** the Owner is `ahmed@gmail.com`. Its password is not written
+down here or anywhere else in this repository, and must not be — ask the product owner.
+There is deliberately no client-reachable way to create an Owner: a new one is registered
+like any learner and promoted with SQL (ADR-061).
+
+A normal account cannot reach the dashboard — the route is guarded *and* the API returns
+403.
 
 ## Conventions
 
@@ -79,3 +106,37 @@ A normal account cannot reach it — the route is guarded *and* the API returns 
 - Models mirror the API contract exactly; update `docs/05-API-CONTRACT.md` in the same change.
 - Every judgement call or documentation conflict gets a new ADR in `docs/03-DECISIONS.md` — append, never rewrite.
 - Update `docs/02-PROGRESS.md` at the end of a working session so the next one can resume.
+
+## The app icon
+
+The launcher icon, the web icons and the iOS launch screen are **generated**
+from the same mark as `WordOsBrand`, never hand-drawn:
+
+```bash
+cd mobile && flutter test tool/generate_app_icon.dart
+```
+
+Run it after any change to the brand colours or shape. It lives in `tool/` and
+not `test/` so a normal `flutter test` does not rewrite the files (ADR-057).
+
+## Capacity
+
+Every ceiling this service imposes on itself lives in `Capacity` configuration
+(`backend/src/WordOs.Api/Endpoints/CapacityOptions.cs`) — database connections,
+password hashes in flight, AI calls in flight, connections, body size. They are
+deliberately not constants: the right number depends on the machine and on how
+many instances share one PostgreSQL (ADR-051).
+
+Two rules when touching them:
+
+- **Never queue by blocking.** A synchronous wait on the request path holds a
+  thread, so a burst in one place starves everything else. Measured: sign-in
+  throughput halved. Use `await`.
+- **Overload is not failure.** A request refused for capacity gets 503 with the
+  learner's session untouched — not a wrong-password answer, and not the AI
+  fallback, which exists for a model that answered badly rather than a queue
+  that clears in seconds.
+
+Load is measured, not assumed: `ab -n 5000 -c 1000` against a local instance
+with rate limits raised (a real crowd arrives from a thousand addresses, so the
+per-caller limiter would otherwise mask the test).

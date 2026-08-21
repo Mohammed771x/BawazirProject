@@ -26,6 +26,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\WordOs.Api\WordOs.Api.csproj" />
     <ProjectReference Include="..\..\src\WordOs.Infrastructure\WordOs.Infrastructure.csproj" />
+    <!-- The lexicon is built by a tool, and its rules decide what a learner can
+         add. They are worth testing without a 166 MB corpus in the way. -->
+    <ProjectReference Include="..\..\tools\lexicon\importer\WordOs.LexiconImporter.csproj" />
   </ItemGroup>
 
 </Project>

@@ -201,6 +201,16 @@ class SessionResultView extends ConsumerWidget {
                   ),
                 ),
               ],
+              // How the conversation went as a whole, before the word-by-word
+              // detail. Speaking only.
+              if (result.summary != null && result.summary!.trim().isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.lg),
+                AppCard(
+                  color: color.withValues(alpha: 0.07),
+                  borderColor: color.withValues(alpha: 0.28),
+                  child: Text(result.summary!, style: context.text.bodyMedium),
+                ),
+              ],
               const SizedBox(height: AppSpacing.lg),
               for (final outcome in result.words) ...[
                 _OutcomeTile(outcome: outcome, dateFormat: dateFormat),
@@ -289,6 +299,74 @@ class _OutcomeTile extends ConsumerWidget {
                           : s.retryScheduled,
                   style: context.text.bodySmall?.copyWith(color: color),
                 ),
+
+                // What the conversation showed about this word — why it went
+                // the way it did, and what to say next time. A learner told
+                // only that a word failed has learned that they failed and
+                // nothing else (ADR-048).
+                if (outcome.feedback != null) ...[
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(outcome.feedback!, style: context.text.bodySmall),
+                ],
+
+                // Their own words, quoted back, so the advice has something to
+                // point at.
+                if (outcome.evidence != null &&
+                    outcome.evidence!.trim().isNotEmpty) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.format_quote_rounded,
+                          size: 16,
+                          color: context.colors.onSurface.withValues(alpha: 0.4)),
+                      const SizedBox(width: AppSpacing.xxs),
+                      Expanded(
+                        child: EnglishText(
+                          outcome.evidence!,
+                          style: context.text.bodySmall?.copyWith(
+                            fontStyle: FontStyle.italic,
+                            color:
+                                context.colors.onSurface.withValues(alpha: 0.7),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+
+                // The sentence to copy. After being told what was wrong, this
+                // is the part a learner can actually use tomorrow.
+                if (outcome.better != null &&
+                    outcome.better!.trim().isNotEmpty) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  AppCard(
+                    color: context.palette.subtleSurface,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.lightbulb_outline_rounded,
+                            size: 16, color: context.palette.warning),
+                        const SizedBox(width: AppSpacing.xs),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                s.sayItLikeThis,
+                                style: context.text.labelSmall?.copyWith(
+                                    color: context.palette.warning),
+                              ),
+                              const SizedBox(height: AppSpacing.xxs),
+                              EnglishText(outcome.better!,
+                                  style: context.text.bodySmall),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

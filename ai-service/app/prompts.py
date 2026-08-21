@@ -101,6 +101,66 @@ READING_SCHEMA = {
 }
 
 
+#: What `glossary` must contain, written once and used by every prompt that
+#: produces a passage.
+#:
+#: A tap on a word answers from this and nothing else: a dictionary lookup at tap
+#: time returns every sense a word has ever had, and "bank" alone has six, five
+#: of them wrong here. So a passage whose glossary covers only its interesting
+#: words is a passage where most taps quietly become dictionary lookups — which
+#: is what happened to re-told passages until this rule was shared rather than
+#: paraphrased.
+GLOSSARY_RULE = """- Fill `glossary` with EVERY word in the passage that carries meaning — nouns,
+  verbs, adjectives, adverbs, and any preposition or auxiliary a learner could
+  stumble on. Skip nothing a learner might tap.
+  * `word`: exactly as it appears in the passage, same spelling and inflection.
+  * `meaning_ar`: what it means *in this sentence*, in Arabic. One sense, the
+    one you intended — not a list, and not the word's other meanings.
+  * `part_of_speech`: its role in this sentence. The same word is a noun in one
+    sentence and a verb in another; answer for this one."""
+
+
+def _reuse_shape(word: dict) -> str:
+    """An already-known word, and the form it was learned in."""
+    text = word["text"]
+
+    if word.get("form"):
+        return f'"{text}" (the {word["form"]}, exactly)'
+    if word.get("may_pluralise"):
+        return f'"{text}" (singular or plural)'
+    return f'"{text}" (exactly)'
+
+
+def _target_line(word: dict) -> str:
+    """One target word, and the shape the passage must put it in.
+
+    Reading and Listening are the two skills that show a word inside real
+    language, so they are the two that have to be told what "this word" means:
+    the entry the learner added is `played` the participle or `mouse` the
+    singular, and using a neighbouring form tests something else (ADR-047).
+    """
+    text = word["text"]
+    pos = word.get("part_of_speech") or ""
+    definition = word.get("definition") or ""
+    form = word.get("form")
+
+    if form:
+        # An inflected entry: it is the form that was added, so it is the form
+        # the passage must use.
+        shape = f'use exactly "{text}" — it is the {form} of this verb'
+    elif word.get("may_pluralise"):
+        # A plain noun whose plural is the word plus s/es. Either is the same
+        # word to a learner, and meeting both is worth more than meeting one.
+        shape = (
+            f'use "{text}" or its plural, whichever the sentence wants '
+            f"— both are this word"
+        )
+    else:
+        shape = f'use exactly "{text}"'
+
+    return f'- "{text}" ({pos}) — means: {definition}\n  {shape}'
+
+
 def _sentence_count(level: str, word_count: int, *, listening: bool) -> int:
     """How long the passage should be.
 
@@ -136,10 +196,7 @@ def reading_prompt(
     """
     topic = ", ".join(interests[:3]) if interests else "everyday student life"
     sentences = _sentence_count(level, len(words), listening=listening)
-    word_lines = "\n".join(
-        f'- "{w["text"]}" ({w["part_of_speech"]}) — means: {w["definition"]}'
-        for w in words
-    )
+    word_lines = "\n".join(_target_line(w) for w in words)
 
     medium = (
         "This text will be SPOKEN ALOUD and the learner will not see it. "
@@ -154,20 +211,33 @@ def reading_prompt(
     # returned text, which is what keeps Active vocabulary in circulation.
     reuse_block = ""
     if reuse_words:
-        reuse_list = ", ".join(f'"{w}"' for w in reuse_words)
+        # Same rule as the target words: a form the learner learned is the form
+        # they should meet again (ADR-047). A caller with nothing more to say
+        # passes plain strings; one that knows the shape passes objects.
+        reuse_list = ", ".join(
+            f'"{w}"' if isinstance(w, str) else _reuse_shape(w)
+            for w in reuse_words
+        )
         reuse_block = f"""
 The learner already knows these words: {reuse_list}.
 Reuse as many of them as fit naturally — do not force any of them in, do not
 explain them, and do not ask questions about them. If one does not belong in
-this passage, leave it out.
+this passage, leave it out. Where a shape is given, keep it: these are the forms
+they learned.
 """
 
     # A practice passage: no vocabulary is due, so the learner reads for its own
     # sake and answers comprehension questions (Part 2 §5). Nothing is being
     # tested about any particular word, so nothing is required to appear.
     target_block = (
-        f"""The passage must use each of these target words exactly once:
-{word_lines}"""
+        f"""The passage must use each of these target words exactly once, in the
+shape given after it:
+{word_lines}
+
+Use no other form of these words. A learner practising "played" as a past
+participle is learning "I have played"; a passage that writes "play" or
+"playing" instead has tested something they did not ask for, and a passage that
+writes "mice" where "mouse" was given has used a word they have not learned."""
         if words
         else "Use ordinary vocabulary for this level. There are no required words."
     )
@@ -184,14 +254,7 @@ Requirements:
   one per array element, in order.
 - Each target word, if any, must appear in a sentence whose neighbours give a
   real clue to its meaning, WITHOUT defining it.
-- Fill `glossary` with EVERY word in the passage that carries meaning — nouns,
-  verbs, adjectives, adverbs, and any preposition or auxiliary a learner could
-  stumble on. Skip nothing a learner might tap.
-  * `word`: exactly as it appears in the passage, same spelling and inflection.
-  * `meaning_ar`: what it means *in this sentence*, in Arabic. One sense, the
-    one you intended — not a list, and not the word's other meanings.
-  * `part_of_speech`: its role in this sentence. The same word is a noun in one
-    sentence and a verb in another; answer for this one.
+{GLOSSARY_RULE}
 - Write exactly {comprehension_count} comprehension questions about the passage.
   They must be answerable from the passage alone, and must NOT be about the
   target words — those are tested separately.
@@ -274,22 +337,72 @@ part of speech?
 - feedback: one or two sentences addressed to the learner. Be specific about \
 what they did, not generic praise. If something is wrong, say what would fix \
 it. {feedback_language_rule(feedback_language)}
-- suggestion: an optional more natural rewrite of their sentence. Omit if theirs \
-is already natural."""
+- suggestion: **their own sentence, written the way a {level} writer would \
+write it.** Same idea, same content, same intent — expressed at {level}. This is \
+not a grammar correction and not a better sentence: a learner at {level} is \
+shown what their own thought sounds like at the level they are working at, so \
+raise or simplify the vocabulary and structure to match {level} even when their \
+grammar is already correct. Keep the word "{word}" in it. Omit only if their \
+sentence is already exactly how a {level} writer would put it."""
 
 
 # ── Speaking conversation ────────────────────────────────────────────────────
 
-SPEAKING_PROMPT_VERSION = "speaking-v2"
+SPEAKING_PROMPT_VERSION = "speaking-v5"
 
 SPEAKING_TURN_SCHEMA = {
     "type": "object",
     "properties": {
         "reply": {"type": "string"},
-        "words_used_naturally": {"type": "array", "items": {"type": "string"}},
+        "words_only_named": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["reply", "words_used_naturally"],
+    "required": ["reply", "words_only_named"],
 }
+
+
+#: What speaking at a level actually means, band by band.
+#:
+#: "Speak at their level" is not an instruction a model can follow: asked to
+#: talk to an A1 learner it still produced "run the same lines of code until a
+#: condition is met", which is B2 vocabulary in a short sentence. A learner who
+#: changes the level because the tutor is too hard has to hear the difference,
+#: so the difference is spelled out.
+_REGISTER = {
+    "A1": "Very short sentences, five to eight words. The commonest words only. "
+          "One clause — no 'until', 'although', 'which'. Present simple.",
+    "A2": "Short sentences. Everyday words. At most one simple linking word "
+          "('and', 'but', 'because'). Present and past simple.",
+    "B1": "Ordinary conversational English. Common words, one subordinate "
+          "clause at most.",
+    "B2": "Natural adult conversation. Some less common vocabulary, longer "
+          "sentences where they carry meaning.",
+    "C1": "Precise, varied vocabulary. Complex sentences where they are the "
+          "clearest way to say it.",
+    "C2": "Fully idiomatic. Nuance, abstraction and shading as with a peer.",
+}
+
+
+def register_for(level: str) -> str:
+    """The register rule for a band, ignoring the `+` half-steps."""
+    return _REGISTER.get((level or "B1").upper().replace("_PLUS", "").replace("+", ""),
+                         _REGISTER["B1"])
+
+
+def _speaking_shape_line(shape: dict) -> str:
+    """What the tutor must know about one remaining word (ADR-047, ADR-050)."""
+    word = shape.get("text", "")
+    form = shape.get("form")
+
+    if form:
+        return (
+            f'"{word}" — this is the {form}. The learner is practising THIS '
+            f"form, so ask a question whose natural answer needs it. Another "
+            f"form of the same verb is a different word to them and does not "
+            f"count."
+        )
+    if shape.get("may_pluralise"):
+        return f'"{word}" — singular or plural is the same word; both count.'
+    return f'"{word}" — use it as it is.'
 
 
 def speaking_turn_prompt(
@@ -299,6 +412,9 @@ def speaking_turn_prompt(
     remaining_words: list[str],
     used_words: list[str],
     transcript: list[dict],
+    interests: list[str] | None = None,
+    remaining_shapes: list[dict] | None = None,
+    form_reminders: list[dict] | None = None,
 ) -> str:
     """One conversational turn.
 
@@ -314,6 +430,9 @@ def speaking_turn_prompt(
         for t in transcript[-6:]
     )
     remaining = ", ".join(f'"{w}"' for w in remaining_words) or "none left"
+    # What they like, for choosing between the scenes a word could live in —
+    # never a reason to force a word somewhere it does not belong.
+    likes = ", ".join(interests or []) or "not stated"
 
     # Turn one is a greeting, not an exercise. Opening with "use the word
     # 'research'" makes the whole thing feel like a test being read aloud, which
@@ -330,18 +449,63 @@ Write a short, friendly greeting:
 are or how their day has been.
 - Two sentences at most. Do NOT mention any target word yet, and do NOT set an \
 exercise. This is small talk to settle them in.
-- Plain spoken English at their level. No lists, no emoji, no markdown."""
+- Plain spoken English. **At {level}:** {register_for(level)}
+- No lists, no emoji, no markdown."""
+
+    if not remaining_words:
+        return f"""You are a warm, patient English tutor speaking with \
+{learner_name}, a learner at CEFR level {level}. This is a spoken conversation: \
+your reply is read aloud.
+
+Conversation so far:
+{history}
+
+They have now practised every word for today: {", ".join(used_words) or "none"}.
+
+Write the closing turn:
+- React to what {learner_name} just said, specifically.
+- Say something true about how they did — name a word they handled well.
+- Close warmly. Two or three short sentences.
+- Do NOT ask for another word, and do NOT invent one. There are none left, and \
+asking for a word that is already done tells them nobody was listening.
+- No lists, no markdown, no emoji — every character is spoken aloud.
+- Report `words_only_named` by the same rule as always: usually empty."""
 
     # After a few exchanges with a word still untouched, the tutor may ask for it
-    # outright — but only then. Nagging from the first turn is what makes it feel
-    # like an exam.
+    # outright — but only then, and only once the conversation is somewhere the
+    # word belongs. Nagging from the first turn is what makes it feel like an
+    # exam; asking for it in the wrong place makes it impossible to answer.
+    # The shape of each word still to practise, and the near misses. Both are
+    # facts the tutor cannot read off a list of bare words.
+    shapes = "\n".join(
+        f"- {_speaking_shape_line(sh)}" for sh in (remaining_shapes or [])
+    )
+    shapes_block = f"\n\nWhat those words are:\n{shapes}" if shapes else ""
+
+    repair = ""
+    if form_reminders:
+        first = form_reminders[0]
+        repair = (
+            f'\n- {learner_name} just said "{first["said"]}" where the word '
+            f'they are practising is "{first["word"]}" — the '
+            f'{first["form"]}. They reached for it and missed by one step, so '
+            f"say which step, warmly and in one short sentence: name the form "
+            f'and the word, as in "Almost — I need the {first["form"]}: '
+            f'\'{first["word"]}\'. Can you say that again?" Then let them try '
+            f"the same idea again. Do NOT move to another word, and do NOT "
+            f"treat this as a mistake to be corrected at length — they nearly "
+            f"had it."
+        )
+
     nudge = ""
     if remaining_words and len(learner_turns) >= 2:
         nudge = (
-            f'\n- They have not used "{remaining_words[0]}" yet. Give them one '
-            f'more natural opening for it, and if this is the second time you '
-            f'have tried, say plainly: "Try to use the word \'{remaining_words[0]}\' '
-            f'in your answer."'
+            f'\n- They have not used "{remaining_words[0]}" yet. Move the '
+            f'conversation to a situation where it belongs and ask about that. '
+            f'Only if the conversation is ALREADY somewhere the word fits, and '
+            f'only if this is your second attempt, may you ask outright: '
+            f'"Try to use the word \'{remaining_words[0]}\' in your answer." '
+            f'Never attach that sentence to a question the word does not fit.'
         )
 
     return f"""You are a warm, patient English tutor speaking with {learner_name}, \
@@ -351,19 +515,63 @@ read aloud and answered out loud.
 Conversation so far:
 {history}
 
-Target words still to practise: {remaining}
+Target words still to practise: {remaining}{shapes_block}
 Already used naturally: {", ".join(used_words) or "none yet"}
+{learner_name} is interested in: {likes}
 
 Write your next turn:
 - React to what {learner_name} actually just said. Acknowledge it specifically — \
 never a generic "great job".
-- Then ask ONE question that gives them a natural reason to use the next target \
-word.{nudge}
-- Two or three short sentences. Speak at their level, the way a person speaks.
+- Then ask ONE question whose natural answer contains the next target word.
+
+  Work backwards from the word: think of a real situation where a person would \
+say it, and ask about that situation. Do NOT ask an unrelated question and then \
+tell them to fit the word in. "What do you want to be when you finish studying? \
+Try to use 'hook' in your answer." is exactly the failure — the question is \
+about careers, the word is a piece of metal, and there is no honest answer.
+
+  If the word does not fit what you are talking about, CHANGE THE SUBJECT. A \
+conversation is allowed to move: "That reminds me — do you ever go fishing?" is \
+a tutor doing their job. Steering to where a word lives is the skill; forcing it \
+where it does not is not.
+
+  Their interests are for choosing BETWEEN the situations a word could live in, \
+when more than one would work. They are never a reason to bolt a word onto a \
+topic it has nothing to do with.
+
+  Then say plainly which word to use, as the last thing in your turn: \
+Try to use the word "…" in your answer. Say it every time, even when the \
+question makes it obvious — a learner cannot see the list on the screen the way \
+you can, and guessing which word is wanted is not the exercise.
+
+  That sentence is the ONLY place a word is named. It goes at the end of a \
+question the word already fits, never as a repair for a question it does not.
+
+  When there are no target words left, do not name one and do not ask for one. \
+Close warmly instead: say what they did well and that you enjoyed talking. \
+Asking for a word that is already done is the clearest possible sign that \
+nobody is listening.
+
+  And {learner_name} is never obliged to use it. If they answer without the \
+word, that is a good answer: take what they said seriously, and find the word \
+another opening later.{repair}{nudge}
+- Two or three short sentences, the way a person speaks.
+- **Speak at {level}:** {register_for(level)} This is what the learner chose,
+  and it is the whole reason the level can be changed mid-conversation: if they
+  drop it because you were too hard, the very next thing you say has to be
+  easier.
 - No lists, no markdown, no emoji, no stage directions — every character is \
 spoken aloud.
-- Also report which target words they used NATURALLY and CORRECTLY in their last \
-message. A word merely mentioned in a fragment does not count."""
+- Also report `words_only_named`: any target word that appears in \
+{learner_name}'s last message where they are talking *about* the word rather \
+than using it — "let me use 'hook' in a sentence", or echoing your question back \
+word for word. **This list is usually empty.**
+
+  Whether a word was used is decided from their words, not from this list; you \
+are being asked only about the one case a reader of the text cannot settle. So \
+do NOT list a word merely because it was used badly: "I want to become a \
+software engineering" is an attempt, and attempts count. How well they used it \
+is judged once, at the end, by someone else."""
 
 
 # ── Speaking evaluation (end of conversation) ────────────────────────────────
@@ -386,11 +594,16 @@ SPEAKING_EVAL_SCHEMA = {
                     "major_grammar_problem": {"type": "boolean"},
                     "evidence": {"type": "string"},
                     "feedback": {"type": "string"},
+                    "better": {"type": "string"},
                 },
+                # `better` is required: a learner told what was wrong and not
+                # shown what right looks like has been marked, not taught
+                # (ADR-048). Structured output guarantees the field; the prompt
+                # says what to put in it when there is nothing to repair.
                 "required": [
                     "word", "used", "meaning_correct", "understandable",
                     "grammar_acceptable", "major_grammar_problem",
-                    "evidence", "feedback",
+                    "evidence", "feedback", "better",
                 ],
             },
         },
@@ -456,8 +669,26 @@ understood?
 - major_grammar_problem: true ONLY when the grammar is broken enough to \
 obscure the meaning.
 - evidence: quote the learner's own words containing it, or "" if unused.
-- feedback: one short, encouraging sentence for the learner. \
-{feedback_language_rule(feedback_language)}
+- feedback: what {learner_name} should take away about THIS word. Two or three \
+sentences, and never generic — a learner who reads it should know what they did \
+and what to do next time (ADR-048).
+
+  * **Used it well:** say so and quote where. Then, at {level}, show the one \
+thing that would make it better — a more natural phrasing, a preposition, a \
+tense. If it was genuinely fine as it stands, say that instead of inventing a \
+correction.
+  * **Used it wrongly:** say plainly what was wrong and *why*, then give them a \
+correct sentence with the word in it, built from what they were actually talking \
+about. Add that the word comes back another day, so nothing is lost — a learner \
+who fails a word and is not told why learns only that they failed.
+  * **Never said it:** say so without blame, give one sentence showing it in \
+use, and note it will come round again.
+
+  {feedback_language_rule(feedback_language)}
+- better: one English sentence using the word correctly — their own repaired \
+where it can be, otherwise a short model sentence built from what they were \
+talking about. Always give one: a learner told what was wrong and not shown \
+what right looks like has been marked, not taught.
 
 Judge meaning and use, NOT pronunciation and NOT spelling — this is a \
 transcript, and transcription errors are not the learner's mistakes.
@@ -466,6 +697,16 @@ A small grammar slip with clear, correct use is fine: "I research about AI \
 yesterday" is acceptable use of "research" — tense is wrong, meaning is right. \
 Using a word for the wrong thing is not: "The database is my phone" uses the \
 word but the meaning is wrong.
+
+- summary: two or three sentences to {learner_name} about the conversation as a \
+whole — what went well, and the one thing to work on next time.
+
+**Everything the learner reads is written TO them, not about them.** "You used \
+`went` well" — never "the learner used" or "{learner_name} used". This is the \
+message they open after a conversation, and a report written in the third \
+person reads like a file somebody keeps on them (ADR-059).
+
+  {feedback_language_rule(feedback_language)}
 
 If a word never appears in {learner_name}'s own turns, report used: false and \
 leave the other flags false."""
@@ -560,7 +801,7 @@ do not reward length by itself."""
 
 # ── Re-telling a passage at another level ────────────────────────────────────
 
-RELEVEL_PROMPT_VERSION = "relevel-v1"
+RELEVEL_PROMPT_VERSION = "relevel-v2"
 
 
 def relevel_prompt(
@@ -581,10 +822,7 @@ def relevel_prompt(
     The questions have to be regenerated regardless: they would otherwise ask
     about sentences that no longer exist.
     """
-    word_lines = "\n".join(
-        f'- "{w["text"]}" ({w["part_of_speech"]}) — means: {w["definition"]}'
-        for w in words
-    )
+    word_lines = "\n".join(_target_line(w) for w in words)
     targets = (
         f"""These target words must still appear, exactly once each:
 {word_lines}"""
@@ -615,4 +853,11 @@ Change only the language:
 
 Return it split into sentences, with {comprehension_count} fresh comprehension
 questions about the NEW text — the old questions ask about sentences that no
-longer exist — and a full glossary, exactly as for a new passage."""
+longer exist — and a glossary of the new passage:
+
+{GLOSSARY_RULE}
+
+The glossary is not optional and not a summary: the learner taps words in this
+text to see what they mean here, and a word missing from it falls through to a
+dictionary, which answers about every sense the word has ever had instead of
+this one."""

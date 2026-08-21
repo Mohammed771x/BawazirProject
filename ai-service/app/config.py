@@ -100,8 +100,51 @@ def load_settings() -> Settings:
     return Settings(
         gemini_api_key=key,
         gemini_model=model,
-        # Optional in development; required before anything is deployed, so the
-        # AI service is not an open relay to a paid API for anyone who can
-        # reach the port.
-        service_token=os.environ.get("AI_SERVICE_TOKEN", "").strip(),
+        service_token=_require_service_token(),
+    )
+
+
+def _require_service_token() -> str:
+    """The shared secret the backend proves itself with.
+
+    Without one, ``require_service_token`` in ``main.py`` waves every caller
+    through — so an unset variable does not make the service *less* protected,
+    it makes it unprotected, and silently. Anyone who can reach the port spends
+    the Gemini budget.
+
+    This used to be documented as "optional in development, required before
+    deployment", which is a rule nothing enforced: the failure mode of
+    forgetting it is an open relay to a paid API that behaves perfectly well
+    until the bill arrives. So the token is now required, and skipping it takes
+    a deliberate, visible act rather than an omission — the same shape of guard
+    as ``_guard_model_cost`` above.
+    """
+    token = os.environ.get("AI_SERVICE_TOKEN", "").strip()
+    if token:
+        return token
+
+    unauthenticated = os.environ.get(
+        "AI_ALLOW_UNAUTHENTICATED", "").strip().lower()
+
+    if unauthenticated in ("1", "true", "yes"):
+        log_line = (
+            "AI_SERVICE_TOKEN is not set and AI_ALLOW_UNAUTHENTICATED is on: "
+            "this service will accept ANY caller. Never do this off localhost."
+        )
+        print(f"WARNING: {log_line}", flush=True)
+        return ""
+
+    raise ConfigurationError(
+        "AI_SERVICE_TOKEN is not set.\n\n"
+        "This service holds the Gemini key, so it must be able to tell the\n"
+        "WordOS backend from anyone else who can reach the port. Without the\n"
+        "token every request is accepted.\n\n"
+        "  cd ai-service\n"
+        "  python3 -c 'import secrets; print(secrets.token_urlsafe(32))'\n"
+        "  # put it in .env as AI_SERVICE_TOKEN=…\n"
+        "  # and give the backend the same value:\n"
+        "  #   dotnet user-secrets set \"AiService:Token\" \"…\" \\\n"
+        "  #     --project backend/src/WordOs.Api\n\n"
+        "For a throwaway local run with no token at all, opt in explicitly:\n\n"
+        "  AI_ALLOW_UNAUTHENTICATED=true\n"
     )

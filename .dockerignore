@@ -1,0 +1,21 @@
+# Everything the image does not need. The Flutter app is the biggest of these
+# by far, and copying it in would multiply the build time for nothing.
+mobile/
+docs/
+WordOS Decumentation/
+.git/
+.logs/
+.github/
+
+# Build output — the image builds its own.
+**/bin/
+**/obj/
+**/.venv/
+**/__pycache__/
+**/*.user
+
+# Never. These are secrets and local state, and an image is a thing people pull.
+**/.env
+**/*.pfx
+**/appsettings.Development.json
+backend/tools/lexicon/data/

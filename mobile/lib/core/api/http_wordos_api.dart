@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../models/models.dart';
+import 'api_providers.dart';
 import 'wordos_api.dart';
 
 /// Real implementation against the ASP.NET Core backend (Phase 5).
@@ -23,6 +24,13 @@ class HttpWordOsApi implements WordOsApi {
                 baseUrl: baseUrl,
                 connectTimeout: const Duration(seconds: 15),
                 // Generous: starting a session waits on Gemini.
+                //
+                // It must stay *above* the backend's own AI budget
+                // (`AiServiceOptions.TimeoutSeconds`, 25s), because when the AI
+                // is down the backend spends that budget and then builds
+                // fallback content. The two used to be equal at 90s, so the
+                // client gave up a fraction of a second before the fallback
+                // arrived and the learner saw a timeout instead of a lesson.
                 receiveTimeout: const Duration(seconds: 90),
                 sendTimeout: const Duration(seconds: 30),
                 contentType: 'application/json',
@@ -523,6 +531,42 @@ class HttpWordOsApi implements WordOsApi {
   @override
   Future<AdminUserDetail> adminUserDetail(String userId) async =>
       AdminUserDetail.fromJson(await _get('/admin/users/$userId'));
+
+  @override
+  Future<void> sendFeedback(String body) async {
+    // The build travels with the message so the Owner is not left guessing
+    // which version "it crashed" happened on (ADR-053).
+    await _post('/feedback', {
+      'body': body,
+      'appVersion': AppEnvironment.version,
+      'platform': AppEnvironment.platformName,
+    });
+  }
+
+  @override
+  Future<FeedbackPage> adminFeedback({bool? handledOnly, int page = 0}) async {
+    final status = handledOnly == null
+        ? ''
+        : '&status=${handledOnly ? 'HANDLED' : 'NEW'}';
+
+    return FeedbackPage.fromJson(
+        await _get('/admin/feedback?page=$page&pageSize=50$status'));
+  }
+
+  @override
+  Future<void> adminSetFeedbackHandled(String id, bool handled) async {
+    await _patch('/admin/feedback/$id', {'handled': handled});
+  }
+
+  @override
+  Future<ScheduleAdvance> adminAdvanceSchedule(
+    String userId, {
+    int days = 2,
+  }) async =>
+      ScheduleAdvance.fromJson(await _post(
+        '/admin/users/$userId/advance-schedule',
+        {'days': days},
+      ));
 
   @override
   Future<AdminWordPage> adminUserWords(

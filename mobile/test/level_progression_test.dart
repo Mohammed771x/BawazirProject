@@ -228,7 +228,8 @@ void main() {
     setUp(() {
       mock = MockEngine();
       user = mock.requireUser(
-          mock.register('levels@test.dev', 'wordos123', 'Levels').token);
+          mock.register('levels@test.dev', 'wordos123', 'Levels',
+            phoneCountryCode: '967', phoneNumber: '770000012').token);
     });
 
     /// Feeds the level accumulator directly — the same field a completed

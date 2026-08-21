@@ -14,6 +14,27 @@ public enum ActivityType
     PracticeCompleted,
     ReviewCompleted,
     PlacementCompleted,
+
+    /// <summary>
+    /// The Owner brought this learner's schedule forward, to demonstrate or
+    /// test the spaced gaps without waiting two days for each one.
+    /// </summary>
+    /// <remarks>
+    /// Recorded because it is the one event that makes the other figures lie:
+    /// a pipeline completed in an afternoon looks like an extraordinary
+    /// learner unless the log says the clock was moved.
+    /// </remarks>
+    ScheduleAdvanced,
+
+    /// <summary>
+    /// The learner sent the Owner a message (ADR-053).
+    /// </summary>
+    /// <remarks>
+    /// The event records only that they wrote; the text itself lives in
+    /// <see cref="FeedbackMessage"/>, because this log deliberately holds no
+    /// free text from learners.
+    /// </remarks>
+    FeedbackSent,
 }
 
 /// <summary>

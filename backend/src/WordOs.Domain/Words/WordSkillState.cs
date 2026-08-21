@@ -63,6 +63,24 @@ public class WordSkillState
         AvailableAt = availableAt;
     }
 
+    /// <summary>
+    /// Brings a waiting skill forward by <paramref name="days"/>.
+    /// </summary>
+    /// <remarks>
+    /// A testing affordance, not part of the algorithm: the gaps are what the
+    /// product is measuring, so waiting two real days to see the next skill
+    /// open makes the pipeline impossible to demonstrate or to test end to end.
+    ///
+    /// It moves the *waiting* only. Nothing that already happened is touched —
+    /// no attempt, no pass, no failure, no timestamp of a real event — so the
+    /// history stays true and only the future arrives sooner.
+    /// </remarks>
+    internal void AdvanceSchedule(int days)
+    {
+        if (AvailableAt is null) return;
+        AvailableAt = AvailableAt.Value.AddDays(-days);
+    }
+
     internal void RecordAttempt(DateTimeOffset now)
     {
         Attempts++;

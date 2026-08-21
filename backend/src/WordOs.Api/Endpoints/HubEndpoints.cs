@@ -70,8 +70,17 @@ public static class HubEndpoints
             .Include(w => w.Skills)
             .ToListAsync(ct);
 
+        // A session that never finished being built is not one to resume.
+        // StartAsync claims its row before generating the content (ADR-063), so
+        // an AI refusal or a restart in between can leave a row with no
+        // passage, no conversation and no items. Offering it as
+        // `activeSessionId` would send the learner to an empty screen; leaving
+        // it out means the next start clears it and builds a real one.
         var openSessions = await db.SkillSessions
             .Where(s => s.UserId == userId && !s.IsComplete)
+            .Where(s => s.ContentText != null
+                        || s.TranscriptJson != null
+                        || s.Items.Any())
             .Select(s => new { s.Skill, s.Id })
             .ToListAsync(ct);
 

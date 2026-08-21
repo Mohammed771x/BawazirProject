@@ -65,6 +65,30 @@ python3 -m venv .venv
 > annotations. Python 3.12 does not — `brew install python@3.12` is worth doing
 > before deployment.
 
+## Tests
+
+```bash
+./.venv/bin/pip install -r requirements-dev.txt
+./.venv/bin/python -m pytest
+```
+
+They need neither a Gemini key nor a network: `tests/conftest.py` sets fixture
+credentials before the app is imported, and an autouse fixture replaces the
+provider client with one that **fails the test** if it is called without a
+stub. That guard is not decoration — the first draft of the suite sent a real
+request to googleapis.com from a test that expected its input to be rejected,
+and only an invalid key stopped it becoming a charge.
+
+What is covered: the service token (including that a missing one now stops
+startup), the shaping of a generation into a response, every refusal path
+(unparseable JSON, provider failure, no sentences), request validation, the
+admission gate and its slot accounting, the model-cost guard, and the prompt
+builders — passage length by band, which form of a word the passage is told to
+use, and the feedback language.
+
+What is not: the prompts' *quality*. Whether a passage teaches well is a
+judgement, and it is measured by the experiment, not by an assertion.
+
 ## Endpoints
 
 | Endpoint | Purpose | Tokens (typical) |
@@ -74,9 +98,12 @@ python3 -m venv .venv
 | `POST /ai/writing` | Observations about one learner sentence | ~470 |
 | `POST /ai/speaking/turn` | One conversational turn + which words were used naturally | ~370 |
 
-All are authenticated with `X-Service-Token` when `AI_SERVICE_TOKEN` is set —
-this service must never be exposed directly, or anyone who can reach the port
-can spend the API budget.
+All are authenticated with `X-Service-Token`. `AI_SERVICE_TOKEN` is
+**required** — the service refuses to start without it, because an unset token
+does not weaken the check, it removes it, and anyone who can reach the port can
+then spend the API budget. A throwaway local run with no token has to say so
+out loud with `AI_ALLOW_UNAUTHENTICATED=true`. This service must never be
+exposed directly either way.
 
 ### Verified output
 

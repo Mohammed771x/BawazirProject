@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+#
+# WordOS — start and stop the local stack.
+#
+#   ./wordos start     the AI service and the API, then report where they are
+#   ./wordos stop      both of them
+#   ./wordos status    what is running, and whether the phone can reach it
+#   ./wordos ip        point the Xcode build at this Mac's current address
+#
+# PostgreSQL is not touched: it is a system service this script did not start,
+# and other things may be using it.
+
+set -u
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOGS="$ROOT/.logs"
+API_PORT=5199
+AI_PORT=8099
+
+# dotnet is not on the default PATH on this machine.
+export PATH="$PATH:/usr/local/share/dotnet:$HOME/.dotnet/tools"
+
+mkdir -p "$LOGS"
+
+# The address the phone uses. Loopback is the Mac talking to itself; a phone
+# needs the address the Mac has on the network it shares with it.
+lan_ip() {
+  local ip
+  for iface in en0 en1 en7; do
+    ip="$(ipconfig getifaddr "$iface" 2>/dev/null)"
+    [ -n "$ip" ] && { echo "$ip"; return; }
+  done
+  echo "127.0.0.1"
+}
+
+# What the Xcode build was last told to call.
+configured_url() {
+  python3 - "$ROOT/mobile/ios/Flutter/Debug.xcconfig" <<'PY' 2>/dev/null
+import base64, sys
+try:
+    text = open(sys.argv[1]).read()
+except OSError:
+    sys.exit()
+for line in text.splitlines():
+    if not line.startswith("DART_DEFINES"):
+        continue
+    for value in line.split("=", 1)[1].split(","):
+        value = value.strip()
+        if not value or value.startswith("$("):
+            continue
+        try:
+            decoded = base64.b64decode(value).decode()
+        except Exception:
+            continue
+        if decoded.startswith("WORDOS_API_BASE_URL="):
+            print(decoded.split("=", 1)[1])
+PY
+}
+
+alive() { curl -fsS -m 3 -o /dev/null "$1" 2>/dev/null; }
+
+wait_for() {
+  local url="$1" name="$2" tries=45
+  printf '   %-12s ' "$name"
+  while (( tries-- )); do
+    if alive "$url"; then echo "ready"; return 0; fi
+    sleep 1
+  done
+  echo "did not come up — see $LOGS"
+  return 1
+}
+
+start() {
+  if ! pg_isready -h 127.0.0.1 -q 2>/dev/null; then
+    echo "PostgreSQL is not accepting connections on 127.0.0.1:5432."
+    echo "Start it first — the API cannot serve anything without it."
+    return 1
+  fi
+
+  if pgrep -f "uvicorn app.main" >/dev/null; then
+    echo "   AI service   already running"
+  else
+    # Detached: stdin closed, both streams to a log. A process still holding
+    # the caller's pipes keeps them waiting for a command that has already
+    # finished its work.
+    # More than one worker, because the endpoints are synchronous and a model
+    # call holds its thread for seconds: one worker serves one crowd badly
+    # (ADR-051). Each worker keeps its own in-flight ceiling.
+    ( cd "$ROOT/ai-service" && \
+      nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$AI_PORT" \
+        --workers "${WORDOS_AI_WORKERS:-2}" \
+        < /dev/null > "$LOGS/ai.log" 2>&1 & )
+  fi
+
+  if pgrep -f "WordOs.Api" >/dev/null; then
+    echo "   API          already running"
+  else
+    ( cd "$ROOT/backend" && \
+      ASPNETCORE_ENVIRONMENT=Development \
+      nohup dotnet run --project src/WordOs.Api --no-launch-profile \
+        --urls "http://0.0.0.0:$API_PORT" < /dev/null > "$LOGS/api.log" 2>&1 & )
+  fi
+
+  echo "starting:"
+  wait_for "http://127.0.0.1:$AI_PORT/health" "AI service" || return 1
+  wait_for "http://127.0.0.1:$API_PORT/health/ready" "API" || return 1
+
+  status
+}
+
+stop() {
+  pkill -f "WordOs.Api" 2>/dev/null
+  pkill -f "uvicorn app.main" 2>/dev/null
+  sleep 2
+  echo "stopped: API and AI service (PostgreSQL left running)"
+}
+
+status() {
+  local ip url
+  ip="$(lan_ip)"
+  url="$(configured_url)"
+
+  echo
+  echo "   AI service   http://127.0.0.1:$AI_PORT   $(alive "http://127.0.0.1:$AI_PORT/health" && echo up || echo down)"
+  echo "   API          http://$ip:$API_PORT   $(alive "http://$ip:$API_PORT/health/ready" && echo up || echo down)"
+  echo "   database     $(pg_isready -h 127.0.0.1 -q 2>/dev/null && echo connected || echo unreachable)"
+  echo
+  echo "   the app is built to call: ${url:-nothing configured}"
+
+  # The one failure that looks like a wrong password: the app calling an
+  # address this Mac no longer has, so a real account is refused by a backend
+  # that was never reached.
+  if [ -n "$url" ] && [[ "$url" != *"$ip"* ]]; then
+    echo
+    echo "   ⚠ that address is not this Mac ($ip)."
+    echo "     Run ./wordos ip, then Stop and Run again in Xcode."
+  fi
+  echo
+}
+
+set_ip() {
+  local ip; ip="$(lan_ip)"
+  python3 - "$ROOT/mobile/ios/Flutter/Debug.xcconfig" "$ip" "$API_PORT" <<'PY'
+import base64, re, sys
+path, ip, port = sys.argv[1], sys.argv[2], sys.argv[3]
+text = open(path).read()
+defines = [f"WORDOS_MOCK=false", f"WORDOS_API_BASE_URL=http://{ip}:{port}/api"]
+encoded = ",".join(base64.b64encode(d.encode()).decode() for d in defines)
+text = re.sub(r"(?m)^DART_DEFINES=.*$", f"DART_DEFINES=$(inherited),{encoded}", text)
+open(path, "w").write(text)
+print(f"   the app will now call http://{ip}:{port}/api")
+print("   Stop and Run again in Xcode to pick it up.")
+PY
+}
+
+case "${1:-}" in
+  start)  start ;;
+  stop)   stop ;;
+  status) status ;;
+  ip)     set_ip ;;
+  restart) stop; start ;;
+  *)
+    echo "usage: ./wordos {start|stop|status|restart|ip}"
+    exit 1
+    ;;
+esac

@@ -82,7 +82,13 @@ class FlakyWordOsApi implements WordOsApi {
     String? phoneNumber,
   }) =>
       _inner.register(
-          email: email, password: password, displayName: displayName);
+          email: email,
+          password: password,
+          displayName: displayName,
+          // Forwarded, not dropped: a decorator that quietly loses an argument
+          // is a decorator that changes behaviour (ADR-054).
+          phoneCountryCode: phoneCountryCode,
+          phoneNumber: phoneNumber);
 
   @override
   Future<AuthResponse> login({

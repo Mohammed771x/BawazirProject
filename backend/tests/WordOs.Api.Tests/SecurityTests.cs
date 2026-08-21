@@ -53,6 +53,8 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
             email = email ?? Unique("learner"),
             password = "correct-horse-battery",
             displayName = "Learner",
+            phoneCountryCode = "967",
+            phoneNumber = "770000001",
         });
 
         response.EnsureSuccessStatusCode();
@@ -159,7 +161,7 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
         const string password = "correct-horse-battery";
         var email = Unique("hash");
         var response = await Client.PostAsJsonAsync("/api/auth/register",
-            new { email, password, displayName = "Learner" });
+            new { email, password, displayName = "Learner", phoneCountryCode = "967", phoneNumber = "770000003" });
 
         var body = await response.Content.ReadAsStringAsync();
         Assert.DoesNotContain(password, body);
@@ -177,7 +179,7 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
 
         var email = Unique("logout");
         var register = await Client.PostAsJsonAsync("/api/auth/register",
-            new { email, password = "correct-horse-battery", displayName = "L" });
+            new { email, password = "correct-horse-battery", displayName = "L", phoneCountryCode = "967", phoneNumber = "770000004" });
         var body = await register.Content.ReadFromJsonAsync<JsonElement>();
         var token = body.GetProperty("token").GetString()!;
         var refresh = body.GetProperty("refreshToken").GetString()!;
@@ -205,6 +207,8 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
             email = Unique("rotate"),
             password = "correct-horse-battery",
             displayName = "L",
+            phoneCountryCode = "967",
+            phoneNumber = "770000006",
         });
         var body = await register.Content.ReadFromJsonAsync<JsonElement>();
         var first = body.GetProperty("refreshToken").GetString()!;
@@ -280,6 +284,8 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
               "email": "{{Unique("escalate")}}",
               "password": "correct-horse-battery",
               "displayName": "Sneaky",
+              "phoneCountryCode": "967",
+              "phoneNumber": "770000007",
               "role": "Owner",
               "Role": "OWNER",
               "isOwner": true
@@ -434,16 +440,30 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
     // ── Input validation ────────────────────────────────────────────────────
 
     [SkippableTheory]
-    [InlineData("", "correct-horse-battery")]
-    [InlineData("not-an-email", "correct-horse-battery")]
-    [InlineData("valid@test.dev", "short")]
+    [InlineData("", "correct-horse-battery", "967", "770000009")]
+    [InlineData("not-an-email", "correct-horse-battery", "967", "770000009")]
+    [InlineData("valid@test.dev", "short", "967", "770000009")]
+    // A number is required to create an account (ADR-054): an account the Owner
+    // cannot reach is one whose learner cannot be helped when they report a
+    // problem — which is the entire reason the field is collected.
+    [InlineData("valid@test.dev", "correct-horse-battery", null, null)]
+    [InlineData("valid@test.dev", "correct-horse-battery", "967", "")]
+    [InlineData("valid@test.dev", "correct-horse-battery", "", "770000009")]
+    // Punctuation is not a number.
+    [InlineData("valid@test.dev", "correct-horse-battery", "967", "()- ")]
     public async Task Invalid_registration_input_is_rejected(
-        string email, string password)
+        string email, string password, string? code, string? number)
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);
 
-        var response = await Client.PostAsJsonAsync("/api/auth/register",
-            new { email, password, displayName = "L" });
+        var response = await Client.PostAsJsonAsync("/api/auth/register", new
+        {
+            email,
+            password,
+            displayName = "L",
+            phoneCountryCode = code,
+            phoneNumber = number,
+        });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }

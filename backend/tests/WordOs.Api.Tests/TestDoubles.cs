@@ -57,7 +57,9 @@ public sealed class StubAiContentService : IAiContentService
         CancellationToken ct = default)
     {
         ContentCalls++;
-        LastReuseWords = request.ReuseWords;
+        // The texts alone: the tests that read this ask which words were
+        // offered for reuse, not what shape they were offered in.
+        LastReuseWords = request.ReuseWords.Select(w => w.Text).ToList();
         if (Fail) throw new WordOs.Infrastructure.Ai.AiServiceException("stub outage");
 
         var sentences = new List<string> { "The class began early on a bright morning." };
@@ -145,7 +147,10 @@ public sealed class StubAiContentService : IAiContentService
             // Echoed so a test can see which language was asked for without
             // reaching into the double.
             Feedback: $"stub feedback [{request.FeedbackLanguage}]",
-            Suggestion: "stub suggestion",
+            // Echoed so a test can see which level the rewrite was asked for:
+            // that level is the whole point of the control on a writing task
+            // (ADR-038).
+            Suggestion: $"stub rewrite at {request.Level.ToWire()}",
             FromFallback: false,
             // The real service reports these on every call; a double that omits
             // them would let an attribution regression pass unnoticed.
@@ -154,10 +159,27 @@ public sealed class StubAiContentService : IAiContentService
             Tokens: 0));
     }
 
+    /// <summary>How many conversational turns were asked for.</summary>
+    public int SpeakingTurns { get; private set; }
+
+    /// <summary>The last turn's remaining words, so a test can see the closing.</summary>
+    public IReadOnlyList<string> LastRemainingWords { get; private set; } = [];
+
+    /// <summary>The near misses the last turn was told about (ADR-050).</summary>
+    public IReadOnlyList<SpeakingFormReminder> LastFormReminders { get; private set; } = [];
+
+    /// <summary>The shape each remaining word was described with (ADR-047).</summary>
+    public IReadOnlyList<AiTargetWord> LastRemainingShapes { get; private set; } = [];
+
     public Task<SpeakingObservation> SpeakingTurnAsync(
         SpeakingTurnRequest request,
         CancellationToken ct = default)
     {
+        SpeakingTurns++;
+        LastRemainingWords = request.RemainingWords;
+        LastFormReminders = request.FormReminders ?? [];
+        LastRemainingShapes = request.RemainingShapes ?? [];
+
         if (Fail) throw new WordOs.Infrastructure.Ai.AiServiceException("stub outage");
 
         var next = request.RemainingWords.FirstOrDefault();
@@ -172,7 +194,17 @@ public sealed class StubAiContentService : IAiContentService
             Reply: (next is null
                 ? "That covers everything for today."
                 : $"Tell me more, and try to use \"{next}\".") + reuse,
-            WordsUsedNaturally: [],
+            // The real service reports only the words the learner *named*
+            // rather than used — whether a word appears at all is read from the
+            // transcript by the endpoint (ADR-048). This stands in for that one
+            // judgement: "so I can use research in a sentence" names it.
+            WordsOnlyNamed: request.Transcript
+                .Where(t => !t.FromAi)
+                .Reverse()
+                .Take(1)
+                .SelectMany(t => request.RemainingWords.Where(w =>
+                    t.Text.Contains($"use {w}", StringComparison.OrdinalIgnoreCase)))
+                .ToList(),
             FromFallback: false,
             PromptVersion: "stub-speaking-v1",
             Model: "stub",

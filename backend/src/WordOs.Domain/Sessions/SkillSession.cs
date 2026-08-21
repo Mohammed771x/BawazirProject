@@ -93,6 +93,60 @@ public class SkillSession
 
     public IReadOnlyList<SessionItem> Items => _items;
 
+    /// <summary>
+    /// The words this session is about, as JSON, decided when it started.
+    /// </summary>
+    /// <remarks>
+    /// A session's words used to be recovered from its items — every item knows
+    /// which word it is about, so the set could be reassembled. Except for
+    /// Speaking, which is a conversation and has no items at all: a learner who
+    /// left a conversation and came back found it had no words, no warm-up and
+    /// nothing to talk about, while the hub went on reporting five words due.
+    ///
+    /// So the session records what it is for, once, rather than inferring it
+    /// from something that happens to be there for four skills out of five.
+    /// </remarks>
+    public string? WordIdsJson { get; private set; }
+
+    /// <summary>The words this session is about.</summary>
+    public IReadOnlyList<Guid> WordIds => WordIdsJson is null
+        ? []
+        : System.Text.Json.JsonSerializer.Deserialize<List<Guid>>(WordIdsJson)
+          ?? [];
+
+    /// <summary>
+    /// Target words the learner has genuinely used aloud, accumulated.
+    /// </summary>
+    /// <remarks>
+    /// Kept rather than recomputed, because "did they use it?" cannot be
+    /// answered by searching the transcript for the word: a learner who says
+    /// "can you change the topic so I can use *hook*" has named it, not used
+    /// it, and counting that stops the tutor ever steering toward it again
+    /// (ADR-040).
+    /// </remarks>
+    public string? UsedWordsJson { get; private set; }
+
+    public IReadOnlyList<string> UsedWords => UsedWordsJson is null
+        ? []
+        : System.Text.Json.JsonSerializer.Deserialize<List<string>>(UsedWordsJson)
+          ?? [];
+
+    /// <summary>Adds words the learner has now used, keeping the earlier ones.</summary>
+    public void RecordWordsUsed(IEnumerable<string> words)
+    {
+        var all = UsedWords
+            .Concat(words)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        UsedWordsJson = System.Text.Json.JsonSerializer.Serialize(all);
+    }
+
+    /// <summary>Records what this session is about. Called once, at the start.</summary>
+    public void SetWords(IEnumerable<Guid> wordIds) =>
+        WordIdsJson = System.Text.Json.JsonSerializer.Serialize(
+            wordIds.Distinct().ToList());
+
     public static SkillSession Start(
         Guid userId,
         SkillType skill,

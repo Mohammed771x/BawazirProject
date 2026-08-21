@@ -225,6 +225,8 @@ public class DictionarySearchTests(PostgresFixture db) : IAsyncLifetime
             email = $"dict-{Guid.NewGuid():N}@test.dev",
             password = "correct-horse-battery",
             displayName = "Learner",
+            phoneCountryCode = "967",
+            phoneNumber = "770000001",
         });
 
         response.EnsureSuccessStatusCode();

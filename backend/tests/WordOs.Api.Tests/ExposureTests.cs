@@ -55,6 +55,8 @@ public class ExposureTests(PostgresFixture db) : IAsyncLifetime
             email = $"exposure-{Guid.NewGuid():N}@test.dev",
             password = "correct-horse-battery",
             displayName = "Learner",
+            phoneCountryCode = "967",
+            phoneNumber = "770000001",
         });
         response.EnsureSuccessStatusCode();
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();

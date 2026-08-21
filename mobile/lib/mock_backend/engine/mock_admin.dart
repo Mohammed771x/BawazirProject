@@ -68,6 +68,12 @@ class MockAdmin {
                       .reduce((a, b) => a + b) /
                   _analytics.sessions.length)
               .round(),
+      // The middle session, as the real backend reports it: the mean is pulled
+      // apart by sessions finished the next day.
+      medianSessionDurationMs: _analytics.sessions.isEmpty
+          ? 0
+          : (_analytics.sessions.map((s) => s.durationMs).toList()..sort())[
+              _analytics.sessions.length ~/ 2],
       pipelineCompletionRate:
           allWords.isEmpty ? 0 : activeWords / allWords.length,
       skillStats: _analytics.skillStats(order: order),

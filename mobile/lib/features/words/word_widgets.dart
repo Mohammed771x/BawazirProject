@@ -93,6 +93,15 @@ class WordTile extends ConsumerWidget {
                       ],
                     ),
                     const SizedBox(height: 2),
+
+                    // What kind of word this is, and — when the entry is an
+                    // inflection rather than the plain word — which form
+                    // (ADR-056). A learner who added `went` is looking at a
+                    // list of words they cannot otherwise tell apart from
+                    // `go`, and one who added `book` should know whether they
+                    // are practising the noun or the verb.
+                    _WordGrammar(word: word),
+
                     Text(
                       word.meaning,
                       textDirection: TextDirection.rtl,
@@ -137,6 +146,43 @@ class WordTile extends ConsumerWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The grammatical labels under a word: its part of speech, and its form when
+/// it has one (ADR-056).
+///
+/// Quiet by design — small, low-contrast, one line. This is the kind of detail
+/// a learner looks *for*, not something that should compete with the word
+/// itself or with its meaning.
+class _WordGrammar extends ConsumerWidget {
+  const _WordGrammar({required this.word});
+
+  final Word word;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+
+    final parts = <String>[
+      if (word.partOfSpeech.trim().isNotEmpty)
+        s.partOfSpeechLabel(word.partOfSpeech),
+      ?s.wordFormLabel(word.form),
+    ];
+
+    if (parts.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Text(
+        parts.join(' · '),
+        // Both labels are in the interface language, so they follow the
+        // interface direction — unlike the word itself, which is English.
+        style: context.text.labelSmall?.copyWith(
+          color: context.colors.onSurface.withValues(alpha: 0.55),
+        ),
       ),
     );
   }
