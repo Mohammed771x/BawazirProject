@@ -826,6 +826,48 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task A_conversation_that_runs_out_of_turns_still_says_goodbye()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+
+        var session = await StartAsync("speaking");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        // Talking around the word without ever saying it. The conversation
+        // ends on its turn limit rather than on the word being done — and that
+        // path used to stop dead on "try to use the word research", with the
+        // result screen appearing over the top of it. A learner who never
+        // managed their word hit it every time, so the conversation they got
+        // wrong was also the one that ended mid-sentence (ADR-070).
+        JsonElement body = default;
+        for (var turn = 0; turn < 6; turn++)
+        {
+            var response = await Client.PostAsJsonAsync(
+                $"/api/sessions/{sessionId}/speaking/turn",
+                new { transcript = "I am not sure what to say about that." });
+            response.EnsureSuccessStatusCode();
+            body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            if (body.GetProperty("isFinal").GetBoolean()) break;
+        }
+
+        Assert.True(body.GetProperty("isFinal").GetBoolean(),
+            "the conversation should have ended on its turn limit");
+
+        // The word was never used, and the conversation still closed properly:
+        // the last thing asked of the tutor was a turn with nothing left to
+        // practise — a goodbye — and it was told which word was missed so it
+        // does not congratulate the learner on it.
+        Assert.NotEmpty(body.GetProperty("remaining").EnumerateArray());
+        Assert.Empty(Ai.LastRemainingWords);
+        Assert.Contains("research", Ai.LastUnusedWords);
+        Assert.Contains("It was good talking to you",
+            body.GetProperty("aiMessage").GetString() ?? string.Empty);
+    }
+
+    [SkippableFact]
     public async Task A_session_whose_word_has_moved_on_can_still_be_closed()
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);
@@ -2123,6 +2165,142 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
             Assert.False(string.IsNullOrWhiteSpace(
                 entry.GetProperty("partOfSpeech").GetString()));
         });
+    }
+
+    /// <summary>
+    /// The words a learner can tap, and the words that have an answer, are the
+    /// same set.
+    /// </summary>
+    /// <remarks>
+    /// Tapping a word in a passage is answered from the glossary and nothing
+    /// else; a word with no entry falls through to the lexicon, which returns
+    /// every sense the word has ever had — six for "bank", five of them wrong
+    /// in the sentence on screen. So "is the glossary complete?" is not a
+    /// quality metric, it is whether the feature works (ADR-065).
+    /// </remarks>
+    private static void AssertEveryWordCanBeTapped(JsonElement content)
+    {
+        var text = content.GetProperty("text").GetString() ?? string.Empty;
+
+        var glossed = content.GetProperty("glossary").EnumerateArray()
+            .Select(e => e.GetProperty("word").GetString()?.Trim() ?? string.Empty)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var unanswered = StubAiContentService.PassageWords.Matches(text)
+            .Select(m => m.Value)
+            .Where(w => !glossed.Contains(w))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        Assert.True(unanswered.Count == 0,
+            $"{unanswered.Count} word(s) a learner could tap have no meaning "
+            + $"in this passage: {string.Join(", ", unanswered.Take(12))}");
+    }
+
+    /// <summary>Every band the app offers, in ladder order. C2 is the top.</summary>
+    public static readonly string[] AllLevels =
+    [
+        "A1", "A1_PLUS", "A2", "A2_PLUS", "B1", "B1_PLUS",
+        "B2", "B2_PLUS", "C1", "C1_PLUS", "C2",
+    ];
+
+    [SkippableFact]
+    public async Task Every_word_of_the_passage_can_be_tapped_at_every_level()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        var session = await StartAsync("reading");
+        var sessionId = session.GetProperty("id").GetGuid();
+
+        // The passage the learner is given, before they touch anything.
+        AssertEveryWordCanBeTapped(session.GetProperty("content"));
+
+        // Then the walk the learner actually does: change the level, read the
+        // new passage, change it again. Re-telling is how every band other
+        // than their own is reached, so it is the path that has to hold.
+        foreach (var level in AllLevels)
+        {
+            var response = await Client.PostAsJsonAsync(
+                $"/api/sessions/{sessionId}/level", new { level });
+            response.EnsureSuccessStatusCode();
+
+            var retold = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+            Assert.Equal(level, retold.GetProperty("levelUsed").GetString());
+            AssertEveryWordCanBeTapped(retold.GetProperty("content"));
+        }
+    }
+
+    [SkippableFact]
+    public async Task A_passage_written_without_the_AI_can_still_be_tapped()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        // Gemini is unreachable. The session continues on the deterministic
+        // fallback — which used to carry no glossary at all, so every tap in
+        // an outage became a list of dictionary senses. An outage is a reason
+        // for weaker prose, not for a feature to stop working.
+        Ai.Fail = true;
+        try
+        {
+            var session = await StartAsync("reading");
+            AssertEveryWordCanBeTapped(session.GetProperty("content"));
+        }
+        finally
+        {
+            Ai.Fail = false;
+        }
+    }
+
+    [SkippableFact]
+    public async Task A_passage_written_without_the_AI_still_answers_to_the_level()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        Ai.Fail = true;
+        try
+        {
+            var lengths = new Dictionary<string, int>();
+            foreach (var level in new[] { "A1", "B1", "C2" })
+            {
+                // Set through Settings and read from a fresh session:
+                // re-levelling calls the AI, and the AI is what is down here.
+                var set = await Client.PatchAsJsonAsync(
+                    "/api/settings/skill-level",
+                    new { skill = "READING", level });
+                set.EnsureSuccessStatusCode();
+
+                var session = await StartAsync("reading");
+                var text = session.GetProperty("content")
+                    .GetProperty("text").GetString() ?? string.Empty;
+                lengths[level] = text.Length;
+
+                // Every one of them is a fallback passage, so every one of
+                // them must still answer a tap.
+                AssertEveryWordCanBeTapped(session.GetProperty("content"));
+
+                var abandon = await Client.PostAsync(
+                    $"/api/sessions/{session.GetProperty("id").GetGuid()}/abandon",
+                    null);
+                abandon.EnsureSuccessStatusCode();
+            }
+
+            // A B1 learner handed four lines reads that as a broken app, and is
+            // right to: the fallback used to ignore the level completely.
+            Assert.True(lengths["C2"] > lengths["A1"],
+                $"C2 fallback ({lengths["C2"]} chars) is not longer than A1 "
+                + $"({lengths["A1"]} chars)");
+        }
+        finally
+        {
+            Ai.Fail = false;
+        }
     }
 
     [SkippableFact]

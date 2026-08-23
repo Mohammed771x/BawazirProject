@@ -560,6 +560,29 @@ class AppStrings {
   String get normalSpeed => _('Normal', 'عادي');
   String get showTranscript => _('Show transcript', 'إظهار النص');
   String get iFinishedReading => _('I finished reading', 'أنهيت القراءة');
+  /// The way back to the passage once the questions have started (Reading
+  /// only — see [backToQuestions]).
+  String get showPassage => _('Show the passage', 'عرض النص');
+  String get showRecording => _('Back to the recording', 'العودة إلى التسجيل');
+  String get checkBeforeSending =>
+      _('Read it over before sending', 'راجع ما قلته قبل الإرسال');
+  String get recordAgain => _('Record again', 'تسجيل من جديد');
+  String get send => _('Send', 'إرسال');
+  String get jumpToStart => _('Back to the start', 'إلى البداية');
+  String get jumpToEnd => _('Skip to the end', 'إلى النهاية');
+  /// Where the clip has reached. Counted in sentences because that is what a
+  /// text-to-speech voice can actually be positioned at — there is no
+  /// playhead to report seconds from (ADR-068).
+  String clipPosition(int current, int total) =>
+      _('Sentence $current of $total', 'الجملة $current من $total');
+  /// Shown while a passage is being written or re-told. Sized like an exam
+  /// text now (ADR-066), a C1 passage takes some thirty-five seconds to
+  /// generate, so the wait needs to say what it is waiting for — "evaluating"
+  /// described neither, and a learner watching a spinner with the wrong label
+  /// has no way to tell a slow passage from a stuck one.
+  String get writingPassage =>
+      _('Writing your passage…', 'يُكتب النص الآن…');
+  String get backToQuestions => _('Back to the questions', 'العودة إلى الأسئلة');
   String get iFinishedListening => _('I finished listening', 'أنهيت الاستماع');
   String questionOf(int current, int total) =>
       _('Question $current of $total', 'السؤال $current من $total');

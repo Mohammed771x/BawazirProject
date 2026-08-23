@@ -32,6 +32,7 @@ def _content_request(**overrides) -> dict:
 
 def _payload(**overrides) -> dict:
     body = {
+        "title": "A Quiet Morning",
         "sentences": [
             "The morning was quiet.",
             "She walked through the garden before breakfast.",
@@ -42,8 +43,29 @@ def _payload(**overrides) -> dict:
             {"prompt": "Where did she walk?", "correct": "The garden",
              "distractors": ["The street", "The shop", "The office", "Extra"]},
         ],
+        # Complete on purpose: it covers every word of the three sentences
+        # above, so the default payload is a model that obeyed the glossary
+        # rule. A short glossary triggers the repair pass — which is a second
+        # generation, and would otherwise quietly double the call count and the
+        # token total of every test in this file.
         "glossary": [
-            {"word": "garden", "meaning_ar": "بستان", "part_of_speech": "n"},
+            {"word": w, "meaning_ar": ar, "part_of_speech": pos}
+            for w, ar, pos in [
+                ("The", "أداة تعريف", "determiner"),
+                ("morning", "الصباح", "noun"),
+                ("was", "كان", "auxiliary"),
+                ("quiet", "هادئ", "adjective"),
+                ("She", "هي", "pronoun"),
+                ("walked", "مشت", "verb"),
+                ("through", "عبر", "preposition"),
+                ("garden", "بستان", "noun"),
+                ("before", "قبل", "preposition"),
+                ("breakfast", "الفطور", "noun"),
+                ("Later", "لاحقًا", "adverb"),
+                ("sun", "الشمس", "noun"),
+                ("came", "خرجت", "verb"),
+                ("out", "إلى الخارج", "adverb"),
+            ]
         ],
     }
     body.update(overrides)
@@ -60,7 +82,9 @@ def test_a_passage_comes_back_whole(client, auth, stub_gemini):
     assert body["sentences"] == _payload()["sentences"]
     assert body["text"].startswith("The morning was quiet.")
     assert body["tokens"] == 456
-    assert body["prompt_version"] == "reading-v3"
+    assert body["prompt_version"] == "reading-v4"
+    # The passage arrives with its own heading (ADR-066).
+    assert body["title"] == "A Quiet Morning"
 
 
 def test_the_target_word_carries_its_neighbours(client, auth, stub_gemini):
@@ -290,3 +314,120 @@ def test_an_empty_written_sentence_is_refused(client, auth):
     })
 
     assert response.status_code == 422
+# ── The glossary is completed, not hoped for ─────────────────────────────────
+#
+# A tap on a passage word answers from the glossary and nothing else. Where
+# there is no entry the client falls back to the lexicon, which returns every
+# sense the word has ever had — which is the bug these pin shut: at the easier
+# levels the model glosses the interesting words and skips "was", "before",
+# "quiet", and those are precisely the words a beginner taps.
+
+def test_a_short_glossary_is_completed_by_a_second_call(
+        client, auth, stub_gemini_sequence):
+    first = _payload(glossary=[
+        {"word": "garden", "meaning_ar": "بستان", "part_of_speech": "noun"},
+    ])
+    repair = {"glossary": [
+        {"word": w, "meaning_ar": "معنى", "part_of_speech": "other"}
+        for w in ["The", "morning", "was", "quiet", "She", "walked", "through",
+                  "before", "breakfast", "Later", "sun", "came", "out"]
+    ]}
+
+    recorder = stub_gemini_sequence([first, repair])
+
+    body = client.post(
+        "/ai/content", json=_content_request(), headers=auth).json()
+
+    assert len(recorder.prompts) == 2
+    glossed = {g["word"].lower() for g in body["glossary"]}
+    for word in ["the", "morning", "was", "quiet", "she", "walked", "through",
+                 "garden", "before", "breakfast", "later", "sun", "came", "out"]:
+        assert word in glossed, f"{word} was left unglossed"
+
+
+def test_the_repair_asks_only_about_the_words_that_are_missing(
+        client, auth, stub_gemini_sequence):
+    """Re-generating the whole glossary would cost more and could come back
+    just as short. The words are known; only their meanings are not."""
+    first = _payload(glossary=[
+        {"word": "garden", "meaning_ar": "بستان", "part_of_speech": "noun"},
+    ])
+    recorder = stub_gemini_sequence([first, {"glossary": []}])
+
+    client.post("/ai/content", json=_content_request(), headers=auth)
+
+    repair_prompt = recorder.prompts[1]
+    assert '"breakfast"' in repair_prompt
+    assert '"was"' in repair_prompt
+    # Already answered, so not asked about again.
+    assert '"garden"' not in repair_prompt
+
+
+def test_a_complete_glossary_costs_no_second_call(
+        client, auth, stub_gemini_sequence):
+    recorder = stub_gemini_sequence([_payload()])
+
+    client.post("/ai/content", json=_content_request(), headers=auth)
+
+    assert len(recorder.prompts) == 1
+
+
+def test_a_failed_repair_still_returns_the_passage(
+        client, auth, monkeypatch):
+    """An incomplete glossary is weaker content, not a broken session. Refusing
+    the passage would send the learner to the deterministic fallback, which has
+    no glossary at all — strictly worse than the partial one in hand."""
+    import json
+
+    from app import main
+    from app.gemini import GeminiError, GeminiResponse
+
+    calls = {"n": 0}
+
+    def flaky(prompt, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return GeminiResponse(
+                text=json.dumps(_payload(glossary=[
+                    {"word": "garden", "meaning_ar": "بستان",
+                     "part_of_speech": "noun"},
+                ])),
+                model="gemini-3.1-flash-lite",
+                prompt_tokens=10, output_tokens=0)
+        raise GeminiError("the repair call fell over")
+
+    monkeypatch.setattr(main.CLIENT, "generate", flaky)
+
+    response = client.post(
+        "/ai/content", json=_content_request(), headers=auth)
+
+    assert response.status_code == 200
+    assert [g["word"] for g in response.json()["glossary"]] == ["garden"]
+
+
+def test_a_re_told_passage_is_glossed_as_completely_as_a_fresh_one(
+        client, auth, stub_gemini_sequence):
+    """Changing the level is how a learner reaches the easier bands, so a
+    re-telling that lost its glossary would break the tap for exactly the
+    levels this was reported on (ADR-039's rule, now enforced)."""
+    first = _payload(glossary=[
+        {"word": "garden", "meaning_ar": "بستان", "part_of_speech": "noun"},
+    ])
+    repair = {"glossary": [
+        {"word": "breakfast", "meaning_ar": "الفطور", "part_of_speech": "noun"},
+    ]}
+    recorder = stub_gemini_sequence([first, repair])
+
+    body = client.post("/ai/content/relevel", headers=auth, json={
+        "text": "The morning was quiet.",
+        "from_level": "C1",
+        "to_level": "A1",
+        "words": [{"text": "garden", "meaning": "بستان"}],
+        "comprehension_count": 5,
+    }).json()
+
+    # At least one repair pass, and the word it asked for came back. Not an
+    # exact count: the repair works in batches until the passage is covered,
+    # and this stub answers the same way every time.
+    assert len(recorder.prompts) >= 2
+    assert "breakfast" in {g["word"] for g in body["glossary"]}

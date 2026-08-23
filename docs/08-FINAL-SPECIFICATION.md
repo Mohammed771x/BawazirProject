@@ -191,7 +191,7 @@ has no items to recover them from (ADR-039).
 
 ### Reading
 
-A generated passage on one of the learner's interests, at their level, containing the
+A generated passage at the learner's level, **titled** by the generator, containing the
 session's target words — each in the shape the learner is practising (ADR-047). A word
 added as the past participle appears as the past participle; a noun whose plural is
 just an `s` may appear either way, because `book` and `books` are one word; a noun whose
@@ -205,6 +205,21 @@ Every word of the passage is tappable and answers instantly with the meaning it 
 passage as it writes it (ADR-029) — and a **re-told** passage is glossed exactly the
 same way, so changing the level does not turn taps back into dictionary lookups
 (ADR-039). Any tapped word can be added to the pipeline on the spot.
+
+**Length is the length of the exam text it stands in for** — 80 words at A1 up to 720
+at C2, every half-step in between, with sentences that lengthen with the band (ADR-066).
+**The learner's interests are the lowest priority in the prompt**, not the first
+instruction: the target words must appear the way a fluent writer would really use them,
+and a passage on the wrong subject is preferred to one that bends a word to fit a topic.
+The interests are never named back at the learner.
+
+Reading answers in **two steps**: tapping an option chooses it and sends nothing, and
+**Check** is what submits — a mis-tap therefore costs nothing, and the choice can be
+changed until it is checked. The verdict arrives with Check, and **Next** replaces it.
+The passage stays reachable while the questions run: a book icon in the header puts the
+text back on screen and returns to the same question, without unlocking the level or
+losing an answer (ADR-064). Both are Reading only — Listening's clip must not come back
+mid-question, and its options stay single-tap.
 
 ### Listening
 

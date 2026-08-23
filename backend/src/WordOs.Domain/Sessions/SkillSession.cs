@@ -62,6 +62,17 @@ public class SkillSession
     public string? ContentText { get; private set; }
 
     /// <summary>
+    /// What the passage is called — the generator writes it with the text.
+    /// </summary>
+    /// <remarks>
+    /// Prose that begins with no heading reads as an extract torn out of
+    /// something else. Every reading task a learner has met in a classroom or
+    /// an exam is titled, and the title is the first thing that tells them
+    /// what they are about to read about.
+    /// </remarks>
+    public string? ContentTitle { get; private set; }
+
+    /// <summary>
     /// Every word of the passage with the meaning it carries there, as JSON.
     /// </summary>
     /// <remarks>
@@ -168,9 +179,11 @@ public class SkillSession
         string model,
         int tokens,
         bool fromFallback,
-        string? glossaryJson = null)
+        string? glossaryJson = null,
+        string? title = null)
     {
         ContentText = text;
+        ContentTitle = title;
         GlossaryJson = glossaryJson;
         PromptVersion = promptVersion;
         AiModel = model;
@@ -200,10 +213,12 @@ public class SkillSession
     /// </remarks>
     public void SetLevel(CefrLevel level) => LevelUsed = level;
 
-    public void ReplaceContent(CefrLevel level, string? text, string? glossaryJson)
+    public void ReplaceContent(
+        CefrLevel level, string? text, string? glossaryJson, string? title = null)
     {
         LevelUsed = level;
         ContentText = text;
+        ContentTitle = title;
         GlossaryJson = glossaryJson;
         _items.Clear();
         CurrentItemId = null;

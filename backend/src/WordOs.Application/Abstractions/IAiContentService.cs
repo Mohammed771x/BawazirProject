@@ -169,7 +169,8 @@ public sealed record GeneratedContent(
     string Model,
     int Tokens,
     bool FromFallback,
-    IReadOnlyList<GlossaryEntry>? Glossary = null);
+    IReadOnlyList<GlossaryEntry>? Glossary = null,
+    string? Title = null);
 
 /// <summary>
 /// One word of the passage, with the meaning it carries <b>there</b>.
@@ -262,7 +263,18 @@ public sealed record SpeakingTurnRequest(
     /// Words the learner reached for and got the form wrong (ADR-050). The
     /// tutor names the step they missed instead of repeating the word at them.
     /// </summary>
-    IReadOnlyList<SpeakingFormReminder>? FormReminders = null);
+    IReadOnlyList<SpeakingFormReminder>? FormReminders = null,
+    /// <summary>
+    /// Words the conversation never reached, when it is being closed anyway.
+    /// </summary>
+    /// <remarks>
+    /// A conversation ends for two reasons: every word is done, or it has run
+    /// long enough. The second used to end it mid-question; it now gets a
+    /// closing turn like the first, and that turn must not congratulate the
+    /// learner on words they never said (ADR-070). What went wrong is the
+    /// evaluation's job, not the goodbye's.
+    /// </remarks>
+    IReadOnlyList<string>? UnusedWords = null);
 
 public sealed record SpeakingObservation(
     string Reply,

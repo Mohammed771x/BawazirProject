@@ -26,11 +26,16 @@ class HttpWordOsApi implements WordOsApi {
                 // Generous: starting a session waits on Gemini.
                 //
                 // It must stay *above* the backend's own AI budget
-                // (`AiServiceOptions.TimeoutSeconds`, 25s), because when the AI
+                // (`AiServiceOptions.TimeoutSeconds`, 60s), because when the AI
                 // is down the backend spends that budget and then builds
                 // fallback content. The two used to be equal at 90s, so the
                 // client gave up a fraction of a second before the fallback
                 // arrived and the learner saw a timeout instead of a lesson.
+                //
+                // Both moved together when passages were sized like the exam
+                // texts they stand in for (ADR-066), and moved back once the
+                // glossary was built in parallel (ADR-067): the measured worst
+                // case across all eleven bands is about twenty seconds.
                 receiveTimeout: const Duration(seconds: 90),
                 sendTimeout: const Duration(seconds: 30),
                 contentType: 'application/json',

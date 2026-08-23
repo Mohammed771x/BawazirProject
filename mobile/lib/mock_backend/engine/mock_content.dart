@@ -233,6 +233,9 @@ class MockContentGenerator {
 
     return GeneratedSession(
       content: SessionContent(
+        // The real generator writes a title with the passage (ADR-066); this
+        // stand-in names the one thing it knows the text is about.
+        title: listening ? 'A Morning Announcement' : 'A Day of Study',
         text: text,
         targetSpans: spans,
         revealTextAfterTest: listening,

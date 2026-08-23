@@ -33,11 +33,19 @@ def system_instruction() -> str:
 
 # ── Reading / Listening content ──────────────────────────────────────────────
 
-READING_PROMPT_VERSION = "reading-v3"
+READING_PROMPT_VERSION = "reading-v4"
 
 READING_SCHEMA = {
     "type": "object",
     "properties": {
+        # What a textbook or a magazine would print above the passage. A page of
+        # prose that starts with no title reads as an extract from something
+        # else; a learner opening a reading task should be told what they are
+        # about to read about.
+        "title": {
+            "type": "string",
+            "description": "A short English title for the passage.",
+        },
         "sentences": {
             "type": "array",
             "items": {"type": "string"},
@@ -85,6 +93,17 @@ READING_SCHEMA = {
                 "required": ["word", "meaning_ar", "part_of_speech"],
             },
         },
+        # Where the paragraphs start, as sentence indexes.
+        #
+        # Carried beside the sentences rather than as blank elements inside
+        # them: the model also reports which sentence holds each target word,
+        # by index, and an array with holes in it would shift every one of
+        # those by the number of breaks above it.
+        "paragraph_breaks": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "0-based indexes of sentences that begin a paragraph.",
+        },
         "targets": {
             "type": "array",
             "items": {
@@ -97,7 +116,7 @@ READING_SCHEMA = {
             },
         },
     },
-    "required": ["sentences", "comprehension", "targets", "glossary"],
+    "required": ["title", "sentences", "comprehension", "targets", "glossary"],
 }
 
 
@@ -118,6 +137,133 @@ GLOSSARY_RULE = """- Fill `glossary` with EVERY word in the passage that carries
     one you intended — not a list, and not the word's other meanings.
   * `part_of_speech`: its role in this sentence. The same word is a noun in one
     sentence and a verb in another; answer for this one."""
+
+
+#: From this band upwards a passage is expected to be *built*, not merely
+#: written: an opening that states what it is about, body paragraphs that each
+#: develop one idea, and a close.
+#:
+#: Below it there is nothing to structure. An A1 passage is eighty words of
+#: short declarative sentences, and asking a model to give that a thesis and a
+#: conclusion produces a parody of academic writing rather than a beginner's
+#: text (ADR-068).
+_STRUCTURE_FROM_RANK = 4  # B1
+
+_LADDER = ["A1", "A1_PLUS", "A2", "A2_PLUS", "B1", "B1_PLUS",
+           "B2", "B2_PLUS", "C1", "C1_PLUS", "C2"]
+
+
+def _wants_structure(level: str) -> bool:
+    """Whether this band's passage is long enough to have a shape."""
+    wire = level.upper().replace("+", "_PLUS")
+    return wire in _LADDER and _LADDER.index(wire) >= _STRUCTURE_FROM_RANK
+
+
+#: What "organised like a real reading text" means, spelled out.
+#:
+#: The passages read as one undifferentiated block: every sentence connected to
+#: the next, no sentence announcing what the paragraph was for, and no ending —
+#: the text simply stopped. That is what a model produces when it is asked for
+#: N sentences and nothing about their arrangement.
+STRUCTURE_RULE = """- STRUCTURE IT LIKE A REAL READING TEXT — the way a passage
+  in a TOEFL, IELTS or Cambridge paper is built, not one long undifferentiated
+  block:
+  * Open with a sentence that says what the whole passage is about. A reader
+    should know from the first line what they are about to read.
+  * Then two to four paragraphs. Each begins with its own topic sentence naming
+    the one idea that paragraph develops, and the sentences after it support
+    that idea — an example, a reason, a consequence, a contrast.
+  * Close with a sentence that lands the passage: what it amounts to, what
+    follows from it, or where it leaves the subject. Do not stop mid-thought.
+  * Report where the paragraphs begin in `paragraph_breaks`: the 0-based index
+    of each sentence that starts a new paragraph (never 0 — the first sentence
+    always starts the first one).
+  * Let the joins show — "However", "As a result", "By contrast", "In practice"
+    — so a reader can follow the argument rather than infer it."""
+
+
+#: Above this many words, the passage is written *without* its glossary and the
+#: glossary is built separately, in parallel batches.
+#:
+#: Asking for both at once is cheapest when the passage is short — one call,
+#: one round trip. It stops being cheap at length: a C2 passage measured 43
+#: seconds and 18,000 tokens when the model wrote its 430 glossary entries
+#: inline, and 8 seconds when it did not. The same entries come back from three
+#: batch calls issued together in about fifteen. Re-levelling was the first
+#: place this showed, because a learner sits and waits for it (ADR-067).
+INLINE_GLOSSARY_MAX_WORDS = 260
+
+
+def reading_schema(*, inline_glossary: bool) -> dict:
+    """The answer shape, with or without the glossary."""
+    if inline_glossary:
+        return READING_SCHEMA
+
+    schema = {
+        "type": "object",
+        "properties": {
+            k: v for k, v in READING_SCHEMA["properties"].items()
+            if k != "glossary"
+        },
+        "required": [k for k in READING_SCHEMA["required"] if k != "glossary"],
+    }
+    return schema
+
+
+#: A second pass that fills whatever the first one left out.
+#:
+#: The rule above asks for every word, and a small model does not always obey
+#: it — it glosses the interesting words and skips "was", "before", "quiet",
+#: which are exactly the words a beginner taps. Whether it obeys varies with the
+#: passage, so the shortfall is not something a better sentence in the prompt
+#: can be trusted to fix: it has to be measured and repaired.
+#:
+#: This asks for a named list rather than the whole glossary again — the words
+#: are known, only their meanings are missing, so re-generating the passage's
+#: entire vocabulary would cost more and could still come back short.
+GLOSSARY_REPAIR_VERSION = "glossary-repair-v1"
+
+GLOSSARY_REPAIR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "glossary": READING_SCHEMA["properties"]["glossary"],
+    },
+    "required": ["glossary"],
+}
+
+
+#: The easier bands get a shape too, just a much plainer one.
+_SIMPLE_SHAPE_RULE = """- Keep it one connected little text: a first sentence
+  that says what it is about, then what happens or what is true, then a last
+  sentence that finishes it. No paragraph breaks and no essay structure — at
+  this level that would be a parody of writing rather than writing."""
+
+
+#: What replaces the glossary rule when the glossary is built separately.
+_NO_INLINE_GLOSSARY = """- Do NOT return a glossary. The meanings of this
+  passage's words are asked for separately, so spend everything you have on the
+  passage itself."""
+
+
+def glossary_repair_prompt(*, sentences: list[str], missing: list[str]) -> str:
+    """Asks for the meaning of named words as this passage uses them."""
+    numbered = "\n".join(f"{i}. {s}" for i, s in enumerate(sentences))
+    wanted = ", ".join(f'"{w}"' for w in missing)
+
+    return f"""Here is a passage a learner is reading:
+
+{numbered}
+
+Give the meaning of each of these words **as this passage uses it**: {wanted}
+
+- One entry per word, and every word above must appear exactly once.
+- `word`: copy it exactly as given above, same spelling and inflection.
+- `meaning_ar`: what it means *in the sentence it appears in*, in Arabic. One
+  sense — the one this passage uses — not a list of the word's meanings.
+- `part_of_speech`: its role in that sentence.
+- Function words count: "the", "was", "before" and the like each get a plain
+  Arabic gloss. A learner tapped it, so it needs an answer.
+"""
 
 
 def _reuse_shape(word: dict) -> str:
@@ -161,22 +307,75 @@ def _target_line(word: dict) -> str:
     return f'- "{text}" ({pos}) — means: {definition}\n  {shape}'
 
 
-def _sentence_count(level: str, word_count: int, *, listening: bool) -> int:
-    """How long the passage should be.
+#: How long a passage should be at each band, in **words**, and how long its
+#: sentences should run.
+#:
+#: Measured against what public examinations actually put in front of a learner
+#: rather than guessed (ADR-066):
+#:
+#: * A2 Key — no reading text exceeds **230 words**.
+#: * B1 Preliminary — its texts run from ~150 (the gapped one) to ~300.
+#: * B2 First, Part 5 — a single text of **500–600 words**.
+#: * C1 Advanced — **3,000–3,500 words** across the whole paper, its long
+#:   Part 5 text around 700–800.
+#: * C2 Proficiency — longer and denser again than C1.
+#:
+#: Sentence length moves with it: under 10 words is A1–A2, 10–16 is B1–B2,
+#: 16–23 is B2–C1, and over 23 is C1–C2 and academic prose.
+#:
+#: The app asks for one passage with five comprehension questions, so these sit
+#: at the length of a single exam text, not of a whole paper.
+_PASSAGE_SHAPE = {
+    #            words  typical sentence length   average
+    "A1":       (80,    "6 to 9 words",           8),
+    "A1_PLUS":  (110,   "7 to 10 words",          9),
+    "A2":       (150,   "8 to 12 words",          10),
+    "A2_PLUS":  (190,   "9 to 13 words",          11),
+    "B1":       (240,   "11 to 15 words",         13),
+    "B1_PLUS":  (300,   "12 to 16 words",         14),
+    "B2":       (400,   "14 to 20 words",         17),
+    "B2_PLUS":  (480,   "15 to 21 words",         18),
+    "C1":       (560,   "17 to 24 words",         20),
+    "C1_PLUS":  (640,   "18 to 26 words",         22),
+    "C2":       (720,   "20 to 30 words",         25),
+}
 
-    Length is not a constant: an A1 learner meeting three new words does not
-    need the same amount of prose as a C1 learner, and a listening clip is
-    heard once with nothing to go back to, so it is deliberately shorter than
-    the same content on a page (Part 2 §24).
 
-    The floor is set by the words themselves — every target word must appear,
-    each in a sentence that gives a clue to its meaning.
+def _passage_shape(
+    level: str, word_count: int, *, listening: bool
+) -> tuple[int, str, int]:
+    """The target length in words, and the sentence length that goes with it.
+
+    A listening clip is heard once with nothing to go back to, so it is
+    deliberately shorter than the same content on a page (Part 2 §24) — but its
+    sentences keep their band's shape, because what makes listening hard is the
+    clause, not the paragraph.
+
+    The floor is set by the words themselves: every target word must appear in
+    a sentence whose neighbours give a clue to its meaning, and that costs
+    roughly thirty words each however easy the band.
     """
-    by_level = {"A1": 6, "A2": 7, "B1": 9, "B2": 10, "C1": 12, "C2": 13}
-    target = by_level.get(level.upper(), 9)
+    words, sentence_length, average = _PASSAGE_SHAPE.get(
+        level.upper().replace("+", "_PLUS"), _PASSAGE_SHAPE["B1"])
+
     if listening:
-        target -= 2
-    return max(word_count + 3, target)
+        words = int(words * 0.6)
+
+    words = max(words, 40 + word_count * 30)
+
+    # A sentence count as well as a word count, because a word count alone is
+    # not something a model can hold itself to: asked for 720 words at C2 it
+    # returned 361, and asked for 29 sentences it returns something close to
+    # 29. Counting is the instruction it can actually follow (ADR-066).
+    return words, sentence_length, max(4, round(words / average))
+
+
+def wants_inline_glossary(
+    level: str, word_count: int, *, listening: bool
+) -> bool:
+    """Whether this passage is short enough to be glossed in the same call."""
+    length, _, _ = _passage_shape(level, word_count, listening=listening)
+    return length <= INLINE_GLOSSARY_MAX_WORDS
 
 
 def reading_prompt(
@@ -187,6 +386,7 @@ def reading_prompt(
     listening: bool,
     comprehension_count: int,
     reuse_words: list[str] | None = None,
+    inline_glossary: bool = True,
 ) -> str:
     """Builds the passage prompt for Reading or Listening.
 
@@ -195,7 +395,8 @@ def reading_prompt(
     heard once, so it avoids the long subordinate clauses a reader can re-read.
     """
     topic = ", ".join(interests[:3]) if interests else "everyday student life"
-    sentences = _sentence_count(level, len(words), listening=listening)
+    length, sentence_length, sentence_count = _passage_shape(
+        level, len(words), listening=listening)
     word_lines = "\n".join(_target_line(w) for w in words)
 
     medium = (
@@ -242,19 +443,53 @@ writes "mice" where "mouse" was given has used a word they have not learned."""
         else "Use ordinary vocabulary for this level. There are no required words."
     )
 
-    return f"""Write a short passage at CEFR level {level} about {topic}.
+    # The learner's interests, kept in their place.
+    #
+    # They used to open the prompt — "Write a passage about technology" — and
+    # the model obeyed the topic before it obeyed anything else, bending the
+    # target words to fit it. That produces sentences nobody would write: a
+    # tin "can" appearing in a paragraph about programming teaches a use of the
+    # word that does not exist, which is worse than not meeting the word at
+    # all. The interests are a setting, not the subject, and they yield.
+    topic_block = f"""Setting (lowest priority): something around {topic}, IF that
+setting lets every target word appear the way it is genuinely used. If it does
+not, write about something else entirely — an ordinary scene, a short piece of
+non-fiction, a small story. A passage on the wrong subject is fine; a passage
+that misuses a word is not.
+
+Never name the learner's interests and never explain your choice of subject.
+No "Since you are interested in technology…", no "As a football fan…". The
+learner set those interests to make the reading pleasant, not to be reminded
+of them."""
+
+    return f"""Write a passage in English at CEFR level {level}.
 
 {medium}
 
 {target_block}
 {reuse_block}
+{topic_block}
+
+NATURAL USE COMES FIRST — before the level, before the length, before the
+subject. Every target word must sit in the sentence a fluent writer would
+actually have put it in: its ordinary collocations, its ordinary subject and
+object, the register it really belongs to. A sentence invented to squeeze a
+word into a topic is the one thing this passage must never contain.
 
 Requirements:
-- Split the passage into {sentences} or so sentences, returned
-  one per array element, in order.
+- Give the passage a title of 3 to 8 words: what a magazine or a textbook would
+  print above it. Not a summary, not a question, and it must not name any
+  target word.
+- Write **{sentence_count} sentences**, returned one per array element, in
+  order. Count them. This is the length that matters most after natural use: a
+  passage half this long is not the reading practice this level calls for, and
+  a short one is the single most common way this task is got wrong.
+- Each sentence about {sentence_length}, so the passage comes to roughly
+  {length} words in total.
 - Each target word, if any, must appear in a sentence whose neighbours give a
   real clue to its meaning, WITHOUT defining it.
-{GLOSSARY_RULE}
+{STRUCTURE_RULE if _wants_structure(level) else _SIMPLE_SHAPE_RULE}
+{GLOSSARY_RULE if inline_glossary else _NO_INLINE_GLOSSARY}
 - Write exactly {comprehension_count} comprehension questions about the passage.
   They must be answerable from the passage alone, and must NOT be about the
   target words — those are tested separately.
@@ -348,7 +583,7 @@ sentence is already exactly how a {level} writer would put it."""
 
 # ── Speaking conversation ────────────────────────────────────────────────────
 
-SPEAKING_PROMPT_VERSION = "speaking-v5"
+SPEAKING_PROMPT_VERSION = "speaking-v6"
 
 SPEAKING_TURN_SCHEMA = {
     "type": "object",
@@ -389,20 +624,37 @@ def register_for(level: str) -> str:
 
 
 def _speaking_shape_line(shape: dict) -> str:
-    """What the tutor must know about one remaining word (ADR-047, ADR-050)."""
+    """What the tutor must know about one remaining word.
+
+    Its **sense** above all (ADR-069). The tutor used to be handed bare
+    strings: shown "can", it had no way to tell the modal from the tin from
+    preserving fruit, so it asked about whatever the learner's interests
+    suggested and the word could not honestly answer. The learner added one
+    specific meaning, and that meaning is the whole exercise.
+
+    Then its form (ADR-047) and the near misses (ADR-050).
+    """
     word = shape.get("text", "")
     form = shape.get("form")
+    pos = shape.get("part_of_speech")
+    definition = (shape.get("definition") or "").strip()
+
+    sense = f'"{word}"'
+    if pos:
+        sense += f" ({pos})"
+    if definition:
+        sense += f" — means: {definition}"
 
     if form:
         return (
-            f'"{word}" — this is the {form}. The learner is practising THIS '
+            f"{sense}. This is the {form}, and the learner is practising THIS "
             f"form, so ask a question whose natural answer needs it. Another "
             f"form of the same verb is a different word to them and does not "
             f"count."
         )
     if shape.get("may_pluralise"):
-        return f'"{word}" — singular or plural is the same word; both count.'
-    return f'"{word}" — use it as it is.'
+        return f"{sense}. Singular or plural is the same word; both count."
+    return f"{sense}. Use it as it is."
 
 
 def speaking_turn_prompt(
@@ -415,6 +667,7 @@ def speaking_turn_prompt(
     interests: list[str] | None = None,
     remaining_shapes: list[dict] | None = None,
     form_reminders: list[dict] | None = None,
+    unused_words: list[str] | None = None,
 ) -> str:
     """One conversational turn.
 
@@ -453,6 +706,27 @@ exercise. This is small talk to settle them in.
 - No lists, no emoji, no markdown."""
 
     if not remaining_words:
+        # Two ways a conversation ends: every word done, or it has run long
+        # enough. Both get a closing turn — the second used to end mid-question
+        # (ADR-070) — but only the first may be congratulated on finishing.
+        missed = [w for w in (unused_words or []) if w]
+        outcome = (
+            f'They practised: {", ".join(used_words) or "none"}. '
+            f'The conversation is ending before they got to: '
+            f'{", ".join(missed)}.'
+            if missed
+            else f'They have now practised every word for today: '
+                 f'{", ".join(used_words) or "none"}.'
+        )
+        missed_rule = (
+            "\n- Do NOT list what they missed, do NOT apologise for it, and do "
+            "NOT tell them they got anything wrong. They will read about that "
+            "afterwards, in detail and in their own language. This is a "
+            "goodbye: warm, short, and about what they did do."
+            if missed
+            else ""
+        )
+
         return f"""You are a warm, patient English tutor speaking with \
 {learner_name}, a learner at CEFR level {level}. This is a spoken conversation: \
 your reply is read aloud.
@@ -460,14 +734,18 @@ your reply is read aloud.
 Conversation so far:
 {history}
 
-They have now practised every word for today: {", ".join(used_words) or "none"}.
+{outcome}
 
-Write the closing turn:
+Write the closing turn. A conversation that simply stops is the one thing this \
+must never be: it opened with a greeting and it closes properly, whatever \
+happened in between.
 - React to what {learner_name} just said, specifically.
-- Say something true about how they did — name a word they handled well.
-- Close warmly. Two or three short sentences.
-- Do NOT ask for another word, and do NOT invent one. There are none left, and \
-asking for a word that is already done tells them nobody was listening.
+- Say something true about how they did — name a word they handled well, or \
+something they expressed clearly.
+- Close warmly, and make it sound like an ending: thank them, or say you \
+enjoyed talking, or that you will pick it up next time.
+- Two or three short sentences.
+- Do NOT ask another question. Do NOT ask for a word, and do NOT invent one.{missed_rule}
 - No lists, no markdown, no emoji — every character is spoken aloud.
 - Report `words_only_named` by the same rule as always: usually empty."""
 
@@ -517,12 +795,28 @@ Conversation so far:
 
 Target words still to practise: {remaining}{shapes_block}
 Already used naturally: {", ".join(used_words) or "none yet"}
-{learner_name} is interested in: {likes}
+
+{learner_name} is interested in: {likes}. That is the LOWEST priority here. It
+decides between two situations that would both work for a word; it is never a
+reason to bring a word into a conversation it has nothing to do with, and you
+must never say it back to them ("since you like technology…").
+
+NATURAL USE COMES FIRST — before the level, before their interests, before \
+anything else here. A target word must be asked for in a situation where a \
+person would really say it, in the sense the learner is practising. A question \
+built to fit a word into a topic is a question with no honest answer, and it \
+teaches a use of the word that does not exist.
 
 Write your next turn:
 - React to what {learner_name} actually just said. Acknowledge it specifically — \
 never a generic "great job".
-- Then ask ONE question whose natural answer contains the next target word.
+- Then ask ONE question whose natural answer contains the next target word —
+  a question the learner can actually ANSWER, in that word's real sense.
+
+  Read the word's meaning above before you write the question. The learner
+  added one specific sense of it; a question that suits a different sense of
+  the same spelling is a question they cannot answer. "can" as a tin belongs
+  with food and shopping, not with what a computer can do.
 
   Work backwards from the word: think of a real situation where a person would \
 say it, and ask about that situation. Do NOT ask an unrelated question and then \
@@ -811,6 +1105,7 @@ def relevel_prompt(
     to_level: str,
     words: list[dict],
     comprehension_count: int,
+    inline_glossary: bool = True,
 ) -> str:
     """Re-tells one passage at a different CEFR level.
 
@@ -831,6 +1126,8 @@ def relevel_prompt(
     )
 
     easier = to_level < from_level
+    length, sentence_length, sentence_count = _passage_shape(
+        to_level, len(words), listening=False)
 
     return f"""Re-tell this passage at CEFR level {to_level}. It is currently
 written at {from_level}.
@@ -845,19 +1142,30 @@ similar topic. A learner asked for this because the language was
 
 {targets}
 
+KEEP THE SHAPE. If the passage has paragraphs, it still has them; if it opens
+by saying what it is about and closes by landing it, so does the re-telling.
+Report the paragraph starts again in `paragraph_breaks`.
+
+NATURAL USE STILL COMES FIRST. Each target word must sit where a fluent writer
+would really have put it. Re-telling at another level is no licence to bend a
+word into a sentence nobody would write.
+
 Change only the language:
 - {"Shorter sentences, commoner words, fewer clauses." if easier else
    "Richer vocabulary, more varied sentence structure, more precise wording."}
-- Keep roughly the same amount of information. Do not summarise it away, and do
-  not pad it out.
+- **{sentence_count} sentences**, each about {sentence_length}, coming to
+  roughly {length} words. Count them.
+  {"Say the same things more plainly" if easier else
+   "Say the same things with more detail and precision"} — the story does not
+  change, only how fully it is told. Invent no new events, and drop none.
+
+Also give the passage a title of 3 to 8 words. It is the same story, so it may
+be the same title said differently; it must not name any target word.
 
 Return it split into sentences, with {comprehension_count} fresh comprehension
 questions about the NEW text — the old questions ask about sentences that no
-longer exist — and a glossary of the new passage:
+longer exist{" — and a glossary of the new passage" if inline_glossary else ""}:
 
-{GLOSSARY_RULE}
+{GLOSSARY_RULE if inline_glossary else _NO_INLINE_GLOSSARY}
 
-The glossary is not optional and not a summary: the learner taps words in this
-text to see what they mean here, and a word missing from it falls through to a
-dictionary, which answers about every sense the word has ever had instead of
-this one."""
+{"The glossary is not optional and not a summary: the learner taps words in this text to see what they mean here, and a word missing from it falls through to a dictionary, which answers about every sense the word has ever had instead of this one." if inline_glossary else "The learner is waiting for this. Write the passage and nothing else."}"""

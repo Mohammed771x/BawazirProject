@@ -132,6 +132,9 @@ void main() {
 
     await tester.tap(find.byType(OptionTile).first);
     await tester.pumpAndSettle();
+    // Choosing is not answering: "Check" is what submits it.
+    await tester.tap(find.widgetWithText(FilledButton, 'Check'));
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Next'));
     await tester.pumpAndSettle();
 
@@ -151,6 +154,8 @@ void main() {
       if (find.byType(OptionTile).evaluate().isEmpty) break;
       await tester.tap(find.byType(OptionTile).first);
       await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Check'));
+      await tester.pumpAndSettle();
 
       final next = find.widgetWithText(FilledButton, 'Next');
       final finish = find.widgetWithText(FilledButton, 'Finish');
@@ -160,6 +165,62 @@ void main() {
 
     expect(reappeared, isFalse,
         reason: 'a comprehension question is asked once — only words repeat');
+  });
+
+  testWidgets('an option is only a choice until it is checked', (tester) async {
+    await openReading(tester);
+    await tester.tap(find.widgetWithText(FilledButton, 'I finished reading'));
+    await tester.pumpAndSettle();
+
+    // A mis-tap used to *be* the answer. Now it selects, and nothing is sent.
+    await tester.tap(find.byType(OptionTile).first);
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<OptionTile>(find.byType(OptionTile).first).selected,
+        isTrue, reason: 'the learner must see what they picked');
+    expect(find.text('Correct'), findsNothing);
+    expect(find.text('Not quite'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Next'), findsNothing);
+
+    // The learner changes their mind — still nothing sent.
+    await tester.tap(find.byType(OptionTile).at(1));
+    await tester.pumpAndSettle();
+    expect(tester.widget<OptionTile>(find.byType(OptionTile).at(1)).selected,
+        isTrue);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Check'));
+    await tester.pumpAndSettle();
+
+    // Only now is there a verdict, and a way on.
+    expect(
+      find.text('Correct').evaluate().length +
+          find.text('Not quite').evaluate().length,
+      1,
+    );
+    expect(find.widgetWithText(FilledButton, 'Next'), findsOneWidget);
+  });
+
+  testWidgets('the passage can be reopened once the questions have started',
+      (tester) async {
+    await openReading(tester);
+    await tester.tap(find.widgetWithText(FilledButton, 'I finished reading'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Question 1 of'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.menu_book_rounded));
+    await tester.pumpAndSettle();
+
+    // The text is back, and it is a visit rather than a restart: the level
+    // stays locked, because the answers belong to this passage.
+    expect(find.byType(HighlightedPassage), findsOneWidget);
+    expect(find.byIcon(Icons.expand_more_rounded), findsNothing);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Back to the questions'));
+    await tester.pumpAndSettle();
+
+    // Same question, same place in the session.
+    expect(find.textContaining('Question 1 of'), findsOneWidget);
   });
 
   testWidgets('the level control disappears once the questions begin',

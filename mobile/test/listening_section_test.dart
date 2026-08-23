@@ -112,6 +112,8 @@ void main() {
 
     await tester.tap(find.byType(OptionTile).first);
     await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Check'));
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Next'));
     await tester.pumpAndSettle();
 
@@ -132,6 +134,8 @@ void main() {
       if (find.byType(OptionTile).evaluate().isEmpty) break;
 
       await tester.tap(find.byType(OptionTile).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Check'));
       await tester.pumpAndSettle();
 
       final next = find.widgetWithText(FilledButton, 'Next');
@@ -172,6 +176,8 @@ void main() {
 
       await tester.tap(find.byType(OptionTile).first);
       await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'تحقق'));
+      await tester.pumpAndSettle();
 
       final next = find.widgetWithText(FilledButton, 'التالي');
       final finish = find.widgetWithText(FilledButton, 'إنهاء');
@@ -188,6 +194,59 @@ void main() {
           find.descendant(of: passage, matching: find.byType(Text)))),
       TextDirection.ltr,
     );
+  });
+
+
+  // ── What Reading gained, Listening now has too (ADR-068) ────────────────
+
+  testWidgets('the clip is named before it is heard', (tester) async {
+    await openListening(tester);
+
+    // A title tells the learner what is coming without giving any of it away,
+    // which is what an exam's listening section prints above the audio.
+    expect(find.text('A Morning Announcement'), findsOneWidget);
+    expect(find.byType(HighlightedPassage), findsNothing,
+        reason: 'the transcript itself stays hidden until the test is over');
+  });
+
+  testWidgets('an option is only a choice until it is checked', (tester) async {
+    await openListening(tester);
+    await tester.tap(find.widgetWithText(FilledButton, 'I finished listening'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(OptionTile).first);
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<OptionTile>(find.byType(OptionTile).first).selected,
+        isTrue);
+    expect(find.widgetWithText(FilledButton, 'Next'), findsNothing);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Check'));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(FilledButton, 'Next'), findsOneWidget);
+  });
+
+  testWidgets('the recording can be reopened once the questions have started',
+      (tester) async {
+    await openListening(tester);
+    await tester.tap(find.widgetWithText(FilledButton, 'I finished listening'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Question 1 of'), findsOneWidget);
+
+    // A comprehension question nobody can re-listen to is a memory test, and
+    // this section does not measure memory.
+    await tester.tap(find.byIcon(Icons.headphones_rounded));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Slider), findsOneWidget,
+        reason: 'the player is back');
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Back to the questions'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Question 1 of'), findsOneWidget);
   });
 }
 

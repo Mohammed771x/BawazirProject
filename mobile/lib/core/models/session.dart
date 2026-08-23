@@ -66,9 +66,17 @@ class SessionContent {
     required this.text,
     required this.targetSpans,
     required this.revealTextAfterTest,
+    this.title,
     this.glossary = const [],
     this.canChangeLevel = false,
   });
+
+  /// What the passage is called, written by the generator with the text.
+  ///
+  /// Null for a session created before titles existed, and for a model that
+  /// omitted one — the passage is then shown without a heading rather than
+  /// with an empty one.
+  final String? title;
 
   final String text;
   final List<TargetSpan> targetSpans;
@@ -97,6 +105,9 @@ class SessionContent {
   }
 
   factory SessionContent.fromJson(Map<String, dynamic> json) => SessionContent(
+        title: (json['title'] as String?)?.trim().isEmpty ?? true
+            ? null
+            : (json['title'] as String).trim(),
         text: json['text'] as String? ?? '',
         targetSpans: (json['targetSpans'] as List<dynamic>? ?? const [])
             .map((e) => TargetSpan.fromJson(e as Map<String, dynamic>))
@@ -109,6 +120,7 @@ class SessionContent {
       );
 
   Map<String, dynamic> toJson() => {
+        'title': title,
         'text': text,
         'targetSpans': targetSpans.map((e) => e.toJson()).toList(),
         'revealTextAfterTest': revealTextAfterTest,

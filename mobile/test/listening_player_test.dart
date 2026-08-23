@@ -62,9 +62,14 @@ void main() {
     await openListening(tester);
     expect(find.byIcon(Icons.stop_rounded), findsOneWidget);
 
-    // Nobody tapped anything — the engine simply reached the end.
-    tts.finish();
-    await tester.pumpAndSettle();
+    // Nobody tapped anything — the engine simply reached the end. The clip is
+    // spoken one sentence at a time now, so "the end" is the last of them
+    // (ADR-068): finishing one utterance hands the voice the next.
+    for (var guard = 0; guard < 60; guard++) {
+      if (find.byIcon(Icons.stop_rounded).evaluate().isEmpty) break;
+      tts.finish();
+      await tester.pumpAndSettle();
+    }
 
     expect(find.byIcon(Icons.stop_rounded), findsNothing,
         reason: 'a stop button with nothing to stop is a lie about the audio');
@@ -82,6 +87,75 @@ void main() {
     // waiting for the learner to press play again.
     expect(tts.lastRate, SpeechRate.slow);
     expect(tts.spoken.length, greaterThan(1));
+  });
+
+  // ── Moving around inside the clip (ADR-068) ────────────────────────────
+  //
+  // Text-to-speech has no playhead, so the clip is spoken sentence by sentence
+  // and those boundaries are the seek points. What a learner asked for is the
+  // ability to go back over a line they missed, jump about, and switch to the
+  // slow voice without being sent back to the beginning.
+
+  testWidgets('the clip can be dragged to a later point and plays from there',
+      (tester) async {
+    await openListening(tester);
+
+    final firstSentence = tts.spoken.single;
+
+    // Drag the scrubber to the far end.
+    await tester.drag(find.byType(Slider), const Offset(500, 0));
+    await tester.pumpAndSettle();
+
+    expect(tts.spoken.length, greaterThan(1),
+        reason: 'seeking should start speaking from where it landed');
+    expect(tts.spoken.last, isNot(firstSentence),
+        reason: 'it should not be the same line over again');
+  });
+
+  testWidgets('the clip can be sent back to the start', (tester) async {
+    await openListening(tester);
+
+    await tester.drag(find.byType(Slider), const Offset(500, 0));
+    await tester.pumpAndSettle();
+    final afterSeek = tts.spoken.last;
+
+    await tester.tap(find.byIcon(Icons.first_page_rounded));
+    await tester.pumpAndSettle();
+
+    expect(tts.spoken.last, isNot(afterSeek));
+    expect(tts.spoken.last, tts.spoken.first,
+        reason: 'back to the start means the first line again');
+  });
+
+  testWidgets('switching to the slow voice keeps the learner\'s place',
+      (tester) async {
+    await openListening(tester);
+
+    // Move off the first line, so "kept its place" means something.
+    tts.finish();
+    await tester.pumpAndSettle();
+    final current = tts.spoken.last;
+    expect(current, isNot(tts.spoken.first));
+
+    await tester.tap(find.text('Slow'));
+    await tester.pumpAndSettle();
+
+    expect(tts.lastRate, SpeechRate.slow);
+    expect(tts.spoken.last, current,
+        reason: 'a learner switches to the slow voice because of the line they '
+            'are on — sending them back to the beginning answers the wrong '
+            'request');
+  });
+
+  testWidgets('the position is reported in sentences', (tester) async {
+    await openListening(tester);
+
+    expect(find.textContaining('Sentence 1 of'), findsOneWidget);
+
+    tts.finish();
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Sentence 2 of'), findsOneWidget);
   });
 }
 

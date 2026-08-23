@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using WordOs.Application.Abstractions;
 using WordOs.Domain.Common;
 
@@ -91,17 +92,12 @@ public sealed class StubAiContentService : IAiContentService
                 [$"wrong-{i}-a", $"wrong-{i}-b", $"wrong-{i}-c"]))
             .ToList();
 
-        // A word of the passage with the meaning it carries *there* — the
-        // real generator returns one of these per content word.
-        var glossary = new List<GlossaryEntry>
-        {
-            new("class", "حصة دراسية", "noun"),
-            new("began", "بدأ", "verb"),
-            new("bright", "مشرق", "adjective"),
-        };
-
-        glossary.AddRange(request.Words.Select(w =>
-            new GlossaryEntry(w.Text, w.Meaning, w.PartOfSpeech)));
+        // Every word of what it just wrote, because that is what the rule asks
+        // of the real generator and what the service now guarantees by
+        // repairing whatever the model left out (ADR-065). A stub that glossed
+        // three words would let a test pass on a passage most of whose taps
+        // cannot be answered — which is the bug, not the fixture.
+        var glossary = GlossaryFor(sentences, request.Words);
 
         return Task.FromResult(new GeneratedContent(
             Text: string.Join(' ', sentences),
@@ -114,6 +110,51 @@ public sealed class StubAiContentService : IAiContentService
             FromFallback: false,
             Glossary: glossary));
     }
+
+    /// <summary>
+    /// A glossary covering every word of the passage the stub just wrote.
+    /// </summary>
+    /// <remarks>
+    /// Tokenised with the client's own rule, so "the words a learner can tap"
+    /// and "the words that have an entry" are the same set by construction.
+    /// The learner's own words keep the Arabic they were added with; every
+    /// other word gets a placeholder, because what matters to a test is that
+    /// an answer exists.
+    /// </remarks>
+    public static List<GlossaryEntry> GlossaryFor(
+        IEnumerable<string> sentences,
+        IReadOnlyList<AiTargetWord> words)
+    {
+        var glossary = new List<GlossaryEntry>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var word in words)
+        {
+            if (!seen.Add(word.Text)) continue;
+            glossary.Add(new GlossaryEntry(
+                word.Text, word.Meaning, word.PartOfSpeech));
+        }
+
+        foreach (var sentence in sentences)
+        {
+            foreach (var match in PassageWords.Matches(sentence).Cast<Match>())
+            {
+                if (!seen.Add(match.Value)) continue;
+                glossary.Add(new GlossaryEntry(
+                    match.Value, $"معنى \"{match.Value}\" هنا", "other"));
+            }
+        }
+
+        return glossary;
+    }
+
+    /// <summary>
+    /// What counts as a tappable word, copied from the Flutter passage widget:
+    /// letters and digits, plus the apostrophes and hyphens that live inside a
+    /// word. The two must agree — a glossary keyed on anything else has holes.
+    /// </summary>
+    public static readonly Regex PassageWords =
+        new(@"[\p{L}\p{N}][\p{L}\p{N}'’\-]*", RegexOptions.Compiled);
 
     /// <summary>
     /// The language the last evaluation was asked to write its feedback in.
@@ -171,6 +212,9 @@ public sealed class StubAiContentService : IAiContentService
     /// <summary>The shape each remaining word was described with (ADR-047).</summary>
     public IReadOnlyList<AiTargetWord> LastRemainingShapes { get; private set; } = [];
 
+    /// <summary>Words the closing turn was told the learner never reached.</summary>
+    public IReadOnlyList<string> LastUnusedWords { get; private set; } = [];
+
     public Task<SpeakingObservation> SpeakingTurnAsync(
         SpeakingTurnRequest request,
         CancellationToken ct = default)
@@ -179,6 +223,7 @@ public sealed class StubAiContentService : IAiContentService
         LastRemainingWords = request.RemainingWords;
         LastFormReminders = request.FormReminders ?? [];
         LastRemainingShapes = request.RemainingShapes ?? [];
+        LastUnusedWords = request.UnusedWords ?? [];
 
         if (Fail) throw new WordOs.Infrastructure.Ai.AiServiceException("stub outage");
 
@@ -192,7 +237,7 @@ public sealed class StubAiContentService : IAiContentService
 
         return Task.FromResult(new SpeakingObservation(
             Reply: (next is null
-                ? "That covers everything for today."
+                ? "That covers everything for today. It was good talking to you."
                 : $"Tell me more, and try to use \"{next}\".") + reuse,
             // The real service reports only the words the learner *named*
             // rather than used — whether a word appears at all is read from the
@@ -273,7 +318,10 @@ public sealed class StubAiContentService : IAiContentService
             Model: "stub",
             Tokens: 7,
             FromFallback: false,
-            Glossary: [new GlossaryEntry("student", "طالب", "noun")]));
+            // A re-telling is glossed as completely as a fresh passage. It is
+            // the path a learner takes to reach another level, so a thin
+            // glossary here is a tap that stops working the moment they do.
+            Glossary: GlossaryFor(sentences, request.Words)));
     }
 
     public Task<PlacementEvaluation> EvaluatePlacementAsync(

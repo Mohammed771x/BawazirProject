@@ -38,15 +38,24 @@ public sealed class AiServiceOptions
     /// <see cref="ResilientAiContentService"/> fallback, which had done its job
     /// perfectly, was never seen by anyone.
     ///
-    /// Twenty-five seconds leaves the client over a minute of headroom, so the
-    /// degraded-but-usable session actually arrives. A generation that has not
-    /// answered in twenty-five seconds was not going to rescue the session
-    /// anyway: the measured healthy call takes eight to nine.
+    /// It must stay *below* the client's receive timeout, so the
+    /// degraded-but-usable session actually arrives: they are one setting in
+    /// two places and they move together. Raising this above the client's
+    /// re-creates the bug where the learner saw a timeout instead of a lesson.
     ///
-    /// Raising this above the client's receive timeout re-creates the bug —
-    /// they are one setting in two places, and they move together.
+    /// Twenty-five seconds was right when a passage was a dozen sentences and
+    /// the measured healthy call took eight or nine. Passages are now sized
+    /// like the exam texts they stand in for (ADR-066), which briefly pushed a
+    /// C2 generation to forty-five seconds and a re-telling to seventy-seven —
+    /// past the budget, so the learner was told the passage could not be
+    /// rewritten. Building the glossary in parallel instead (ADR-067) brought
+    /// the whole ladder back to about twenty seconds, C2 included.
+    ///
+    /// Sixty seconds against a client that waits ninety: roughly three times
+    /// the measured worst case, which is the margin a shared instance under
+    /// load needs and no more.
     /// </remarks>
-    public int TimeoutSeconds { get; init; } = 25;
+    public int TimeoutSeconds { get; init; } = 60;
 }
 
 /// <summary>
@@ -156,7 +165,8 @@ public sealed class HttpAiContentService(
             FromFallback: false,
             Glossary: (response.Glossary ?? [])
                 .Select(g => new GlossaryEntry(g.Word, g.MeaningAr, g.PartOfSpeech))
-                .ToList());
+                .ToList(),
+            Title: string.IsNullOrWhiteSpace(response.Title) ? null : response.Title);
 
     public async Task<WritingObservation> EvaluateWritingAsync(
         WritingEvaluationRequest request,
@@ -210,10 +220,16 @@ public sealed class HttpAiContentService(
             {
                 text = w.Text,
                 meaning = w.Meaning,
+                // Which sense the learner is practising, in English. Without
+                // it the tutor sees the bare string "can" and has no way to
+                // know whether it is the modal, the tin, or preserving fruit —
+                // so it asks a question the word cannot answer (ADR-069).
+                definition = w.Definition,
                 part_of_speech = w.PartOfSpeech,
                 form = w.Form,
                 may_pluralise = w.MayPluralise,
             }),
+            unused_words = request.UnusedWords ?? [],
             form_reminders = (request.FormReminders ?? []).Select(r => new
             {
                 word = r.Word,
@@ -358,7 +374,8 @@ public sealed class HttpAiContentService(
         string PromptVersion,
         string Model,
         int Tokens,
-        List<GlossaryDto>? Glossary = null);
+        List<GlossaryDto>? Glossary = null,
+        string? Title = null);
 
     private sealed record QuestionDto(
         string Prompt, string Correct, List<string> Distractors);

@@ -58,16 +58,91 @@ void main() {
       expect(tts.spoken.length, 1,
           reason: 'the turn is not sent until the learner says they are done');
 
-      // Tap again: finished.
+      // Tap again: finished talking. The words are handed back to be read
+      // over, not sent (ADR-069).
       await tester.tap(find.bySemanticsLabel('voice'));
       for (var i = 0; i < 40; i++) {
         await tester.pump(const Duration(milliseconds: 100));
       }
 
+      expect(tts.spoken.length, 1,
+          reason: 'nothing is sent until the learner has read it over');
+      expect(find.widgetWithText(FilledButton, 'Send'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Send'));
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
       // The tutor replied, which is only possible if the recognised words were
-      // actually sent when the learner closed their turn.
+      // actually sent when the learner approved them.
       expect(tts.spoken.length, greaterThanOrEqualTo(2),
           reason: 'the tutor should have replied to the spoken turn');
+    });
+
+    testWidgets('the recognised words can be corrected before they are sent',
+        (tester) async {
+      final tts = _FakeTts();
+      // Deliberately not the target word: the conversation carries on, so the
+      // corrected sentence can be read in the chat rather than behind a
+      // finished session.
+      final speech = _FakeSpeech(['I lik potatos very much'], tts: tts);
+
+      await _pumpSpeaking(tester, tts, speech);
+
+      await tester.tap(find.bySemanticsLabel('voice'));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.tap(find.bySemanticsLabel('voice'));
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // A recogniser mishears, and the learner is the only one who knows what
+      // they meant to say (ADR-069).
+      final field = find.byType(TextField);
+      expect(field, findsOneWidget);
+      await tester.enterText(field, 'I like potatoes very much.');
+      await tester.pump();
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Send'));
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(find.textContaining('potatoes', skipOffstage: false), findsWidgets,
+          reason: 'the corrected sentence is what went into the conversation');
+      expect(find.textContaining('potatos', skipOffstage: false), findsNothing,
+          reason: 'the misheard version is gone — from the chat and the box');
+    });
+
+    testWidgets('a misheard turn can be recorded again instead of sent',
+        (tester) async {
+      final tts = _FakeTts();
+      final speech = _FakeSpeech(['nonsense one', 'nonsense two'], tts: tts);
+
+      await _pumpSpeaking(tester, tts, speech);
+
+      await tester.tap(find.bySemanticsLabel('voice'));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.tap(find.bySemanticsLabel('voice'));
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(speech.listenCount, 1);
+
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Record again'));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // The microphone is open again, and nothing was sent in between.
+      expect(speech.listenCount, 2);
+      expect(tts.spoken.length, 1);
     });
 
     testWidgets('a pause does not end the turn — only the learner does',
@@ -412,6 +487,9 @@ class _FakeSpeech implements SpeechRecognitionService {
 
   @override
   bool get isListening => false;
+
+  @override
+  String get heard => _pending ?? '';
 
   @override
   Future<bool> initialise() async => available;

@@ -379,15 +379,23 @@ void main() {
       await tester.tap(find.widgetWithText(FilledButton, 'I finished reading'));
       await tester.pumpAndSettle();
 
-      // First answer fails.
+      // Choose an option, then submit it — the first submission fails.
       await tester.tap(find.byType(InkWell).first, warnIfMissed: false);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Check'));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
 
-      // The question is still on screen and can be answered again.
+      // The question is still on screen and can be answered again — the
+      // choice survives the failure, so "Check" alone is the retry.
       expect(find.textContaining('Question'), findsOneWidget);
 
-      await tester.tap(find.byType(InkWell).first, warnIfMissed: false);
+      // Let the failure's snack bar go: it sits over the footer button, which
+      // is where the retry now lives.
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Check'));
       await tester.pumpAndSettle();
 
       // The retry landed: the session moved on to showing feedback.

@@ -55,6 +55,13 @@ void main() {
       await tester.tap(options.at(0), warnIfMissed: false);
       await tester.pumpAndSettle();
 
+      // Reading answers in two steps: the tap only chooses, "Check" submits.
+      final check = find.widgetWithText(FilledButton, 'Check');
+      if (check.evaluate().isNotEmpty) {
+        await tester.tap(check);
+        await tester.pumpAndSettle();
+      }
+
       final next = find.widgetWithText(FilledButton, 'Next');
       final finish = find.widgetWithText(FilledButton, 'Finish');
       if (next.evaluate().isNotEmpty) {

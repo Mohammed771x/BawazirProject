@@ -2383,3 +2383,495 @@ up at 90.00s: the learner saw "the server took too long" and the whole
 `ResilientAiContentService` fallback — which had worked perfectly — was never
 seen by anybody. The backend budget is now 25 seconds, leaving the client over a
 minute of headroom. A healthy generation takes eight to nine.
+---
+
+## ADR-064 — Reading answers in two steps, and the passage stays reachable
+**Date:** 2026-08-23 · **Status:** Accepted · **Reading only**
+
+**Context.** Two complaints from the device, both about the Reading section.
+
+A tap on an option *was* the answer: it went straight to the server and came
+back marked. On a phone that makes a mis-tap indistinguishable from a decision —
+the learner's thumb lands on the wrong line and the attempt is spent, with the
+right answer already on screen. Nothing in the app measures intent, so the
+client cannot tell the two apart after the fact.
+
+And "I finished reading" was a one-way door. A learner who pressed it early, or
+who reached a question about a detail they wanted to check, had no way back to
+the text except to leave the session.
+
+**Decision.**
+
+- **Choose, then check.** A tap selects and sends nothing; the footer button is
+  *Check* until the answer has been submitted, and *Next* / *Finish* after. The
+  selection can be changed as often as the learner likes before it is checked,
+  and it survives a failed submission, so a dropped connection is retried by
+  pressing Check again rather than re-answering.
+- **The passage can be reopened.** A book icon in the app bar puts the text back
+  on screen; its button reads *Back to the questions* and returns to exactly the
+  question that was open.
+
+**Confined to Reading.** Listening shares this screen, and it does not get
+either change: replaying the clip during the questions would be handing over the
+answers, which is the same reason the audio stops when the questions start. The
+other three skills are typed or spoken rather than tapped, and already have a
+submit step of their own. The Weekly Review keeps auto-advancing — it is
+measurement, deliberately quick, and ADR §9–§12 settled that.
+
+**What did not change.** Nothing on the server, and nothing about the rules. The
+selection is UI state held for the length of one question — R1 is untouched,
+because the client still decides nothing about the answer; it only decides when
+to ask. Progress, requeueing and the retry budget are read from the server's
+reply exactly as before. Revisiting the passage is a view, not a phase: the
+session's content phase stays finished, so the level stays locked and no answer
+is thrown away.
+---
+
+## ADR-065 — The passage glossary is completed, not requested
+**Date:** 2026-08-23 · **Status:** Accepted · **Extends ADR-029, ADR-039**
+
+**Context.** A tap on a word in a Reading passage answers from the glossary the
+generator wrote as it composed the sentence, and from nothing else. Where there
+is no entry the client falls back to the lexicon — which returns every sense the
+word has ever had. "bank" has six; five of them are wrong in the sentence in
+front of the learner. The feature is either complete or it is not there.
+
+ADR-029 introduced the glossary and ADR-039 fixed re-told passages by *sharing
+the rule* between the two prompts rather than paraphrasing it. Both left the
+same assumption in place: that asking clearly is enough. It is not. The model is
+`gemini-3.1-flash-lite`, and on an A1 passage it glosses the interesting words
+and skips `was`, `before`, `quiet` — which are precisely the words a beginner
+taps. Nothing anywhere measured this. `ResilientAiContentService` validates that
+a passage has sentences and questions; it has never looked at the glossary, so a
+passage with one entry shipped exactly like a passage with eighty.
+
+**Decision.** The AI service measures its own output and repairs it. After
+shaping a passage it tokenises the text with the client's own word rule, lists
+the words the glossary does not answer for, and — only if there are any — makes
+one further call asking for those words by name, in their sentences. The entries
+come back and are merged.
+
+- **Named words, not the whole glossary again.** The words are known; only their
+  meanings are missing. Re-generating everything costs more and can come back
+  just as short.
+- **One pass.** Not a loop: two calls is a bounded cost, and whatever a second
+  attempt would still miss is a word the model cannot gloss.
+- **Never fatal.** A failed repair returns the partial glossary. Refusing the
+  passage would drop the learner into `FallbackContent`, which carries no
+  glossary at all — strictly worse than the partial one already in hand.
+- **The repair tokens are added to the passage's total**, because they were
+  spent on this passage. A passage that needed no repair costs one call, as
+  before.
+
+**Measurement.** `ai-service/tools/glossary_coverage.py` asks for a real passage
+at each of the eleven levels, tokenises it exactly as the client does, and
+reports every word a learner could tap without getting an answer. It exits
+non-zero when any level leaves one, so it is a check and not only a report.
+Coverage varies with the text as well as the level, so it takes `--repeats`.
+
+**Also found while testing the levels.** `_sentence_count` knew only the six
+whole bands. The level arrives on the wire as `A1_PLUS`, so all five half-steps
+missed the table and took the default of nine sentences — an A1+ learner was
+being handed a B1-length passage, and a C1+ one a passage shorter than C1's.
+Every band is now in the table.
+
+**The outage path was the whole of what was reported.** Three separate faults
+seen on a device — a four-sentence "B1" passage, "the passage could not be
+rewritten", and a tap on `all` answering with every meaning it has — were one
+fact: the AI service was not running, so every generation took
+`FallbackContent`. That fallback ignored the level entirely and carried no
+glossary at all, and re-levelling has no fallback by design. Two of those are
+now fixed rather than explained:
+
+- **The fallback is glossed.** Its sentences are fixed, so its glossary is
+  written by hand and covers every word of them; the learner's own target words
+  bring their Arabic with the request. A test asserts the two sets are equal, so
+  a sentence added to the fallback without its words fails the build.
+- **The fallback answers to the level.** Filler sentences scale from two at A1
+  to six at C1+, from the same fixed vocabulary. A B1 learner handed four lines
+  read that as a broken app and was right to.
+- **The definition is no longer spliced into the passage.** It was arbitrary
+  English from the lexicon, so every word of it was an unanswerable tap. The
+  learner still meets it in the lookup sheet and in the question about the word.
+
+Re-levelling keeps its refusal: a fallback re-telling would be worse than the
+passage the learner asked to improve.
+
+**Pinned across every band.** `Every_word_of_the_passage_can_be_tapped_at_every_level`
+starts a Reading session over real HTTP against real PostgreSQL, then walks all
+eleven levels by re-telling — which is how a learner reaches any band but their
+own — and asserts after each that the passage's words and the glossary's words
+are the same set. The test double now glosses whatever it wrote, for the same
+reason: a stub that glossed three words let the suite pass on a passage whose
+taps mostly could not be answered.
+
+**Measured, against the real model.** 33 passages — every one of the eleven
+levels, three topics each — through `gemini-3.1-flash-lite`:
+
+```
+level    words  glossed  missed
+A1       43–53    same        0
+A2       62–75    same        0
+B1       80–95    same        0
+B2       99–117   same        0
+C1      121–148   same        0
+C2      124–136   same        0        (all eleven bands, 3 runs each)
+```
+
+**Not one unanswerable tap in any of them** — and the repair pass is what did
+it: it fired on **17 of 34** generations, each time short by one to four words,
+and closed every one of them (`0 words still unglossed`, every run). So the
+model alone leaves a hole in roughly half of all passages, which is exactly
+often enough to look like "it works at some levels and not others" from a
+device. `all` in an A1 passage now answers **كل** and nothing else. Re-telling
+B1 → A1 comes back three sentences, 24 entries, zero missed.
+
+**Consequence.** The client is unchanged: it was already correct, showing the
+one contextual meaning when it has one and the lexicon when it does not. What
+changes is how often it has one. The lexicon fallback stays as the last resort —
+a word the model still cannot gloss is better served by an honest list of senses
+than by a confidently wrong single meaning.
+---
+
+## ADR-066 — A passage is the length of the exam text it stands in for, and it has a title
+**Date:** 2026-08-23 · **Status:** Accepted · **Reading first; Listening follows**
+
+**Context.** Three faults in the same screen, reported from a device.
+
+A C2 passage came back as a dozen sentences. Length was set in *sentences* from
+a table nobody had ever checked against anything: six at A1, thirteen at C2. A
+C2 reader given thirteen sentences is not doing C2 reading, whatever the
+vocabulary in them.
+
+The prompt opened with the learner's interests — *"Write a short passage at CEFR
+level B1 about technology"* — so the topic was the first instruction the model
+obeyed and the target words were bent to fit it. A learner whose word was `can`
+(the tin) and whose interest was technology got the word forced into a
+paragraph about programming: a sentence no writer would produce, teaching a use
+of the word that does not exist. Some passages also announced the topic back at
+the learner — *"Since you are interested in technology…"*.
+
+And the passage began with no heading. Every reading task anyone has met in a
+classroom or an exam is titled; prose that starts cold reads as an extract torn
+out of something else.
+
+**Decision — length is measured against real examinations.** Sources, and what
+they gave:
+
+| Source | Finding |
+|---|---|
+| A2 Key | no reading text exceeds **230 words** |
+| B1 Preliminary | texts from ~150 (the gapped one) to ~300 |
+| B2 First, Part 5 | a single text of **500–600 words** |
+| C1 Advanced | **3,000–3,500 words** across the whole paper; the long Part 5 text ~700–800 |
+| C2 Proficiency | longer and denser again than C1 |
+| Sentence length | <10 words is A1–A2, 10–16 B1–B2, 16–23 B2–C1, >23 C1–C2 |
+
+The ladder runs 80 words at A1 to 720 at C2, with every half-step in between,
+and a sentence length that climbs with it. Listening takes 60% of its band's
+length: heard once, with nothing to go back to (Part 2 §24).
+
+**Asked for as a sentence count, not a word count.** A word count is not
+something a model can hold itself to — asked for 720 words at C2 it returned
+361. Asked for 29 sentences it returns 29. Counting is the instruction it can
+follow, so the prompt names the count and gives the word total as the
+consequence.
+
+**Decision — the words come first and the interests yield.** The target words
+and the natural-use rule now open the prompt; the interests appear last, marked
+*lowest priority*, and the model is told in as many words that a passage on the
+wrong subject is fine and a passage that misuses a word is not. It is also told
+never to name the interests or explain its choice of subject. Verified on the
+exact case reported: interest `technology`, word `can` (a tin) — the generator
+dropped technology entirely and wrote *"I spot a metal can sitting on the shelf
+behind the large jar."*
+
+**Decision — the generator writes the title.** Three to eight words, the kind a
+magazine prints, never naming a target word. It travels the whole way:
+`skill_sessions.ContentTitle`, `content.title` in the API, and an `EnglishText`
+heading above the passage. Null is legal and renders nothing — a session from
+before this, or a model that omitted it.
+
+**Three ceilings had to move with it, and each was measured first.**
+
+- **`GlossaryJson` 20,000 → 120,000 characters.** A C2 passage has ~430 distinct
+  words at ~70 characters an entry: 30,000. The old ceiling would have started
+  truncating exactly at the top of the ladder.
+- **The glossary repair works in batches.** One capped call was enough for a
+  dozen sentences. At 750 words the model glossed 40 of 430 words, and a single
+  repair capped at 200 left **227** unanswerable taps — the original bug back
+  again at C2. Up to four batches of 150, stopping early when the passage is
+  covered or when a pass adds nothing.
+- **The AI budget 25s → 80s, and the client's receive timeout 90s → 120s.** A
+  measured C1 passage takes 35 seconds to write and a C2 one 45. At 25 every
+  band above B2 would have timed out into the fallback — which is the opposite
+  of what that budget is for. They remain one setting in two places and they
+  moved together.
+
+**Measured, all eleven bands, two topics each:**
+
+```
+A1    84 words / 12 sentences /  8s      B2+  446 / 27 / 29s
+A1+  108 / 12 /  9s                      C1   569 / 28 / 35s
+A2   150 / 15 / 13s                      C1+  641 / 29 / 41s
+A2+  187 / 17 / 17s                      C2   765 / 29 / 45s
+B1   225 / 18 / 17s
+B1+  283 / 21 / 20s                      unanswerable taps: 0, everywhere
+B2   387 / 24 / 26s
+```
+
+**Consequence.** A session costs more: a C2 passage is ~15,000 tokens against
+~5,000 before, plus its repair batches, and the learner waits 45 seconds rather
+than 14. That is the price of the passage being the length it should always
+have been. Listening keeps the same ladder at 60% and is otherwise untouched
+until its own review.
+---
+
+## ADR-067 — The glossary is built in parallel, not inline and not in a queue
+**Date:** 2026-08-23 · **Status:** Accepted · **Fixes a regression from ADR-066**
+
+**Context.** Reading became slow the moment passages were sized like exam texts,
+and changing level — the one thing a learner sits and waits for — began failing
+outright with *"the passage could not be rewritten"*. Measured, from the
+service's own log:
+
+```
+relevel B1 → C2   generation  8.6s   +  3 sequential repair batches  34s   = 43s
+relevel B1 → C2   generation 43.2s   +  1 repair batch                3s   = 46s
+                              ↑ the model wrote 430 glossary entries inline
+```
+
+Two separate costs, both introduced by lengthening the passage:
+
+1. **Asking one call for the whole glossary.** At 750 words that is 430 entries;
+   the model spent 43 seconds and 18,000 tokens producing them — or, on another
+   run, gave up and returned 40, which is what made the repair pass necessary in
+   the first place.
+2. **Repairing in sequence.** Three batches at ~12 seconds each, waiting on one
+   another for no reason: each batch asks about a different set of words.
+
+Worst case those compose — 43 + 34 = 77 seconds — which crossed the backend's AI
+budget and returned `RELEVEL_UNAVAILABLE`. The learner saw the app hang and then
+refuse.
+
+**Decision.**
+
+- **Long passages are written without a glossary.** Above 260 words the prompt
+  says so explicitly and the schema drops the field, so the model spends
+  everything it has on the passage. Short ones keep the single call, which is
+  still cheaper: one round trip.
+- **The batches are issued together.** They never depended on each other. Up to
+  six of 150 words, dispatched on a thread pool, merged when they return.
+- **The budgets come back down**: the AI budget 80s → 60s and the client's
+  receive timeout 120s → 90s, about three times the new worst case.
+
+**Measured after, all of it end to end:**
+
+```
+fresh passage          before   after        re-telling from B1   before  after
+A1                        8s      8s         → B2                   ~30s   16s
+B1                       17s     19s         → C1                   ~40s   17s
+B2                       26s     18s         → C2                 43–77s   22s
+C1                       35s     20s
+C2                       45s     21s         unanswerable taps: 0 in every one
+```
+
+Generation time is now roughly flat across the ladder — a C2 passage costs what
+a B1 one does in wall-clock terms, because the part that grows with length is
+the part that runs in parallel.
+
+**Consequence.** Tokens are unchanged in kind and slightly higher in total: the
+batches ask for the same entries, and a passage written without an inline
+glossary re-sends its sentences with each batch. That is the trade — a little
+more spent, less than half the time waited. The in-flight admission limit
+(`WORDOS_AI_MAX_IN_FLIGHT`, 16) now covers repair batches too, so a burst of
+long passages queues at the semaphore rather than at the provider.
+---
+
+## ADR-068 — A passage is built, not merely written; and a clip can be scrubbed
+**Date:** 2026-08-23 · **Status:** Accepted · **Reading, then Listening**
+
+### The passage has a shape
+
+**Context.** Sized like an exam text (ADR-066), the passages read as one
+undifferentiated block. Every sentence connected to the next, no sentence
+announcing what a paragraph was for, and no ending — the text simply stopped.
+That is what a model produces when it is asked for N sentences and told nothing
+about their arrangement.
+
+**Decision.** From **B1 upward** the prompt asks for the shape a TOEFL, IELTS or
+Cambridge passage actually has: an opening sentence that says what the whole
+text is about; two to four paragraphs, each opening with its own topic sentence
+and supporting it; a close that lands the passage rather than stopping
+mid-thought; and visible joins — *However*, *As a result*, *By contrast*.
+
+Below B1 there is nothing to structure: eighty words of short declarative
+sentences given a thesis and a conclusion is a parody of academic writing, not a
+beginner's text. Those bands get a plainer rule — one connected little text with
+a first sentence and a last one.
+
+**Paragraphs travel as indexes, not as blank sentences.** The model reports
+`paragraph_breaks` beside the array. Blank elements *inside* the array would
+have shifted every `sentence_index` the model reports for its target words by
+the number of breaks above it.
+
+**Measured:** A1 stays one paragraph; B1 comes back with four; C1 and C2 with
+six; coverage still zero unanswerable taps and timing unchanged.
+
+### Listening gets what Reading got, and a scrubber
+
+Title above the clip, choose → check → next, and the recording reachable from
+the questions — the same three changes as Reading (ADR-064, ADR-066).
+
+**Re-listening was refused before and is allowed now.** The earlier argument was
+that replaying the clip during the questions hands over the answers. The product
+owner asked for it anyway and is right about which is worse: a comprehension
+question you cannot re-listen to is a memory test, and this section does not
+measure memory.
+
+**Decision — the clip is spoken sentence by sentence.** Text-to-speech has no
+playhead: it is handed a string and talks until it runs out, so there is nothing
+to seek. The clip is therefore cut into sentences and spoken one at a time, and
+those boundaries *are* the seek points:
+
+- **Dragging** the bar picks the sentence containing that point and starts
+  there. The bar is drawn against characters, not sentence numbers, so it
+  travels smoothly like a media scrubber; only where it lands is granular.
+- **Start and end** buttons either side of play, for the whole clip at once.
+- **The slow voice keeps the learner's place** — it re-speaks the current
+  sentence at the slower rate rather than restarting the clip. A learner
+  switches to slow *because of* the line they are on; sending them back to the
+  beginning answers the wrong request.
+
+**A run token, not a flag.** The playback loop awaits one sentence at a time, so
+a seek cannot set a flag and trust the next iteration to notice: it has to be
+able to tell "I am the current loop" from "I was replaced while I was waiting".
+Each play increments the token and every await checks it.
+
+**Consequence.** Position is reported in sentences — *Sentence 3 of 18* — because
+that is what the voice can be positioned at; there are no seconds to show. A
+sentence already in the speaker's mouth cannot be interrupted mid-word, so a
+seek is heard from the start of the sentence it lands in.
+---
+
+## ADR-069 — Speaking: the tutor is told what the word means, and dictation stops losing words
+**Date:** 2026-08-23 · **Status:** Accepted
+
+### The tutor could not see the sense it was asking about
+
+**Context.** The tutor was handed the remaining words as **bare strings**. Shown
+`can`, it had no way to tell the modal from a tin from preserving fruit — so it
+asked whatever the learner's interests suggested, and the word could not
+honestly answer. A learner practising `can` (علبة, a tin) with `technology` in
+their profile was asked what a computer *can* do.
+
+The prompt already said the right things — *work backwards from the word*, *if
+it does not fit, change the subject*, *interests choose between situations, they
+are never a reason to bolt a word onto a topic*. None of it could work: the
+model was reasoning about a spelling, not a meaning.
+
+**Decision.** The English definition and part of speech travel with every
+remaining word, and the prompt is told to read the sense before writing the
+question — *"a question that suits a different sense of the same spelling is a
+question they cannot answer"*. The interests are moved to the foot of the
+prompt and labelled the lowest priority, with the same ban on naming them back
+at the learner as Reading has (ADR-066).
+
+**Verified on the reported case.** Learner interested in technology and
+programming, having just said they worked on their computer all morning, with
+`can` = *a metal container in which food or drink is sealed*:
+
+> *"Working on the computer all morning sounds tiring. I usually need a snack to
+> keep going when I work like that. **Do you ever buy a cold drink or food in a
+> can when you are at the grocery store?** Try to use the word can in your
+> answer."*
+
+It reacted to what was said, then walked the conversation to where that sense of
+the word actually lives.
+
+### Dictation lost what the learner had already said
+
+**Context.** Two failures, one cause. A pause of a few seconds and then speaking
+again started the transcript over; and a long answer — four or five sentences —
+began overwriting itself part way through.
+
+Every recogniser closes its session on its own: after a silence, and after a
+minute or so of continuous speech. It then opens the next one with an empty
+transcript. This service kept only the latest result:
+
+```dart
+_heard = result.recognizedWords;   // ← replaces
+```
+
+The words were never lost by the microphone. They were overwritten here.
+
+**Decision.** The turn is now assembled from segments: a `final` result is
+appended to the transcript and the session is reopened, so a pause or a
+platform-imposed cut is invisible to the learner and the words already heard
+survive it.
+
+- **`_wantsToListen` is separate from `_listening`** — the learner's intent
+  versus the platform's session. The two come apart constantly.
+- **A closed session is reopened**, from the status callback and from the error
+  callback both, after a short beat so a platform mid-teardown is not asked to
+  start again while it is stopping.
+- **`cancelOnError` is now false.** Cancelling discards the segment in progress;
+  a transient error should cost the last few words at most, not the turn.
+- **Reopening is bounded.** Forty consecutive restarts with nothing heard and
+  the service gives up rather than showing a microphone that is no longer
+  listening.
+
+### Nothing is sent before the learner has read it
+
+The only two exits from a recording were "send it exactly as heard" and "throw
+it away" (ADR-059). A recogniser mishears — a name, a number, the one word the
+sentence turned on — and neither exit helps.
+
+Closing the microphone now opens a **review**: the transcript in an ordinary
+text field, with *Record again* and *Send*. The learner can fix a word, add the
+sentence they forgot, or start over. Nothing reaches the tutor, and no AI call
+is spent, until they press Send.
+
+**Consequence.** A turn takes one more tap. That is the point: the tap is the
+learner saying "this is what I meant", which is the only place that judgement
+can come from.
+---
+
+## ADR-070 — A conversation is not over until someone has said goodbye
+**Date:** 2026-08-23 · **Status:** Accepted · **Completes ADR-042**
+
+**Context.** A Speaking session ends for one of two reasons: every target word
+has been used, or it has run long enough (`words.Count + 3` learner turns).
+ADR-042 gave the first a proper closing turn. The second had none — `isFinal`
+simply became true, and the tutor's last words were whatever it had already
+said, which at that point is almost always *"Try to use the word …"*. The
+result screen then appeared over the top of it.
+
+Which learner hits that path? The one who **never managed a word**. So the
+conversation a learner got wrong was also the only one that ended mid-sentence.
+
+**Decision — a conversation always closes.** Both endings now ask for the
+closing turn. The rule, stated plainly: it opens with a greeting and it closes
+with a goodbye, whatever happened in between.
+
+**The goodbye is told what was missed, and must not mention it.** A closing turn
+that congratulates a learner on practising every word when they never said
+`several` is a lie they can detect. So the unused words travel with the request
+— and the prompt is told not to list them, not to apologise, and not to say
+anything went wrong. It names something they *did* do, and closes warmly.
+
+Where the mistake is explained is the end-of-session evaluation: in detail, in
+Arabic, after the conversation. A goodbye is not the place to mark somebody.
+
+**Also settled here, from the same review.**
+
+- **The interests rank last in every prompt that has them**, and both now say so
+  in those words. They appear in exactly two: the passage generator (ADR-066)
+  and the speaking tutor (ADR-069). Both open with *natural use comes first*,
+  and a test asserts that neither can lose it.
+- **Signing in is remembered, and already was.** Reported as "it asks me to sign
+  in again next time"; the tokens are in the platform keystore, restored before
+  the first frame, and only a rejected session clears them. Pinned rather than
+  argued: a test signs in, throws the whole widget tree away, boots the app
+  again against the same keystore, and asserts the learner lands on the hub with
+  no sign-in form in sight.

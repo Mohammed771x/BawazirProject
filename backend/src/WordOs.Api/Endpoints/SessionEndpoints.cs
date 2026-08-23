@@ -454,7 +454,7 @@ public static class SessionEndpoints
             skill: session.Skill, level: level.Value, now: clock.GetUtcNow());
 
         session.ReplaceContent(
-            level.Value, content.Text, GlossaryJson(content));
+            level.Value, content.Text, GlossaryJson(content), content.Title);
 
         SessionContentBuilder.BuildComprehensionItems(
             session, content, words,
@@ -736,7 +736,7 @@ public static class SessionEndpoints
                 session.SetContent(
                     content.Text, content.PromptVersion, content.Model,
                     content.Tokens, content.FromFallback,
-                    GlossaryJson(content));
+                    GlossaryJson(content), content.Title);
 
                 SessionContentBuilder.BuildComprehensionItems(
                     session, content, due, listening, random);
@@ -1099,33 +1099,52 @@ public static class SessionEndpoints
                 .Where(w => !alreadyUsed.Contains(w.Text, StringComparer.OrdinalIgnoreCase))
                 .Select(w => w.Text)
                 .ToList();
+        }
 
+        // ── Is this the last turn, and if so, has anyone said goodbye? ───────
+        //
+        // A conversation opens with a greeting and closes with a closing turn.
+        // Between those it may end for either of two reasons — every word is
+        // done, or it has run long enough — and until now only the first of
+        // them was closed properly. The other simply stopped: the tutor's last
+        // words were an ordinary question, usually "try to use the word …",
+        // and the result screen appeared over the top of it. A learner who
+        // never managed one of their words hit that path every time, so the
+        // conversation they got wrong was also the one that ended mid-sentence
+        // (ADR-070).
+        //
+        // Whether a word was used well is not settled here and does not belong
+        // here: the end-of-session evaluation says what went wrong, kindly and
+        // in detail. The conversation itself finishes the way conversations do.
+        var learnerTurns = history.Count(t => !t.FromAi);
+        var isFinal = remaining.Count == 0 || learnerTurns >= words.Count + 3;
+
+        if (isFinal)
+        {
             // The reply was written before this turn was judged, so it is a
             // question about a word the learner has just finished — which is
             // how a conversation ended on "try to use the word loop" one line
-            // after they used it. With the list now empty, the closing turn is
-            // asked for properly: what they did well, and goodbye (ADR-042).
+            // after they used it. It is replaced by a proper closing turn:
+            // what they did well, and goodbye (ADR-042).
             //
             // One extra call, once, at the end of a conversation.
-            if (remaining.Count == 0)
+            try
             {
-                try
-                {
-                    var closing = await ai.SpeakingTurnAsync(new SpeakingTurnRequest(
-                        user.DisplayName, session.LevelUsed, [], alreadyUsed,
-                        history.Select(h => new SpeakingTranscriptTurn(h.FromAi, h.Text))
-                            .ToList(),
-                        user.Interests.Select(i => i.Interest).ToList()), ct);
+                var closing = await ai.SpeakingTurnAsync(new SpeakingTurnRequest(
+                    user.DisplayName, session.LevelUsed, [], alreadyUsed,
+                    history.Select(h => new SpeakingTranscriptTurn(h.FromAi, h.Text))
+                        .ToList(),
+                    user.Interests.Select(i => i.Interest).ToList(),
+                    UnusedWords: remaining), ct);
 
-                    turn = turn with { Reply = closing.Reply };
-                }
-                catch (Exception e) when (e is AiServiceException or HttpRequestException
-                                              or TaskCanceledException)
-                {
-                    // The conversation is over either way; the learner keeps
-                    // the reply they have rather than seeing an error at the
-                    // moment they finished.
-                }
+                turn = turn with { Reply = closing.Reply };
+            }
+            catch (Exception e) when (e is AiServiceException or HttpRequestException
+                                          or TaskCanceledException)
+            {
+                // The conversation is over either way; the learner keeps the
+                // reply they have rather than seeing an error at the moment
+                // they finished.
             }
         }
 
@@ -1140,10 +1159,6 @@ public static class SessionEndpoints
 
         await CreditExposureAsync(
             db, session.Id, activeWords, turn.Reply, clock.GetUtcNow(), ct);
-
-        // Enough turns for one per word plus room for follow-ups.
-        var learnerTurns = history.Count(t => !t.FromAi);
-        var isFinal = remaining.Count == 0 || learnerTurns >= words.Count + 3;
 
         await db.SaveChangesAsync(ct);
 
@@ -1744,6 +1759,10 @@ public static class SessionEndpoints
         isPractice = session.IsPractice,
         content = session.ContentText is null ? null : new
         {
+            // What the passage is called. Null for a session generated before
+            // titles existed, and for a model that omitted one — the client
+            // renders the passage without a heading rather than an empty one.
+            title = session.ContentTitle,
             text = session.ContentText,
             // Listening hides the transcript until the test is over.
             revealTextAfterTest = session.Skill == SkillType.Listening,

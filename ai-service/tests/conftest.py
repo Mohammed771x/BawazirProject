@@ -100,6 +100,40 @@ def stub_gemini(monkeypatch):
     return install
 
 
+@pytest.fixture
+def stub_gemini_sequence(monkeypatch):
+    """Like ``stub_gemini``, but answers each call with the next payload.
+
+    Needed wherever one request makes more than one generation — a passage
+    whose glossary came back short is completed by a second call, and a single
+    canned answer cannot represent both halves of that.
+    """
+    import json
+
+    from app import main
+    from app.gemini import GeminiResponse
+
+    def install(payloads: list[dict], *, tokens: int = 123):
+        recorder = _Recorder()
+        remaining = list(payloads)
+
+        def fake_generate(prompt, **kwargs):
+            recorder.prompts.append(prompt)
+            recorder.kwargs.append(kwargs)
+            payload = remaining.pop(0) if remaining else payloads[-1]
+            return GeminiResponse(
+                text=json.dumps(payload),
+                model="gemini-3.1-flash-lite",
+                prompt_tokens=tokens,
+                output_tokens=0,
+            )
+
+        monkeypatch.setattr(main.CLIENT, "generate", fake_generate)
+        return recorder
+
+    return install
+
+
 class _Recorder:
     def __init__(self) -> None:
         self.prompts: list[str] = []

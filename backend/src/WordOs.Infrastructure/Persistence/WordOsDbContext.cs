@@ -302,8 +302,14 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
             e.Property(x => x.LevelUsed).HasConversion<string>().HasMaxLength(8);
             e.Property(x => x.PromptVersion).HasMaxLength(64);
             e.Property(x => x.AiModel).HasMaxLength(64);
-            // Bounded generously: one entry per content word in a passage.
-            e.Property(x => x.GlossaryJson).HasMaxLength(20000);
+            e.Property(x => x.ContentTitle).HasMaxLength(200);
+            // One entry per word of the passage, and passages are now sized
+            // like the exam texts they stand in for — a C2 passage runs to
+            // some 720 words, of which 350 or so are distinct. At roughly 70
+            // characters an entry that is 25,000, so the old 20,000 ceiling
+            // would have started truncating exactly at the top of the ladder
+            // (ADR-066).
+            e.Property(x => x.GlossaryJson).HasMaxLength(120000);
             // What the session is about, independent of its items — a
             // conversation has none (ADR-039).
             e.Property(x => x.WordIdsJson).HasMaxLength(2000);

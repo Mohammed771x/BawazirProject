@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:wordos/core/storage/app_preferences.dart';
 import 'package:wordos/core/storage/preferences_providers.dart';
 import 'package:wordos/core/api/api_providers.dart';
+import 'package:wordos/app/wordos_app.dart';
 import 'package:wordos/features/auth/session_controller.dart';
 
 import 'support/test_harness.dart';
@@ -60,6 +61,46 @@ void main() {
         reason: 'sign out should land on the sign-in screen');
     expect(find.text('Skills Hub'), findsNothing,
         reason: 'a signed-out learner must not still see their hub');
+  });
+
+  testWidgets('a signed-in learner is not asked to sign in again next time',
+      (tester) async {
+    // Closing the app and opening it again is the ordinary case, not an edge
+    // one. The session lives in the platform keystore, so the second launch
+    // has a token before it has a screen and must go straight to the hub
+    // (ADR-070).
+    final tokens = FakeTokenStore();
+    final prefs = InMemoryAppPreferences(
+        locale: const Locale('en'), onboardingSeen: true);
+    final overrides = [
+      appPreferencesProvider.overrideWithValue(prefs),
+      tokenStoreProvider.overrideWith((ref) => tokens),
+    ];
+
+    tester.view.physicalSize = const Size(1200, 2600);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+
+    // First launch: the learner signs in.
+    await tester.pumpWidget(
+      ProviderScope(overrides: overrides, child: const WordOsApp()),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
+    await tester.pumpAndSettle();
+
+    expect(tokens.token, isNotNull, reason: 'the session was stored');
+
+    // Second launch: same device, same keystore, a brand new app.
+    await tester.pumpWidget(
+      ProviderScope(overrides: overrides, child: const WordOsApp()),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(FilledButton, 'Sign in'), findsNothing,
+        reason: 'a learner who signed in last time is already signed in');
+    expect(find.text('Reading'), findsWidgets,
+        reason: 'the app opens where it left off, not on the login form');
   });
 
   test('signing out never sends the learner back through the product tour',

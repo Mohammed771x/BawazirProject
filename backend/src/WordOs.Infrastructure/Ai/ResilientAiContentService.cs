@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using WordOs.Application.Abstractions;
+using WordOs.Domain.Common;
 
 namespace WordOs.Infrastructure.Ai;
 
@@ -163,6 +164,90 @@ public sealed class ResilientAiContentService(
             Summary: string.Empty,
             FromFallback: true);
 
+    /// <summary>
+    /// The fallback passage's own glossary, written by hand.
+    /// </summary>
+    /// <remarks>
+    /// Every word the fallback sentences below can contain, with the meaning it
+    /// carries there. Without this, a tap on any word of a fallback passage
+    /// falls through to the lexicon — which answers with every sense the word
+    /// has ever had, six of them for "bank" and five wrong. That is the one
+    /// thing a learner notices immediately, and an outage is no reason to
+    /// hand them a list of meanings and let them guess (ADR-065).
+    ///
+    /// It can be written by hand precisely because the sentences are fixed: the
+    /// only words that are not known in advance are the learner's own target
+    /// words, whose Arabic meanings arrive with the request.
+    /// </remarks>
+    private static readonly (string Word, string Meaning, string PartOfSpeech)[]
+        FallbackGlossary =
+        [
+            ("A", "أداة نكرة", "determiner"),
+            ("An", "أداة نكرة", "determiner"),
+            ("At", "عند", "preposition"),
+            ("Everyone", "الجميع", "pronoun"),
+            ("The", "أداة تعريف", "determiner"),
+            ("Then", "ثم", "adverb"),
+            ("They", "هم", "pronoun"),
+            ("about", "عن", "preposition"),
+            ("again", "مرة أخرى", "adverb"),
+            ("all", "كل", "determiner"),
+            ("and", "و", "conjunction"),
+            ("before", "قبل", "preposition"),
+            ("carefully", "بعناية", "adverb"),
+            ("class", "الصف", "noun"),
+            ("day", "اليوم", "noun"),
+            ("down", "أسفل", "adverb"),
+            ("each", "كل واحد", "determiner"),
+            ("end", "نهاية", "noun"),
+            ("evening", "المساء", "noun"),
+            ("explained", "شرح", "verb"),
+            ("for", "من أجل", "preposition"),
+            ("important", "مهم", "adjective"),
+            ("in", "في", "preposition"),
+            ("it", "ها", "pronoun"),
+            ("lesson", "الدرس", "noun"),
+            ("moving", "الانتقال", "verb"),
+            ("new", "جديد", "adjective"),
+            ("of", "من", "preposition"),
+            ("on", "على", "preposition"),
+            ("other", "الآخر", "adjective"),
+            ("own", "الخاص", "adjective"),
+            ("next", "التالي", "adjective"),
+            ("their", "خاصتهم", "determiner"),
+            ("preparing", "يستعد", "verb"),
+            ("read", "قرأ", "verb"),
+            ("reviewed", "راجع", "verb"),
+            ("sentence", "جملة", "noun"),
+            ("student", "طالب", "noun"),
+            ("study", "الدراسة", "noun"),
+            ("teacher", "المعلّم", "noun"),
+            ("terms", "مصطلحات", "noun"),
+            ("the", "أداة تعريف", "determiner"),
+            ("them", "هم", "pronoun"),
+            ("to", "إلى", "preposition"),
+            ("used", "استخدم", "verb"),
+            ("was", "كان", "auxiliary"),
+            ("week", "أسبوع", "noun"),
+            ("word", "الكلمة", "noun"),
+            ("wrote", "كتب", "verb"),
+        ];
+
+    /// <summary>How many sentences of filler a level is worth.</summary>
+    /// <remarks>
+    /// A fallback is weaker content, not shorter content. A B1 learner who was
+    /// handed four lines read that as a broken app, and was right to: the
+    /// passage ignored their level entirely.
+    /// </remarks>
+    private static int FallbackFiller(CefrLevel level) => level.Rank() switch
+    {
+        <= 1 => 2,   // A1, A1+
+        <= 3 => 3,   // A2, A2+
+        <= 5 => 4,   // B1, B1+
+        <= 7 => 5,   // B2, B2+
+        _ => 6,      // C1, C1+, C2
+    };
+
     private static GeneratedContent FallbackContent(ContentRequest request)
     {
         var sentences = new List<string>
@@ -175,11 +260,13 @@ public sealed class ResilientAiContentService(
         foreach (var word in request.Words)
         {
             var index = sentences.Count;
-            var definition = string.IsNullOrWhiteSpace(word.Definition)
-                ? "an important idea in this topic"
-                : word.Definition;
 
-            sentences.Add($"The teacher explained {word.Text}, which is {definition}.");
+            // The word's English definition used to be spliced in here. It
+            // reads well and cannot be glossed: it is arbitrary text from the
+            // lexicon, so every word of it became an unanswerable tap. The
+            // learner still meets the definition — in the lookup sheet and in
+            // the question about the word — where it can be shown whole.
+            sentences.Add($"The teacher explained the word {word.Text} to the class.");
             sentences.Add("Everyone wrote it down before moving on.");
 
             contexts.Add(new GeneratedWordContext(
@@ -188,6 +275,19 @@ public sealed class ResilientAiContentService(
                 Sentence: sentences[index],
                 After: sentences[index + 1]));
         }
+
+        // Padding to the length the level deserves. Fixed sentences, so they
+        // stay inside the hand-written glossary above.
+        string[] filler =
+        [
+            "They read about it carefully each evening.",
+            "Then the teacher used the word in a sentence.",
+            "Everyone wrote it down again before the end of the day.",
+            "The class read the new terms to each other.",
+            "They explained each word in a sentence of their own.",
+            "The teacher reviewed all of them again the next day.",
+        ];
+        sentences.AddRange(filler.Take(FallbackFiller(request.Level)));
 
         sentences.Add("At the end of the lesson they reviewed all the new terms.");
 
@@ -222,7 +322,33 @@ public sealed class ResilientAiContentService(
             PromptVersion: "fallback",
             Model: "fallback",
             Tokens: 0,
-            FromFallback: true);
+            FromFallback: true,
+            Glossary: FallbackGlossaryFor(request),
+            // Titled like any other passage, so the outage does not also
+            // change the shape of the screen the learner is looking at.
+            Title: "A Week of Study");
+    }
+
+    /// <summary>
+    /// The fallback's fixed vocabulary plus the learner's own words.
+    /// </summary>
+    private static List<GlossaryEntry> FallbackGlossaryFor(ContentRequest request)
+    {
+        var glossary = FallbackGlossary
+            .Select(g => new GlossaryEntry(g.Word, g.Meaning, g.PartOfSpeech))
+            .ToList();
+
+        // The target words are the only unpredictable part of the text, and
+        // their Arabic arrives with the request — the learner chose it when
+        // they added the word.
+        glossary.AddRange(request.Words
+            .Where(w => !string.IsNullOrWhiteSpace(w.Meaning))
+            .Select(w => new GlossaryEntry(
+                w.Text,
+                w.Meaning,
+                string.IsNullOrWhiteSpace(w.PartOfSpeech) ? "other" : w.PartOfSpeech)));
+
+        return glossary;
     }
 
     /// <summary>

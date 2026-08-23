@@ -27,10 +27,37 @@ class SpeechRecognitionService {
   bool _available = false;
   bool _listening = false;
 
-  /// What has been recognised in the turn currently open.
-  String _heard = '';
+  /// Whether the learner still has the microphone open.
+  ///
+  /// Distinct from [_listening], which says whether the *platform* is currently
+  /// in a recognition session. The two come apart constantly: every recogniser
+  /// closes its session on a long pause or after a minute or two of speech, and
+  /// the turn is not over just because it did.
+  bool _wantsToListen = false;
 
-  bool get isListening => _listening;
+  /// Segments the recogniser has finished with, joined.
+  ///
+  /// The platform hands back a *final* result and starts over with an empty
+  /// string. Keeping only the latest is what made a five-second pause — or a
+  /// fourth sentence — wipe everything said before it: the words did not
+  /// disappear, they were overwritten.
+  String _committed = '';
+
+  /// The segment being spoken right now, replaced as it is refined.
+  String _partial = '';
+
+  void Function(String heard)? _onPartial;
+
+  /// Restarts since the last word was heard, so a recogniser that has stopped
+  /// working cannot be reopened for ever.
+  int _emptyRestarts = 0;
+
+  static const _maxEmptyRestarts = 40;
+
+  /// Everything heard this turn: the finished segments and the one in progress.
+  String get heard => '$_committed $_partial'.trim();
+
+  bool get isListening => _wantsToListen;
 
   /// False when this device cannot listen at all — no permission, no
   /// recogniser, or a simulator. The UI offers typing instead.
@@ -48,10 +75,16 @@ class SpeechRecognitionService {
     try {
       _available = await _speech
           .initialize(
-            onError: (_) => _listening = false,
+            onError: (_) {
+              _listening = false;
+              // An error ends the platform's session, not necessarily the
+              // learner's turn — a transient one is recovered by reopening.
+              unawaited(_resume());
+            },
             onStatus: (status) {
               if (status == 'done' || status == 'notListening') {
                 _listening = false;
+                unawaited(_resume());
               }
             },
           )
@@ -76,29 +109,62 @@ class SpeechRecognitionService {
   /// Returns false when this device cannot listen; the caller offers typing.
   Future<bool> startListening({void Function(String heard)? onPartial}) async {
     if (!await initialise()) return false;
-    if (_listening) return true;
+    if (_wantsToListen) return true;
 
-    _heard = '';
+    _committed = '';
+    _partial = '';
+    _emptyRestarts = 0;
+    _onPartial = onPartial;
+    _wantsToListen = true;
+
+    final started = await _listen();
+    if (!started) _wantsToListen = false;
+    return started;
+  }
+
+  /// Opens one platform recognition session.
+  ///
+  /// Called again each time the platform closes one of its own accord, which
+  /// it does on a long silence and after a minute or so of continuous speech.
+  /// The learner notices nothing: the words already heard are held in
+  /// [_committed], so the transcript continues rather than starting again.
+  Future<bool> _listen() async {
+    if (_listening) return true;
 
     try {
       _listening = true;
       await _speech.listen(
         onResult: (result) {
-          if (result.recognizedWords.isNotEmpty) {
-            _heard = result.recognizedWords;
-            onPartial?.call(_heard);
+          final words = result.recognizedWords.trim();
+
+          if (result.finalResult) {
+            // The segment is closed. Move it into the transcript so the next
+            // session's empty first result cannot take it away.
+            if (words.isNotEmpty) {
+              _committed = _committed.isEmpty ? words : '$_committed $words';
+              _emptyRestarts = 0;
+            }
+            _partial = '';
+          } else {
+            _partial = words;
+            if (words.isNotEmpty) _emptyRestarts = 0;
           }
+
+          _onPartial?.call(heard);
         },
         listenOptions: SpeechListenOptions(
-          // Effectively no silence cutoff and no short ceiling: the learner
-          // decides when they are finished, not the recogniser. The platform
-          // may still end a very long session on its own, which is why the
-          // words heard so far are kept rather than discarded.
+          // Long, but not relied upon: whatever the platform does with these,
+          // a closed session is reopened. `pauseFor` being generous simply
+          // means fewer restarts, and a restart is not free — a word spoken
+          // exactly across one can be lost.
           pauseFor: const Duration(minutes: 5),
           listenFor: const Duration(minutes: 5),
           localeId: 'en_US',
           partialResults: true,
-          cancelOnError: true,
+          // False, deliberately: an error that cancels the session would
+          // discard the segment in progress. It is stopped and reopened
+          // instead, keeping what was already heard.
+          cancelOnError: false,
           // Dictation keeps the microphone open through natural pauses instead
           // of ending the turn at the first comma.
           listenMode: ListenMode.dictation,
@@ -111,11 +177,37 @@ class SpeechRecognitionService {
     }
   }
 
+  /// Reopens the microphone after the platform closed its session.
+  ///
+  /// The guard against a recogniser that has died: reopening a session that
+  /// hears nothing, for ever, would leave the learner watching a microphone
+  /// that is no longer listening to them.
+  Future<void> _resume() async {
+    if (!_wantsToListen || _listening) return;
+
+    if (_emptyRestarts >= _maxEmptyRestarts) {
+      _wantsToListen = false;
+      return;
+    }
+    _emptyRestarts++;
+
+    // A beat, so a platform mid-teardown is not asked to start again while it
+    // is still stopping.
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    if (!_wantsToListen || _listening) return;
+
+    await _listen();
+  }
+
   /// Closes the microphone and returns everything that was heard.
   ///
   /// Null when nothing usable was said, which the caller treats as "try again"
   /// rather than as an answer.
   Future<String?> stopAndRead() async {
+    // Before `stop`, so the status callback it triggers does not reopen the
+    // microphone the learner has just closed.
+    _wantsToListen = false;
+
     await stop();
     _listening = false;
 
@@ -123,8 +215,8 @@ class SpeechRecognitionService {
     // wait keeps the end of the learner's sentence instead of clipping it.
     await Future<void>.delayed(const Duration(milliseconds: 400));
 
-    final heard = _heard.trim();
-    return heard.isEmpty ? null : heard;
+    final said = heard;
+    return said.isEmpty ? null : said;
   }
 
   /// Listens until the learner stops talking, and returns what they said.
@@ -188,12 +280,15 @@ class SpeechRecognitionService {
   }
 
   Future<void> cancel() async {
+    _wantsToListen = false;
     try {
       await _speech.cancel();
     } catch (_) {
       // Ignore.
     }
     _listening = false;
+    _committed = '';
+    _partial = '';
   }
 }
 

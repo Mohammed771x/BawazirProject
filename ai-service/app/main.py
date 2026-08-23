@@ -15,9 +15,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated, NamedTuple
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
@@ -128,6 +130,9 @@ class GlossaryEntry(BaseModel):
 
 
 class ContentResponse(BaseModel):
+    # Empty when the model omitted it. The client renders a passage without a
+    # title rather than an empty heading, so a missing one costs nothing.
+    title: str = ""
     text: str
     sentences: list[str]
     comprehension: list[ComprehensionQuestion]
@@ -139,7 +144,10 @@ class ContentResponse(BaseModel):
 
 
 class RelevelRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=8000)
+    # A C2 passage runs to some 720 words, and re-telling sends the whole
+    # of it back up. 8,000 characters was a comfortable ceiling when passages
+    # were a dozen sentences and a tight one now.
+    text: str = Field(min_length=1, max_length=20000)
     from_level: str = Field(max_length=8)
     to_level: str = Field(max_length=8)
     words: list[TargetWord] = Field(default_factory=list, max_length=15)
@@ -200,6 +208,10 @@ class SpeakingRequest(BaseModel):
     # the word being practised.
     remaining_shapes: list[TargetWord] = Field(default_factory=list, max_length=15)
     form_reminders: list[FormReminder] = Field(default_factory=list, max_length=15)
+    # Words the conversation never reached, sent only when it is being closed
+    # anyway. The goodbye must not congratulate a learner on words they never
+    # said (ADR-070).
+    unused_words: list[str] = Field(default_factory=list, max_length=15)
 
 
 class SpeakingResponse(BaseModel):
@@ -306,6 +318,12 @@ def generate_content(request: ContentRequest) -> ContentResponse:
     """Generates a Reading or Listening passage with its questions."""
     started = time.monotonic()
 
+    # A short passage is glossed in the same call; a long one is written first
+    # and glossed by the parallel batches below, which is far quicker than
+    # asking one call for four hundred entries (ADR-067).
+    inline = prompts.wants_inline_glossary(
+        request.level, len(request.words), listening=request.listening)
+
     prompt = prompts.reading_prompt(
         level=request.level,
         interests=request.interests,
@@ -316,12 +334,174 @@ def generate_content(request: ContentRequest) -> ContentResponse:
             w if isinstance(w, str) else w.model_dump()
             for w in request.reuse_words
         ],
+        inline_glossary=inline,
     )
 
-    generated = _generate_json(prompt, prompts.READING_SCHEMA)
+    generated = _generate_json(
+        prompt, prompts.reading_schema(inline_glossary=inline))
     return _shape_content(
         generated.payload, prompts.READING_PROMPT_VERSION, started,
         generated.tokens)
+
+
+#: Every tappable word of a passage, matching the client's own rule: letters
+#: and digits, plus the apostrophes and hyphens that live *inside* a word, so
+#: "doesn't" and "well-known" are one word each. The two patterns must agree —
+#: a glossary keyed on anything the client does not tap is a glossary with
+#: holes in it.
+_WORD = re.compile(r"[^\W_](?:[^\W_]|['’-])*")
+
+#: How many words one repair call may ask about, and how many calls a passage
+#: may spend.
+#:
+#: One call was enough while passages were a dozen sentences. Sized like the
+#: exam texts they stand in for (ADR-066) a C2 passage runs to 750 words and
+#: some 430 distinct ones, and at that length the model stops glossing almost
+#: entirely — one measured run returned 40 entries for 430 words. A single
+#: repair capped at 200 then left 227 words a learner could tap and get a
+#: dictionary list for, which is the whole bug back again at the top of the
+#: ladder.
+#:
+#: So the repair works in batches until the passage is covered. The ceiling is
+#: on the number of calls, not on the number of words: four batches cover any
+#: passage this app can produce, and a fifth would mean the model is refusing
+#: rather than running out of room.
+_REPAIR_BATCH_WORDS = 150
+_MAX_REPAIR_CALLS = 6
+
+
+def _uncovered_words(sentences: list[str], glossary: list[GlossaryEntry]) -> list[str]:
+    """The passage's words that the glossary does not answer for.
+
+    Compared case-insensitively and on the surface form, because that is how
+    the client looks an entry up: it hands over the word it drew on screen.
+    A gloss of "study" does not answer a tap on "studying".
+    """
+    glossed = {entry.word.strip().lower() for entry in glossary}
+
+    missing: list[str] = []
+    seen: set[str] = set()
+    for sentence in sentences:
+        for match in _WORD.finditer(sentence):
+            word = match.group(0)
+            key = word.lower()
+            if key in glossed or key in seen:
+                continue
+            seen.add(key)
+            missing.append(word)
+    return missing
+
+
+def _repair_glossary(
+    sentences: list[str], glossary: list[GlossaryEntry]
+) -> tuple[list[GlossaryEntry], int]:
+    """Builds whatever the passage still lacks, in one round of parallel calls.
+
+    The passage is the product here: a tap that cannot be answered from the
+    glossary falls back to the lexicon, which returns every sense the word has
+    ever had — six for "bank", five of them wrong in any given sentence.
+
+    **Issued together, not one after another.** Sequentially, a C2 passage's
+    three batches cost fourteen seconds each and the learner sat through
+    forty-two of them; re-levelling reached seventy-seven seconds end to end and
+    started tripping the backend's budget, which answered the learner with "the
+    passage could not be rewritten". The batches do not depend on each other —
+    each asks about a different set of words — so there was never a reason to
+    wait between them (ADR-067).
+
+    Failure is never fatal and never raises: a passage with an incomplete
+    glossary is weaker content, not a broken session, and refusing it would send
+    the learner to the deterministic fallback — a canned passage nobody asked
+    for.
+    """
+    missing = _uncovered_words(sentences, glossary)
+    if not missing:
+        log.info("glossary complete as written: %d entries", len(glossary))
+        return glossary, 0
+
+    batches = [
+        missing[i:i + _REPAIR_BATCH_WORDS]
+        for i in range(0, len(missing), _REPAIR_BATCH_WORDS)
+    ][:_MAX_REPAIR_CALLS]
+
+    log.info(
+        "glossary short by %d words; asking in %d parallel batches",
+        len(missing), len(batches))
+
+    def ask(batch: list[str]) -> tuple[list[dict], int]:
+        try:
+            generated = _generate_json(
+                prompts.glossary_repair_prompt(
+                    sentences=sentences, missing=batch),
+                prompts.GLOSSARY_REPAIR_SCHEMA,
+                # Not a creative task: there is one right answer per word, and
+                # the sentence it sits in already fixes which sense that is.
+                temperature=0.2,
+            )
+        except HTTPException as exc:
+            log.warning("glossary batch failed: %s", exc.detail)
+            return [], 0
+        return generated.payload.get("glossary", []), generated.tokens
+
+    total_tokens = 0
+    answers: list[list[dict]] = []
+
+    if len(batches) == 1:
+        entries, tokens = ask(batches[0])
+        answers.append(entries)
+        total_tokens += tokens
+    else:
+        with ThreadPoolExecutor(max_workers=len(batches)) as pool:
+            for entries, tokens in pool.map(ask, batches):
+                answers.append(entries)
+                total_tokens += tokens
+
+    known = {entry.word.strip().lower() for entry in glossary}
+    for entries in answers:
+        for entry in entries:
+            word = str(entry.get("word", "")).strip()
+            meaning = str(entry.get("meaning_ar", "")).strip()
+            if not word or not meaning or word.lower() in known:
+                continue
+            known.add(word.lower())
+            glossary.append(GlossaryEntry(
+                word=word,
+                meaning_ar=meaning,
+                part_of_speech=str(entry.get("part_of_speech") or "other"),
+            ))
+
+    still_missing = len(_uncovered_words(sentences, glossary))
+    log.info(
+        "glossary settled: %d entries, %d words still unglossed",
+        len(glossary), still_missing)
+    return glossary, total_tokens
+
+
+def _join_into_paragraphs(sentences: list[str], breaks: object) -> str:
+    """The passage as one string, with its paragraphs kept.
+
+    A reading text is built — an opening that says what it is about, body
+    paragraphs each developing one idea, a close (ADR-068) — and a wall of
+    prose hides that structure however well the sentences were written. The
+    breaks arrive as sentence indexes, so a blank line goes in front of each.
+
+    Anything the model reports that is not a usable index is ignored rather
+    than trusted: a break at 0, past the end, or not an integer at all would
+    only produce a stray blank line at the top of the passage.
+    """
+    starts = {
+        index for index in (breaks if isinstance(breaks, list) else [])
+        if isinstance(index, int) and 0 < index < len(sentences)
+    }
+
+    if not starts:
+        return " ".join(sentences)
+
+    out: list[str] = []
+    for index, sentence in enumerate(sentences):
+        out.append(("\n\n" if index in starts else " ") + sentence
+                   if index else sentence)
+    return "".join(out)
 
 
 def _shape_content(
@@ -398,15 +578,20 @@ def _shape_content(
             part_of_speech=str(entry.get("part_of_speech") or "other"),
         ))
 
+    # Whatever the model skipped is asked for again, by name. The cost of the
+    # second call is reported with the first: it belongs to this passage.
+    glossary, repair_tokens = _repair_glossary(sentences, glossary)
+
     return ContentResponse(
-        text=" ".join(sentences),
+        title=str(payload.get("title") or "").strip(),
+        text=_join_into_paragraphs(sentences, payload.get("paragraph_breaks")),
         sentences=sentences,
         comprehension=questions,
         contexts=contexts,
         glossary=glossary,
         prompt_version=prompt_version,
         model=SETTINGS.gemini_model,
-        tokens=tokens,
+        tokens=tokens + repair_tokens,
     )
 
 
@@ -423,15 +608,20 @@ def relevel_content(request: RelevelRequest) -> ContentResponse:
     """
     started = time.monotonic()
 
+    inline = prompts.wants_inline_glossary(
+        request.to_level, len(request.words), listening=False)
+
     prompt = prompts.relevel_prompt(
         text=request.text,
         from_level=request.from_level,
         to_level=request.to_level,
         words=[w.model_dump() for w in request.words],
         comprehension_count=request.comprehension_count,
+        inline_glossary=inline,
     )
 
-    generated = _generate_json(prompt, prompts.READING_SCHEMA)
+    generated = _generate_json(
+        prompt, prompts.reading_schema(inline_glossary=inline))
     return _shape_content(
         generated.payload, prompts.RELEVEL_PROMPT_VERSION, started,
         generated.tokens)
@@ -493,6 +683,7 @@ def speaking_turn(request: SpeakingRequest) -> SpeakingResponse:
             interests=request.interests,
             remaining_shapes=[w.model_dump() for w in request.remaining_shapes],
             form_reminders=[r.model_dump() for r in request.form_reminders],
+            unused_words=request.unused_words,
         ),
         prompts.SPEAKING_TURN_SCHEMA,
         temperature=0.8,

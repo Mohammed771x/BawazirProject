@@ -103,7 +103,20 @@ def test_the_token_count_travels_with_its_own_answer(
         "comprehension": [
             {"prompt": "What is it about?", "correct": "A garden",
              "distractors": ["a", "b", "c"]}],
-        "glossary": [],
+        # Covers the whole sentence, so the glossary repair pass does not fire
+        # and add a second generation's tokens to the total. That it *would* is
+        # correct — a repair belongs to the passage that needed it — but it is
+        # not what this test is measuring.
+        "glossary": [
+            {"word": w, "meaning_ar": ar, "part_of_speech": pos}
+            for w, ar, pos in [
+                ("A", "أداة نكرة", "determiner"),
+                ("short", "قصير", "adjective"),
+                ("passage", "نص", "noun"),
+                ("about", "عن", "preposition"),
+                ("garden", "بستان", "noun"),
+            ]
+        ],
     }
     stub_gemini(payload, tokens=777)
 

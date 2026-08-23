@@ -86,6 +86,13 @@ the address there, not on the command line. `./wordos status` is what says
 whether the address the app was built to call is still this Mac's — the sign-in
 screen used to say so too, and no longer does (ADR-060).
 
+Open **`ios/Runner.xcworkspace`**, never `Runner.xcodeproj` — and run
+`flutter build ios --simulator --debug` once before pressing Run after any
+`flutter pub get`, branch switch or plugin change. Xcode never runs `pod install`
+itself, so the first build after the Pods sandbox drifts fails with *"The sandbox
+is not in sync with the Podfile.lock"* — which reads like a project fault and is
+not one. The Flutter CLI runs `pod install` as part of its build; that is the fix.
+
 **Against the mock**, sign in as `owner@wordos.app / wordos123` to reach the
 **Developer Dashboard** (Settings → Developer Dashboard): overview analytics, users,
 per-user drill-down, and the "skip 2 days" control for demonstrating the spaced-gap
