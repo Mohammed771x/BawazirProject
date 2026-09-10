@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/router.dart';
 import '../../core/api/api_providers.dart';
+import '../../core/api/wordos_api.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
@@ -30,9 +31,13 @@ final wordsProvider = FutureProvider.autoDispose.family<WordPage, String>((
 /// their vocabulary and a way to search it; the state still shows on each row,
 /// in words about learning rather than about the pipeline.
 ///
-/// Nothing is hidden: archived words are still listed, because a word is never
-/// deleted (rule R8) and disappearing from this screen would look exactly like
-/// deletion.
+/// Nothing is hidden by the *system*: archived words are still listed, because
+/// rule R8 forbids the system removing a word and disappearing from this screen
+/// would look exactly like deletion.
+///
+/// The learner may remove one themselves (ADR-071), by swiping the row or from
+/// the word's own screen. That is a different thing from the system deciding a
+/// word is finished with, and it is the learner's list.
 class VocabularyScreen extends ConsumerStatefulWidget {
   const VocabularyScreen({super.key});
 
@@ -59,6 +64,59 @@ class _VocabularyScreenState extends ConsumerState<VocabularyScreen> {
     _debounce = Timer(const Duration(milliseconds: 300), () {
       if (mounted) setState(() => _query = value.trim());
     });
+  }
+
+  /// Confirms, deletes, and reports whether the row may go.
+  ///
+  /// Returns false on refusal *and* on failure, which is what keeps the list
+  /// honest: the row stays exactly where it was unless the server actually
+  /// removed the word.
+  Future<bool> _delete(Word word) async {
+    final s = ref.read(stringsProvider);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(s.deleteWordConfirmTitle),
+        content: Text(s.deleteWordConfirmBody(word.text)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(s.cancel),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: context.palette.danger,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(s.deleteWord),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return false;
+
+    try {
+      await ref.read(wordOsApiProvider).deleteWord(word.id);
+      if (!mounted) return false;
+
+      // Refetched rather than removed locally: the count in the header is the
+      // server's, and so is the page this row came from (rule R1).
+      ref.invalidate(wordsProvider(_query));
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(s.deleteWordDone)));
+      return true;
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(s.apiError(e.code, e.message))),
+        );
+      }
+      return false;
+    }
   }
 
   @override
@@ -142,11 +200,64 @@ class _VocabularyScreenState extends ConsumerState<VocabularyScreen> {
             );
           }
           final word = page.items[index - 1];
-          return WordTile(
-            word: word,
-            onTap: () => context.push(Routes.word(word.id)),
+          return Dismissible(
+            key: ValueKey(word.id),
+            // One direction only. A list of vocabulary is read in both
+            // directions depending on the interface language, and a row that
+            // deletes whichever way it is pushed is a row that deletes by
+            // accident.
+            direction: DismissDirection.endToStart,
+            background: _DeleteBackground(),
+            // `confirmDismiss` rather than `onDismissed`: the row must not
+            // animate away before the server has agreed, or a failed delete
+            // leaves the learner looking at a list that lies to them.
+            confirmDismiss: (_) => _delete(word),
+            child: WordTile(
+              word: word,
+              // Refreshed on the way back rather than left to whoever changed
+              // something over there to remember to invalidate this. The word's
+              // own screen can delete it, and a list that still shows a word the
+              // learner has just watched themselves delete is the worst of the
+              // available outcomes.
+              onTap: () async {
+                await context.push(Routes.word(word.id));
+                if (mounted) ref.invalidate(wordsProvider(_query));
+              },
+            ),
           );
         },
+      ),
+    );
+  }
+}
+
+
+/// What shows behind a row being swiped away.
+///
+/// Red, and labelled. An unlabelled coloured panel is a guess; a learner who
+/// has swiped far enough to see this should already know what letting go does.
+class _DeleteBackground extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+
+    return Container(
+      alignment: AlignmentDirectional.centerEnd,
+      padding: const EdgeInsetsDirectional.only(end: AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: context.palette.danger,
+        borderRadius: AppRadii.cardBorder,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.delete_outline_rounded, color: Colors.white),
+          const SizedBox(width: AppSpacing.xs),
+          Text(
+            s.deleteWord,
+            style: context.text.labelLarge?.copyWith(color: Colors.white),
+          ),
+        ],
       ),
     );
   }

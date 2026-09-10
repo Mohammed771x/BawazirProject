@@ -45,6 +45,11 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          // The mock backend, pinned. A widget test must not depend on a
+          // server being up — see the note on `testOverrides`.
+          appEnvironmentProvider.overrideWithValue(
+            const AppEnvironment(useMockBackend: true, baseUrl: ''),
+          ),
           appPreferencesProvider.overrideWithValue(
             InMemoryAppPreferences(locale: locale, themeMode: theme),
           ),
@@ -146,6 +151,10 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          // The mock backend, pinned — see the note on `testOverrides`.
+          appEnvironmentProvider.overrideWithValue(
+            const AppEnvironment(useMockBackend: true, baseUrl: ''),
+          ),
           appPreferencesProvider.overrideWithValue(
             InMemoryAppPreferences(
                 locale: const Locale('en'), themeMode: ThemeMode.dark),

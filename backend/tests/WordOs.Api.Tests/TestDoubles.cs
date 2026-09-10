@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using WordOs.Application.Abstractions;
 using WordOs.Domain.Common;
+using WordOs.Infrastructure.Ai;
 
 namespace WordOs.Api.Tests;
 
@@ -52,6 +53,33 @@ public sealed class StubAiContentService : IAiContentService
 
     /// <summary>An Active word every speaking turn drops into its reply.</summary>
     public string? SpeakingReuseWord { get; set; }
+
+    /// <summary>Set by a test to make the meaning checker reject (ADR-074).</summary>
+    public bool RejectMeanings { get; set; }
+
+    /// <summary>The correction the checker offers, when it offers one.</summary>
+    public string? MeaningCorrection { get; set; }
+
+    /// <summary>How many meanings were checked. A test asserts this is zero
+    /// for the paths that must not call the checker at all.</summary>
+    public int MeaningChecks { get; private set; }
+
+    public Task<MeaningCheck> CheckMeaningAsync(
+        MeaningCheckRequest request,
+        CancellationToken ct = default)
+    {
+        MeaningChecks++;
+
+        // `Fail` is the AI outage switch the whole double shares. The check has
+        // no fallback (ADR-074), so it throws where the others degrade.
+        if (Fail) throw new AiServiceException("stub failure");
+
+        return Task.FromResult(new MeaningCheck(
+            Matches: !RejectMeanings,
+            Corrected: MeaningCorrection,
+            Suggestions: RejectMeanings ? ["كتاب", "مؤلف"] : [],
+            Note: RejectMeanings ? "هذا المعنى غير صحيح." : "المعنى صحيح."));
+    }
 
     public Task<GeneratedContent> GenerateContentAsync(
         ContentRequest request,

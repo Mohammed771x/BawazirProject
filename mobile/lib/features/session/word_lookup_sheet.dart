@@ -28,6 +28,7 @@ Future<void> showWordLookup(
   required String word,
   required bool isTarget,
   required Color color,
+  required String sessionId,
   GlossaryEntry? inContext,
 }) {
   return showModalBottomSheet<void>(
@@ -38,6 +39,7 @@ Future<void> showWordLookup(
       word: word,
       isTarget: isTarget,
       color: color,
+      sessionId: sessionId,
       inContext: inContext,
     ),
   );
@@ -48,12 +50,21 @@ class _WordLookupSheet extends ConsumerStatefulWidget {
     required this.word,
     required this.isTarget,
     required this.color,
+    required this.sessionId,
     this.inContext,
   });
 
   final String word;
   final bool isTarget;
   final Color color;
+
+  /// Which passage this word was tapped in.
+  ///
+  /// Sent when adding, so the server can answer what the word meant *there*
+  /// from the glossary it stored (ADR-073). It is the whole address of the
+  /// meaning: without it there is only the dictionary, and the dictionary does
+  /// not know which sentence the learner was reading.
+  final String sessionId;
 
   /// What this word means *in this passage*, written by the generator as it
   /// composed the sentence. When present nothing is fetched: the answer is
@@ -69,6 +80,10 @@ class _WordLookupSheetState extends ConsumerState<_WordLookupSheet> {
   final _added = <String>{};
   String? _error;
   bool _saving = false;
+
+  /// Set when the passage turned out to have no meaning for this word after
+  /// all, and the sheet switched to the dictionary mid-flight.
+  bool _fellBackToDictionary = false;
 
   @override
   void initState() {
@@ -142,7 +157,7 @@ class _WordLookupSheetState extends ConsumerState<_WordLookupSheet> {
             const SizedBox(height: AppSpacing.sm),
             if (widget.isTarget)
               _Note(text: s.targetWordNoMeaning)
-            else if (widget.inContext != null)
+            else if (widget.inContext != null && !_fellBackToDictionary)
               _inContextBody(s, widget.inContext!)
             else
               _definitionBody(s),
@@ -210,12 +225,19 @@ class _WordLookupSheetState extends ConsumerState<_WordLookupSheet> {
     );
   }
 
-  /// Adds the word with the sense the passage actually used.
+  /// Adds the word with the meaning the passage gave it (ADR-073).
   ///
-  /// The lexicon is still the source of truth for what may be added
-  /// (ADR-012), so the sense list is fetched and the entry closest to the
-  /// meaning the learner just read is chosen. Falling back to the first sense
-  /// would file the word under a meaning they never saw.
+  /// One call, and it sends no meaning. The server holds the glossary it wrote
+  /// when it generated this passage and answers from that.
+  ///
+  /// What this replaced is worth recording, because it is the bug the learner
+  /// actually reported. The sheet used to fetch the word's dictionary senses
+  /// and pick whichever *read* closest to the gloss on screen — exact match
+  /// first, then any sense sharing a word with it, then `senses.first`. For
+  /// `bank` in a passage about a river that is a coin flip, and the learner who
+  /// tapped "ضفة النهر" got "مصرف" in My Words. It was also a small breach of
+  /// rule R1: deciding which sense a word is, is not the client's decision to
+  /// make.
   Future<void> _addInContext(GlossaryEntry entry) async {
     final s = ref.read(stringsProvider);
     setState(() {
@@ -224,46 +246,29 @@ class _WordLookupSheetState extends ConsumerState<_WordLookupSheet> {
     });
 
     try {
-      final definition =
-          await ref.read(wordOsApiProvider).defineWord(widget.word);
-
-      if (definition.senses.isEmpty) {
-        if (mounted) setState(() => _error = s.noDictionaryEntry);
-        return;
-      }
-
-      final chosen = _closestTo(entry.meaning, definition.senses);
-      await ref.read(wordOsApiProvider).addWord(chosen);
-      if (mounted) setState(() => _added.add(chosen.senseId ?? chosen.meaning));
+      await ref.read(wordOsApiProvider).addWordFromPassage(
+            sessionId: widget.sessionId,
+            word: widget.word,
+          );
+      if (mounted) setState(() => _added.add(entry.meaning));
     } catch (rawError) {
       final e = ApiException.from(rawError);
       if (mounted) {
-        setState(() => _error = s.apiError(e.code, e.message));
+        setState(() {
+          // The passage did not gloss this word after all — a name, a number.
+          // The dictionary is the only answer left, so it is offered rather
+          // than reported as a failure.
+          if (e.code == 'NOT_IN_PASSAGE') {
+            _definition = ref.read(wordOsApiProvider).defineWord(widget.word);
+            _fellBackToDictionary = true;
+          } else {
+            _error = s.apiError(e.code, e.message);
+          }
+        });
       }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
-  }
-
-  /// The lexicon sense whose meaning reads closest to the passage's.
-  static WordCandidate _closestTo(
-    String meaning,
-    List<WordCandidate> senses,
-  ) {
-    final needle = meaning.trim();
-
-    for (final sense in senses) {
-      if (sense.meaning.trim() == needle) return sense;
-    }
-    // No exact match: prefer one that shares a word with it, then give up and
-    // take the most common sense.
-    for (final sense in senses) {
-      if (sense.meaning.split(' ').any((w) =>
-          w.length > 2 && needle.contains(w))) {
-        return sense;
-      }
-    }
-    return senses.first;
   }
 
   Widget _definitionBody(AppStrings s) {

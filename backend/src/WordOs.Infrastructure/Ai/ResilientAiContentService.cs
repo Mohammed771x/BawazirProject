@@ -32,6 +32,30 @@ public sealed class ResilientAiContentService(
     IAiContentService inner,
     ILogger<ResilientAiContentService> logger) : IAiContentService
 {
+    /// <summary>
+    /// Checks a learner-written meaning — and, alone in this class, does not
+    /// catch anything (ADR-074).
+    /// </summary>
+    /// <remarks>
+    /// Every other call here degrades: a passage becomes a hand-written one and
+    /// the learner keeps going, because being unable to reach a model is not a
+    /// reason to stop somebody learning. This one cannot degrade, because there
+    /// is nothing to degrade *to*. A fallback would have to answer "does this
+    /// Arabic mean what this English word means", and the only answers
+    /// available without a model are "yes" — which lets an unchecked meaning in
+    /// wearing the same badge as a checked one — or "no", which refuses a
+    /// learner who is probably right.
+    ///
+    /// So the failure travels, and the endpoint says so: try again in a moment
+    /// (503). It is a pass-through rather than an absence because being
+    /// explicit about *why* there is no fallback is the whole point — the next
+    /// person to add one here should have to delete this comment first.
+    /// </remarks>
+    public Task<MeaningCheck> CheckMeaningAsync(
+        MeaningCheckRequest request,
+        CancellationToken ct = default) =>
+        inner.CheckMeaningAsync(request, ct);
+
     public async Task<GeneratedContent> GenerateContentAsync(
         ContentRequest request,
         CancellationToken ct = default)

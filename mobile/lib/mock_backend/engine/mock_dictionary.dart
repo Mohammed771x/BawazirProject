@@ -88,6 +88,21 @@ class MockDictionary {
         isSpellingSuggestion: false,
       ),
     ],
+    // In the passage this stand-in generates, and deliberately carrying a
+    // *different* first meaning from the one the passage glosses it with
+    // ('طالب'). That difference is the point: it is what lets a test tell a word
+    // added with the passage's meaning apart from one added with the
+    // dictionary's (ADR-073).
+    'student': [
+      WordCandidate(
+        text: 'student',
+        meaning: 'دارس',
+        definitionEn: 'a person who studies a subject in depth',
+        partOfSpeech: 'noun',
+        suggestedLevel: CefrLevel.a1,
+        isSpellingSuggestion: false,
+      ),
+    ],
     'research': [
       WordCandidate(
         text: 'research',

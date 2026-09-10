@@ -34,12 +34,26 @@ class FakeTokenStore extends TokenStore {
   }
 }
 
-/// Overrides every provider that would otherwise reach a platform channel.
+/// Overrides every provider that would otherwise reach a platform channel —
+/// or the network.
 ///
 /// Tests pin the locale to English so assertions can be written against the
 /// English strings; the Arabic default is asserted separately in
 /// `localization_test.dart`.
+///
+/// The environment is pinned too, and that one is not a convenience. Since
+/// `WORDOS_MOCK` began defaulting to `false` — right, for a device build —
+/// every widget test that signed in was pointing at a real server that is not
+/// running, and the whole suite failed on a `--dart-define` nobody had passed.
+/// The failure did not say so: it said "Found 0 widgets with text 'Skills
+/// Hub'", which reads as a UI regression and is not one.
+///
+/// A widget test must never depend on something outside the process being up,
+/// so the choice is made here rather than left to how the runner was invoked.
 List<Override> testOverrides({Locale locale = const Locale('en')}) => [
+      appEnvironmentProvider.overrideWithValue(
+        const AppEnvironment(useMockBackend: true, baseUrl: ''),
+      ),
       appPreferencesProvider
           .overrideWithValue(InMemoryAppPreferences(locale: locale)),
       tokenStoreProvider.overrideWith((ref) => FakeTokenStore()),

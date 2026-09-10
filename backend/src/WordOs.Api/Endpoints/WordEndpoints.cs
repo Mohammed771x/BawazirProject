@@ -1,6 +1,9 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using WordOs.Application.Abstractions;
+using WordOs.Infrastructure.Ai;
 using WordOs.Application.Lexicon;
 using WordOs.Application.Words;
 using WordOs.Domain.Common;
@@ -24,10 +27,63 @@ public static class WordEndpoints
 
     // `[property: ...]` — see the note in AuthEndpoints: without it the
     // annotations bind to the constructor parameter and never run.
+    /// <param name="SenseId">
+    /// The lexicon sense being added — the ordinary path, and the only one that
+    /// results in a <see cref="MeaningSource.Lexicon"/> meaning. Optional now
+    /// only because the other two paths identify the word by its text instead
+    /// (ADR-072, ADR-073); one of the three must still say which word.
+    /// </param>
+    /// <param name="CustomMeaning">
+    /// The Arabic meaning the learner typed for themselves (ADR-072). The word
+    /// itself is still resolved against the lexicon — the meaning is what is
+    /// free, not the spelling.
+    /// </param>
+    /// <param name="AcceptAnyway">
+    /// Save the written meaning even though the checker rejected it (ADR-074).
+    /// Set only after the learner has been shown what the checker said and has
+    /// chosen to keep their own wording — the check still ran, and the
+    /// disagreement is recorded.
+    /// </param>
+    /// <param name="FromSessionId">
+    /// Add the word with the meaning it carries <i>in this session's passage</i>
+    /// (ADR-073). The meaning is read from the glossary this server stored when
+    /// it generated the passage, never from the request: what the client sends
+    /// is which session and which word, and the server answers what that word
+    /// meant there.
+    /// </param>
     public sealed record AddWordRequest(
-        [property: Required, MaxLength(64)] string SenseId,
+        [property: MaxLength(64)] string? SenseId,
         [property: MaxLength(128)] string? Text,
-        [property: MaxLength(256)] string? Meaning);
+        [property: MaxLength(256)] string? Meaning,
+        [property: MaxLength(256)] string? CustomMeaning = null,
+        Guid? FromSessionId = null,
+        bool AcceptAnyway = false);
+
+    /// <summary>
+    /// One row of a stored passage glossary, as <c>SessionEndpoints</c> wrote it.
+    /// </summary>
+    /// <remarks>
+    /// Declared again rather than shared: this is a persisted JSON shape, and
+    /// two endpoints reading the same stored bytes is exactly the case where a
+    /// shared record turns a display tweak in one into a silent parse change in
+    /// the other.
+    /// </remarks>
+    private sealed record StoredGlossaryRow(
+        string? Word,
+        string? Meaning,
+        string? PartOfSpeech);
+
+    private static readonly JsonSerializerOptions GlossaryJsonOptions =
+        new() { PropertyNameCaseInsensitive = true };
+
+    /// <summary>The lexicon facts a word needs, however its meaning was chosen.</summary>
+    private sealed record LexiconFacts(
+        string SenseId,
+        string Text,
+        string MeaningAr,
+        string DefinitionEn,
+        string PartOfSpeech,
+        CefrLevel? CefrLevel);
 
     /// <param name="Form">
     /// Which form of the word this entry is — <c>past</c>, <c>pastParticiple</c>,
@@ -85,6 +141,7 @@ public static class WordEndpoints
         group.MapPost("", AddAsync);
         group.MapGet("", ListAsync);
         group.MapGet("/{id:guid}", DetailAsync);
+        group.MapDelete("/{id:guid}", DeleteAsync);
 
         return app;
     }
@@ -276,16 +333,40 @@ public static class WordEndpoints
     /// Adds a word to the learner's pipeline.
     /// </summary>
     /// <remarks>
-    /// The request body is a <b>lookup key</b>, never a source of truth: the
-    /// sense is re-resolved against the lexicon and the stored row is what gets
-    /// copied, so a forged level, definition or meaning is discarded
-    /// (ADR-012, docs/07-SECURITY.md §5).
+    /// Three ways in, and they differ only in <b>where the Arabic meaning comes
+    /// from</b>. The word itself is resolved against the lexicon every time: the
+    /// meaning is what the learner may choose, not the spelling, because a CEFR
+    /// level, a part of speech and a definition are needed to generate content
+    /// about it and nothing can supply those for a string nobody recognises.
+    ///
+    /// <list type="number">
+    /// <item><b>A lexicon sense</b> (<c>senseId</c>) — the original path,
+    /// unchanged. The body is a <i>lookup key</i>: the sense is re-resolved and
+    /// the stored row is copied, so a forged level, definition or meaning is
+    /// discarded (ADR-012, docs/07-SECURITY.md §5).</item>
+    ///
+    /// <item><b>A meaning the learner typed</b> (<c>customMeaning</c>) — ADR-072.
+    /// The one thing the client may genuinely author, and it is theirs to
+    /// author: the Arabic glosses are a machine join of three datasets and
+    /// <c>sell</c> offers "أَقْنَعَ بِـ" before "باع". A learner who knows what they
+    /// meant should not have to accept the join's guess.</item>
+    ///
+    /// <item><b>The meaning from a passage</b> (<c>fromSessionId</c>) — ADR-073.
+    /// The client says which session and which word; the meaning is read from
+    /// the glossary <i>this server stored</i> when it generated the passage.
+    /// Nothing about the meaning is taken from the request, which is the point:
+    /// the client used to fetch the senses and pick the closest one itself, and
+    /// picked wrong often enough that words were filed under meanings the
+    /// learner had never seen.</item>
+    /// </list>
     /// </remarks>
     private static async Task<IResult> AddAsync(
         AddWordRequest request,
         ClaimsPrincipal principal,
         WordOsDbContext db,
         WordOsConfiguration config,
+        IAiContentService ai,
+        HttpContext http,
         TimeProvider clock,
         CancellationToken ct)
     {
@@ -295,19 +376,239 @@ public static class WordEndpoints
         var userId = principal.UserId();
         if (userId is null) return Results.Unauthorized();
 
-        var entry = await db.LexiconEntries
-            .FirstOrDefaultAsync(l => l.SenseId == request.SenseId, ct);
+        var text = SearchTerm.Clean(request.Text);
+        var custom = SearchTerm.Clean(request.CustomMeaning);
 
-        if (entry is null)
+        string senseId;
+        string storedText;
+        string storedMeaning;
+        string definitionEn;
+        string partOfSpeech;
+        CefrLevel? level;
+        MeaningSource source;
+        MeaningCheckResult? check = null;
+
+        if (request.FromSessionId is { } sessionId)
         {
-            return Problems.NotFound(
-                "WORD_NOT_FOUND",
-                "That word and meaning are not in the dictionary.");
+            // ── The word as this passage used it (ADR-073) ──────────────────
+            if (text.Length == 0)
+                return Problems.BadRequest("BAD_WORD", "Provide a word.");
+
+            // Scoped to the caller: another learner's session is not
+            // addressable, and answers 404 rather than 403 so the id itself
+            // reveals nothing (docs/07-SECURITY.md §4).
+            var session = await db.SkillSessions.FirstOrDefaultAsync(
+                s => s.Id == sessionId && s.UserId == userId, ct);
+
+            if (session?.GlossaryJson is null)
+            {
+                return Problems.NotFound(
+                    "SESSION_NOT_FOUND", "That passage is no longer available.");
+            }
+
+            // Case-insensitive, and every field treated as nullable despite the
+            // record saying otherwise. This JSON was written by an older build
+            // of this service and sits in the database until the session ages
+            // out; `Deserialize` will happily hand back a row of nulls for a
+            // shape it does not recognise, and the `.Trim()` below would then be
+            // a 500 rather than a miss.
+            var glossary =
+                JsonSerializer.Deserialize<List<StoredGlossaryRow>>(
+                    session.GlossaryJson, GlossaryJsonOptions) ?? [];
+
+            var row = glossary.FirstOrDefault(g =>
+                string.Equals(g.Word?.Trim(), text, StringComparison.OrdinalIgnoreCase));
+
+            // The generator glosses every content word, but not every word: a
+            // name or a number has no entry. Refusing here is what sends the
+            // client back to the ordinary dictionary sheet, which is the right
+            // answer for a word this passage never explained.
+            if (row is null || string.IsNullOrWhiteSpace(row.Meaning))
+            {
+                return Problems.NotFound(
+                    "NOT_IN_PASSAGE",
+                    "This passage has no meaning recorded for that word.");
+            }
+
+            var facts = await ResolveLexiconAsync(text, db, ct);
+            if (facts is null) return LexiconMiss(text);
+
+            storedText = facts.Text;
+            storedMeaning = row.Meaning!.Trim();
+            definitionEn = facts.DefinitionEn;
+            // The glossary knows the word's role *in this sentence*, which the
+            // lexicon's commonest sense does not: "will" is an auxiliary here
+            // and a noun three entries up.
+            partOfSpeech = string.IsNullOrWhiteSpace(row.PartOfSpeech)
+                ? facts.PartOfSpeech
+                : row.PartOfSpeech.Trim();
+            level = facts.CefrLevel;
+            source = MeaningSource.Passage;
+            senseId = CustomSenses.For(storedText, storedMeaning);
+        }
+        else if (custom.Length > 0)
+        {
+            // ── A meaning the learner wrote (ADR-072) ───────────────────────
+            if (text.Length == 0)
+                return Problems.BadRequest("BAD_WORD", "Provide a word.");
+
+            if (!ArabicText.ContainsArabic(custom))
+            {
+                // The whole pipeline asks "what does this mean?" and marks the
+                // answer against this string. A meaning written in English
+                // would make every Reading and Listening question unanswerable
+                // by its own key, so it is refused here rather than discovered
+                // two days later in a session.
+                return Problems.BadRequest(
+                    "MEANING_NOT_ARABIC",
+                    "Write the meaning in Arabic.");
+            }
+
+            var facts = await ResolveLexiconAsync(text, db, ct);
+            if (facts is null) return LexiconMiss(text);
+
+            // The one place in this service where a model is asked about
+            // something the learner typed *before* it is stored (ADR-074).
+            // Everything downstream marks answers against this string, so a
+            // meaning that is wrong or misspelled is not a cosmetic problem —
+            // it is five sessions asking the wrong question.
+            MeaningCheck verdict;
+            try
+            {
+                verdict = await ai.CheckMeaningAsync(
+                    new MeaningCheckRequest(
+                        facts.Text,
+                        await SensesOfAsync(facts.Text, db, ct),
+                        facts.PartOfSpeech,
+                        custom,
+                        LearnerLanguage.From(http.Request)),
+                    ct);
+            }
+            catch (Exception e) when (e is AiServiceException
+                                          or HttpRequestException
+                                          or TaskCanceledException)
+            {
+                // No fallback exists for this question, so the honest answer is
+                // "not now" — the learner's session is untouched and the word
+                // is unsaved (ADR-074). 503 rather than 500: it clears.
+                return Problems.Unavailable(
+                    "MEANING_CHECK_UNAVAILABLE",
+                    "Could not check that meaning just now. Try again in a moment.");
+            }
+
+            if (!verdict.Matches && !request.AcceptAnyway)
+            {
+                // Not an error — a second question. The learner is shown what
+                // the checker said and what it would accept, and may still
+                // insist, which comes back with `acceptAnyway`.
+                return Results.Json(
+                    new
+                    {
+                        error = new
+                        {
+                            code = "MEANING_REJECTED",
+                            message = verdict.Note,
+                            suggestions = verdict.Suggestions,
+                            corrected = verdict.Corrected,
+                        },
+                    },
+                    statusCode: StatusCodes.Status409Conflict);
+            }
+
+            // A meaning the checker accepted but would spell differently is the
+            // same refusal with one suggestion: silently storing the correction
+            // would put words in the learner's mouth, and silently storing the
+            // misspelling would teach it.
+            if (verdict.Matches
+                && verdict.Corrected is { Length: > 0 } corrected
+                && !string.Equals(corrected, custom, StringComparison.Ordinal)
+                && !request.AcceptAnyway)
+            {
+                return Results.Json(
+                    new
+                    {
+                        error = new
+                        {
+                            code = "MEANING_REJECTED",
+                            message = verdict.Note,
+                            suggestions = new[] { corrected },
+                            corrected,
+                        },
+                    },
+                    statusCode: StatusCodes.Status409Conflict);
+            }
+
+            storedText = facts.Text;
+            storedMeaning = custom;
+            definitionEn = facts.DefinitionEn;
+            partOfSpeech = facts.PartOfSpeech;
+            level = facts.CefrLevel;
+            source = MeaningSource.Learner;
+            // Recorded, not just acted on: "the model said no and the learner
+            // said yes anyway" is the fact that explains a word failing
+            // Spelling a fortnight later.
+            check = verdict.Matches
+                ? MeaningCheckResult.Approved
+                : MeaningCheckResult.Overridden;
+            senseId = CustomSenses.For(storedText, storedMeaning);
+        }
+        else
+        {
+            // ── A lexicon sense: unchanged (ADR-012) ────────────────────────
+            if (string.IsNullOrWhiteSpace(request.SenseId))
+            {
+                return Problems.BadRequest(
+                    "BAD_REQUEST",
+                    "Choose a meaning or write one.");
+            }
+
+            // A client must not be able to mint a `custom:` id and post it as
+            // though the lexicon had issued it — that is the one way a forged
+            // meaning could reach the database through this path.
+            if (CustomSenses.IsCustom(request.SenseId))
+            {
+                return Problems.BadRequest(
+                    "BAD_SENSE", "That is not a dictionary meaning.");
+            }
+
+            var entry = await db.LexiconEntries
+                .FirstOrDefaultAsync(l => l.SenseId == request.SenseId, ct);
+
+            if (entry is null)
+            {
+                return Problems.NotFound(
+                    "WORD_NOT_FOUND",
+                    "That word and meaning are not in the dictionary.");
+            }
+
+            senseId = entry.SenseId;
+            storedText = entry.Text;
+            storedMeaning = entry.MeaningAr;
+            definitionEn = entry.DefinitionEn;
+            partOfSpeech = entry.PartOfSpeech;
+            level = entry.CefrLevel;
+            source = MeaningSource.Lexicon;
         }
 
-        // Duplicate identity is the sense, scoped to this learner.
+        // Duplicate identity is the sense, scoped to this learner. Deleted rows
+        // are invisible here — the query filter drops them (ADR-071) — so a word
+        // the learner removed and wants back is added afresh rather than refused.
         var duplicate = await db.Words.AnyAsync(
-            w => w.UserId == userId && w.SenseId == entry.SenseId, ct);
+            w => w.UserId == userId && w.SenseId == senseId, ct);
+
+        // A written meaning can land on the same text and gloss as a lexicon
+        // sense — type "باع" for `sell` and it reads identically to
+        // `sell%2:40:00::`. Those are different sense ids, so the index would
+        // let both in and the learner would own the same card twice. Checked
+        // here because it is the only place that can see both.
+        if (!duplicate && source != MeaningSource.Lexicon)
+        {
+            duplicate = await db.Words.AnyAsync(
+                w => w.UserId == userId
+                     && w.Meaning == storedMeaning
+                     && EF.Functions.ILike(w.Text, storedText), ct);
+        }
+
         if (duplicate)
         {
             return Problems.Conflict(
@@ -317,17 +618,19 @@ public static class WordEndpoints
 
         var word = Word.Add(
             userId.Value,
-            entry.SenseId,
-            entry.Text,
-            entry.MeaningAr,
-            entry.DefinitionEn,
-            entry.PartOfSpeech,
+            senseId,
+            storedText,
+            storedMeaning,
+            definitionEn,
+            partOfSpeech,
             // A sense with no CEFR band still enters the pipeline; B1 is the
             // neutral default for content generation, and the level engine
             // corrects it from real performance.
-            entry.CefrLevel ?? CefrLevel.B1,
+            level ?? CefrLevel.B1,
             config,
-            clock.GetUtcNow());
+            clock.GetUtcNow(),
+            source,
+            check);
 
         db.Words.Add(word);
         db.ActivityEvents.Add(ActivityEvent.Record(
@@ -350,6 +653,152 @@ public static class WordEndpoints
         }
 
         return Results.Ok(ToResponse(word));
+    }
+
+    private static IResult LexiconMiss(string text) =>
+        Problems.NotFound(
+            "WORD_NOT_FOUND",
+            $"'{text}' is not in the dictionary.");
+
+    /// <summary>
+    /// What the lexicon knows about a word, whatever meaning is being attached
+    /// to it.
+    /// </summary>
+    /// <remarks>
+    /// The level, the part of speech and the English definition are not the
+    /// learner's to write: they drive which passages a word appears in, how
+    /// Spelling clues it, and whether the level engine reads a failure as
+    /// evidence. So even a hand-written meaning is hung on a real entry — which
+    /// also settles what a "word" is, and keeps <c>asdfgh</c> out of a pipeline
+    /// that would spend five sessions on it.
+    ///
+    /// <para>Resolved through <see cref="SurfaceForms"/> for the same reason
+    /// <c>/define</c> is: the learner types the word as they met it. The
+    /// commonest sense wins — <c>FrequencyRank</c> first — because it is only
+    /// being asked for the word's grammar, not for its meaning.</para>
+    /// </remarks>
+    private static async Task<LexiconFacts?> ResolveLexiconAsync(
+        string text,
+        WordOsDbContext db,
+        CancellationToken ct)
+    {
+        foreach (var candidate in SurfaceForms.CandidatesFor(text))
+        {
+            var entry = await db.LexiconEntries
+                .Where(l => l.TextNormalized == candidate)
+                // A row that carries a CEFR band is worth more here than a
+                // marginally commoner one that does not: the band is half of
+                // what this lookup exists to find.
+                .OrderBy(l => l.CefrLevel == null ? 1 : 0)
+                .ThenBy(l => l.FrequencyRank)
+                .ThenBy(l => l.SenseId)
+                .FirstOrDefaultAsync(ct);
+
+            if (entry is not null)
+            {
+                return new LexiconFacts(
+                    entry.SenseId, entry.Text, entry.MeaningAr,
+                    entry.DefinitionEn, entry.PartOfSpeech, entry.CefrLevel);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The English senses of a word, spread across its parts of speech.
+    /// </summary>
+    /// <remarks>
+    /// What the meaning checker is judged against (ADR-074), and the spread is
+    /// the whole point.
+    ///
+    /// <para>Taking the commonest eight looked obviously right and was wrong,
+    /// which is why it is worth the words: <c>book</c> has nine noun senses and
+    /// three verb senses, and the nine nouns rank higher — so the checker was
+    /// handed eight nouns, never learned that <c>book</c> is also a verb, and
+    /// rejected a learner who wrote <c>يحجز</c>. That is precisely the meaning
+    /// ADR-072 exists to let them write, refused by the feature meant to help
+    /// them.</para>
+    ///
+    /// <para>So: a few per part of speech, commonest first within each. A
+    /// learner who means the rare sense of a common word is still served,
+    /// because the model is told the word has that part of speech at all —
+    /// which is the thing it cannot guess and the thing it was missing.</para>
+    /// </remarks>
+    private static async Task<List<string>> SensesOfAsync(
+        string text,
+        WordOsDbContext db,
+        CancellationToken ct)
+    {
+        var normalized = text.Trim().ToLowerInvariant();
+
+        var rows = await db.LexiconEntries
+            .Where(l => l.TextNormalized == normalized
+                        && l.DefinitionEn != null
+                        && l.DefinitionEn != "")
+            .OrderBy(l => l.FrequencyRank)
+            .ThenBy(l => l.SenseId)
+            .Select(l => new { l.PartOfSpeech, l.DefinitionEn })
+            // Bounded before grouping: a word with a long tail should not pull
+            // its whole entry into memory to throw most of it away.
+            .Take(40)
+            .ToListAsync(ct);
+
+        return rows
+            .GroupBy(r => r.PartOfSpeech)
+            .SelectMany(g => g.Take(3))
+            .Select(r => $"{r.PartOfSpeech}: {r.DefinitionEn}")
+            .Distinct()
+            .Take(10)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Removes a word from the learner's vocabulary (ADR-071).
+    /// </summary>
+    /// <remarks>
+    /// A state change rather than a <c>DELETE</c>, for reasons set out on
+    /// <see cref="Word.Delete"/>: the learner sees it gone everywhere, the
+    /// evidence stays for the Owner.
+    ///
+    /// <para>An open session that included this word is deliberately left
+    /// alone. It finishes normally and simply applies nothing to the word —
+    /// completion already handles a word that has moved on since the session
+    /// opened (ADR-043), and a deleted word is that case. Tearing the session
+    /// down instead would lose the answers the learner had already given on the
+    /// <i>other</i> words in it.</para>
+    ///
+    /// <para>Idempotent: deleting an already-deleted word answers 204 rather
+    /// than 404, because the second call is what a retried request looks like
+    /// and the learner's intent is satisfied either way.</para>
+    /// </remarks>
+    private static async Task<IResult> DeleteAsync(
+        Guid id,
+        ClaimsPrincipal principal,
+        WordOsDbContext db,
+        TimeProvider clock,
+        CancellationToken ct)
+    {
+        var userId = principal.UserId();
+        if (userId is null) return Results.Unauthorized();
+
+        // `IgnoreQueryFilters` so that a repeat of this very request finds the
+        // row it already deleted instead of 404-ing on it. Still scoped to the
+        // caller's own id: another learner's word is not addressable.
+        var word = await db.Words
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(w => w.Id == id && w.UserId == userId, ct);
+
+        if (word is null)
+            return Problems.NotFound("WORD_NOT_FOUND", "Word not found.");
+
+        if (word.State != WordState.Deleted)
+        {
+            word.Delete(clock.GetUtcNow());
+            await db.SaveChangesAsync(ct);
+        }
+
+        return Results.NoContent();
     }
 
     private static async Task<IResult> ListAsync(

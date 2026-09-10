@@ -2,11 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wordos/app/wordos_app.dart';
-import 'package:wordos/core/api/api_providers.dart';
 import 'package:wordos/core/audio/speech_provider.dart';
 import 'package:wordos/core/audio/speech_service.dart';
-import 'package:wordos/core/storage/app_preferences.dart';
-import 'package:wordos/core/storage/preferences_providers.dart';
 import 'package:wordos/core/widgets/app_widgets.dart';
 import 'package:wordos/features/session/session_widgets.dart';
 
@@ -32,9 +29,7 @@ void main() {
 
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        appPreferencesProvider
-            .overrideWithValue(InMemoryAppPreferences(locale: locale)),
-        tokenStoreProvider.overrideWith((ref) => FakeTokenStore()),
+        ...testOverrides(locale: locale),
         speechServiceProvider
             .overrideWith((ref) => SpeechService(provider: tts)),
       ],

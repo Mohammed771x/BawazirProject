@@ -1169,3 +1169,93 @@ longer exist{" — and a glossary of the new passage" if inline_glossary else ""
 {GLOSSARY_RULE if inline_glossary else _NO_INLINE_GLOSSARY}
 
 {"The glossary is not optional and not a summary: the learner taps words in this text to see what they mean here, and a word missing from it falls through to a dictionary, which answers about every sense the word has ever had instead of this one." if inline_glossary else "The learner is waiting for this. Write the passage and nothing else."}"""
+
+
+MEANING_CHECK_PROMPT_VERSION = "meaning-check-v1"
+
+MEANING_CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        # Does the Arabic the learner typed actually mean what the English word
+        # means? The only question that matters; everything else explains it.
+        "matches": {"type": "boolean"},
+        # The learner's own wording, spelled correctly — null when it already
+        # was. Distinct from `suggestions`: this is *their* meaning fixed, not a
+        # different meaning offered.
+        "corrected": {"type": "string"},
+        # Arabic meanings that would be right, when theirs is not.
+        "suggestions": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        # One sentence to the learner, in the language they read the app in.
+        "note": {"type": "string"},
+    },
+    "required": ["matches", "note"],
+}
+
+
+def meaning_check_prompt(*, word: str, definitions: list[str],
+                         part_of_speech: str, meaning: str,
+                         feedback_language: str = "ar") -> str:
+    """Checks an Arabic meaning a learner typed for an English word (ADR-074).
+
+    Note what this does NOT do: decide whether the word may be added. It
+    reports; the backend applies the rule, and the learner may overrule it
+    (rule R2). That matters more here than anywhere else in this service,
+    because this whole feature exists *because* an automated source of meanings
+    was wrong often enough to be unusable — replacing a bad dictionary with a
+    confident model that is also sometimes wrong, and giving the learner no way
+    past it, would be the same mistake wearing a different hat.
+
+    So the prompt is deliberately generous. A meaning is `matches: true` when it
+    is one of the word's real senses, in any register — dialect, a short gloss,
+    a longer paraphrase. It is false only when the Arabic names something the
+    word does not mean.
+
+    `definitions` is every sense the lexicon holds, and it has to be. Passing
+    only the commonest one rejected `book = يحجز` — which is correct, and is
+    exactly the kind of meaning this whole feature exists to let a learner
+    write.
+    """
+    # `part_of_speech` is deliberately not printed. It names the *commonest*
+    # sense's part of speech, and stating it above a list that already carries
+    # one per sense told the model "book is a noun" while the list said book is
+    # also a verb — and the model believed the headline. The list is the truth.
+    senses = "\n".join(f"  - {d}" for d in definitions if d) or "  - (unknown)"
+    return f"""A learner is adding the English word "{word}" to their \
+vocabulary, and has written what they think it means in Arabic.
+
+The word: {word}
+Everything it can mean in English:
+{senses}
+
+The learner wrote this Arabic meaning:
+"{meaning}"
+
+Judge it:
+
+- matches: true if the Arabic names one of this word's real meanings. Be \
+generous. Accept a dialect word, a one-word gloss, a longer paraphrase, a \
+different but valid synonym, and **any** of the senses listed above — not only \
+the first. The learner is allowed to mean any of them, and is also allowed to \
+mean a real sense the list happens to omit. Set false ONLY when the Arabic \
+names something "{word}" does not mean at all.
+
+- corrected: if the Arabic has a spelling mistake but is clearly aiming at a \
+correct meaning, give their wording with the spelling fixed and nothing else \
+changed. Otherwise omit it. Never use this to reword a meaning you simply \
+would have phrased differently.
+  If you mention a spelling problem in `note`, you MUST also fill `corrected` \
+with the fixed wording. A note saying the spelling is wrong, with no \
+correction beside it, tells the learner they made a mistake and leaves them to \
+guess what it was.
+
+- suggestions: when matches is false, up to three correct Arabic meanings of \
+"{word}", commonest first, each a short gloss rather than a sentence. Omit \
+when matches is true.
+
+- note: one short sentence addressed to the learner. If it is right, say so \
+plainly. If the spelling needs fixing, say which word. If the meaning is \
+wrong, say what "{word}" actually means. Do not scold, and do not hedge. \
+{feedback_language_rule(feedback_language)}"""

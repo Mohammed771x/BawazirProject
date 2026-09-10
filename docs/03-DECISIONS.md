@@ -2875,3 +2875,247 @@ Arabic, after the conversation. A goodbye is not the place to mark somebody.
   argued: a test signs in, throws the whole widget tree away, boots the app
   again against the same keystore, and asserts the learner lands on the hub with
   no sign-in form in sight.
+
+---
+
+## ADR-071 — A learner may delete a word; the system still may not
+**Date:** 2026-09-10 · **Status:** Accepted · **Relates to** rule R8, ADR-012
+
+**Reported:** "in My Words, I want to be able to delete the word."
+
+Nothing in the app could remove a word. That was deliberate, and the reasoning
+is still in the code: rule **R8** says exposure count is never a delete trigger,
+and the lifecycle says an Archived word keeps its row and its whole history
+(§31). My Words even lists Archived words on purpose, because disappearing from
+that screen would be indistinguishable from deletion.
+
+But R8 is a rule about **the system**. It exists so that a word cannot be quietly
+retired by an algorithm counting exposures. It never spoke to the learner
+removing a word they added by mistake, or added under a meaning they have since
+decided is wrong — which, given the state of the Arabic glosses (ADR-072), is
+not a rare event.
+
+**Decision — deletion is a state, not a `DELETE`.**
+
+`WordState.Deleted`, set by `Word.Delete`. To the learner it is gone: it leaves
+My Words, no session will ever ask about it again, the weekly review does not
+draw it. The row, its five skill states, its event log and its exposures all
+stay.
+
+**Why not a real delete.** This service exists to measure whether the pipeline
+works (`00-PROJECT-PLAN.md` §1). A word that ran through Reading and Listening
+and then vanished takes its evidence with it, and the Owner's dashboard would
+read the deletion as the word never having existed — the one reading of the data
+that is certainly false. The deletion itself is also a measurement: a learner
+giving up on a word at Writing is worth knowing about.
+
+**How it is enforced.** An EF Core **global query filter** on `Word`, not a
+`Where` clause at each call site. There are two dozen places that read words —
+five skill sessions, the hub, eligibility scans, the weekly review — and
+"remember to exclude deleted" would be wrong in one of them within a month. That
+one is a learner being tested on a word they deleted. The Owner's analytics opt
+back in with `IgnoreQueryFilters()`, deliberately and visibly, in the eight
+places that should see the whole history. The mock backend mirrors this exactly:
+`MockUser.allWords` is the store, `MockUser.words` is the filtered view.
+
+**Deleting and adding again gives a new journey.** The unique index on
+`(UserId, SenseId)` is now filtered on `"State" <> 'Deleted'`. Without that, a
+learner who removed a word could never add it back — refused for ever on the
+strength of a row they believe is gone. The new row starts at Reading with no
+history, which is what "I deleted it" means.
+
+**An open session is left alone.** A word deleted mid-session does not tear the
+session down: it finishes normally and applies nothing to that word. Completion
+already handled a word that had moved on since the session opened (ADR-043), and
+this is that case. Ending the session instead would throw away the answers the
+learner had already given on the *other* words in it. Two `First` calls that
+would have thrown on a filtered-out word — the writing evaluator, the mock's
+comprehension builder — were the real hazard here, and both are fixed.
+
+**Deleting twice answers 204.** A retried request is not a failure.
+
+## ADR-072 — The meaning is the learner's to write
+**Date:** 2026-09-10 · **Status:** Accepted · **Supersedes part of** ADR-012
+
+**Reported:** "the dictionary that is there now is very, very bad — the meanings
+on it do not match. Let them write the meaning by hand, or pick one of the ones
+that are there."
+
+This is measurable, not a matter of taste. From the live lexicon:
+
+```
+sell → أَقْنَعَ بِـ · باع · بِيعَ · بَاعَ · قُبِلَ · إقناع بالشراء
+```
+
+The first meaning offered for `sell` is "persuade to". Three of the six are the
+same verb in different vocalisations, one is passive, and the one a learner
+wants is second. That is what a machine join of CEFR-J, Open English WordNet and
+Arabic WordNet produces (ADR-012), and no amount of re-ranking fixes the glosses
+themselves.
+
+ADR-012 said the learner may only ever pick a meaning the lexicon provided,
+because a hand-written meaning can be wrong and the pipeline is built on the
+meaning being trustworthy. The reasoning is sound and the conclusion no longer
+follows: the alternative to a hand-written meaning is not a correct meaning, it
+is *the lexicon's*, and the lexicon is demonstrably wrong at the top of the list.
+Between a gloss the learner knows to be wrong and one they wrote themselves,
+theirs is the better bet — they are the only party in this system who knows what
+they meant.
+
+**Decision — the meaning may be written; the word may not.**
+
+`POST /api/words` accepts `customMeaning`. The word itself is still resolved
+against the lexicon, and a spelling it does not know is refused. That boundary
+is where it is for concrete reasons: the CEFR level decides which passages the
+word appears in, the part of speech shapes the generated sentences, and the
+English definition is the top rung of the Spelling hint ladder. None of the
+three can be invented for a string nobody recognises, and `asdfgh` must not
+enter a pipeline that will spend five sessions on it.
+
+**The meaning must be Arabic.** Every skill marks answers against this string.
+An English meaning makes its own comprehension questions unanswerable — refused
+at the door rather than discovered two days later inside a session.
+
+**Identity.** A written meaning has no synset to point at, so it gets a derived
+sense id: `custom:` + the first 128 bits of `SHA-256(text|meaning)`. Derived, not
+generated, so that the same word and the same meaning produce the same id and
+the unique index goes on doing its job — including for two taps arriving at
+once. A client may not post a `custom:` id down the lexicon path; that is the
+one way a forged meaning could get in, and it is refused.
+
+**`MeaningSource` is recorded** — `Lexicon`, `Learner` or `Passage`. The three
+are not equally trustworthy and the experiment has to be able to tell them
+apart. If words with learner-written meanings turn out to fail Spelling twice as
+often, that is a finding, and it is unreadable if every meaning looks alike in
+the data. The learner is never shown it: to them a meaning is a meaning.
+
+**What is *not* changed.** The lexicon's meanings are still offered first, and
+still the recommended path. Writing one is the way out of a list that does not
+contain the right answer, not a replacement for the list.
+
+## ADR-073 — A word added from a passage keeps that passage's meaning
+**Date:** 2026-09-10 · **Status:** Accepted · **Fixes** a rule R1 violation
+
+**Reported:** "in Reading I press a word to add it. The word has a meaning in
+the context; when I add it, it goes into my words with a different meaning."
+
+Exactly right, and the cause was on the client. `word_lookup_sheet.dart` showed
+the passage's own gloss — correct, written by the generator as it composed the
+sentence — and then, on "add", threw it away: it fetched the word's dictionary
+senses and picked whichever *read* closest, by exact string match, then by any
+sense sharing a word with it, then `senses.first`. For `bank` in a passage about
+a river that is a coin flip. The learner tapped "ضفة النهر" and got "مصرف".
+
+It was also a quiet breach of **rule R1**. Deciding which sense a word is, is not
+a decision the client gets to make.
+
+**Decision — the client says which word and which passage; the server says what
+it meant.**
+
+`POST /api/words` accepts `fromSessionId`. The server loads that session — the
+caller's own, or 404 — reads the glossary **it stored when it generated the
+passage**, and takes the meaning from there. No meaning crosses the wire. A
+client that sends one anyway gets the server's answer, and there is a test that
+says so.
+
+The part of speech comes from the glossary too, not from the lexicon's commonest
+sense: the glossary knows the word's role *in this sentence*, and "will" is an
+auxiliary here and a noun three entries up. The level and the English definition
+still come from the lexicon, as in ADR-072.
+
+**A word the passage never glossed is refused**, with `NOT_IN_PASSAGE` — names
+and numbers appear in generated text and carry no gloss. The sheet answers that
+by falling back to the ordinary dictionary view, which is the right answer for a
+word this passage never explained, rather than by reporting a failure.
+
+**Verified end to end against real Gemini.** A generated passage — *Natural
+Waterways and Their Benefits*, 156 glossary entries — was searched for a word
+whose passage gloss disagrees with the lexicon's first sense, which is the exact
+shape of the reported bug. It found `Learning`:
+
+| | |
+|---|---|
+| the passage means | تعلم |
+| the lexicon's first sense | اكتسب (صيغة الاستمرار) |
+| what the old client stored | اكتسب (صيغة الاستمرار) |
+| what is stored now | تعلم |
+
+Confirmed by SQL, with `MeaningSource = Passage` and a `custom:` sense id.
+
+## ADR-074 — A meaning the learner writes is checked before it is stored
+**Date:** 2026-09-10 · **Status:** Accepted · **Completes** ADR-072
+
+**Reported:** "when the student writes the meaning in Arabic, it should go to
+the AI and check it — is the Arabic good, are there spelling mistakes? Because
+it travels with him afterwards. If he writes `book` and puts `إنسان`, maybe he
+doesn't know. It should tell him: no, the meaning isn't right — did you mean
+this? Only when he writes the meaning himself; the other ways are fine."
+
+Exactly right, and the reason is downstream. ADR-072 let the learner write the
+Arabic because the lexicon's glosses are bad. But whatever they write is what
+**all five skills mark answers against** for the next eight days. A wrong
+meaning is not a cosmetic problem — it is five sessions asking the wrong
+question, and the learner has no way to discover it, because the app agrees
+with them by construction.
+
+**Decision — `POST /ai/meaning/check`, on the written path only.**
+
+The lexicon path and the passage path are untouched. A curated gloss and a
+gloss this service wrote itself are not the learner's guesses, and checking
+them would be spending the learner's money to ask a model whether the
+dictionary is right. A test asserts the checker is called zero times for both.
+
+**The verdict is advisory; the check is not.** Two decisions from the product
+owner, and they only look contradictory:
+
+* A rejected meaning comes back with the checker's sentence and up to three
+  meanings it would accept. The learner may tap one, edit, or press **"save it
+  as I wrote it"** — placed below the suggestions and quieter than them. The
+  checker is sometimes wrong, and this whole feature exists because an
+  automated source of meanings was (ADR-072). Replacing a bad dictionary with a
+  confident model the learner cannot get past is the same mistake wearing a
+  different hat, and rule R2 says the AI reports rather than decides.
+* If the checker **cannot be reached**, nothing is saved — 503, try again in a
+  moment. Alone in this service, this call has no fallback, because there is
+  nothing to fall back *to*: the only answers available without a model are
+  "yes", which lets an unchecked meaning in wearing the same badge as a checked
+  one, and "no", which refuses a learner who is probably right.
+
+So the check always happens, and its answer is the learner's to overrule.
+
+**A spelling slip is offered, never applied.** `طاولةةة` comes back as a
+refusal carrying `corrected: طاولة`. Storing the correction silently puts words
+in the learner's mouth; storing the misspelling teaches it.
+
+**`MeaningCheckResult` is recorded** — `Approved` or `Overridden`, and null for
+the two paths that are not checked. "The model said no and the learner said yes
+anyway" is the fact that explains a word failing Spelling four times a
+fortnight later, and it is unrecoverable if nobody wrote it down.
+
+### Two bugs this found, both mine, both only visible by running it
+
+**Sending one sense rejected correct meanings.** The checker was handed
+`facts.DefinitionEn` — the *commonest* sense — so `book` arrived as "a set of
+printed pages" and a learner writing `يحجز` was told they were wrong. That is
+the precise meaning ADR-072 exists to let them write, refused by the feature
+meant to help them. It now receives every sense.
+
+**"Every sense" was still nine nouns.** `book` has nine noun senses and three
+verb senses, and the nouns rank higher — so `Take(8)` cut every verb. The model
+never learned `book` is a verb at all and rejected `يحجز` a second time, for a
+different reason. Senses are now spread across parts of speech: a few each,
+commonest first within each.
+
+A standalone `part_of_speech` line went with them. It named the commonest
+sense's part of speech and sat above a list that already carries one per sense
+— telling the model "book is a noun" while the list said otherwise, and the
+model believed the headline.
+
+**Verified against real Gemini**, end to end through the API:
+
+| written | result |
+|---|---|
+| `book` = `يحجز` | ✅ saved, `Approved` |
+| `book` = `إنسان` | ❌ *"إنسان تعني human، بينما book تعني كتاباً أو عملية حجز"* — كتاب · حجز · سجل |
+| `book` = `إنسان`, insisting | ✅ saved, `Overridden` |
+| `table` = `طاولةةة` | ❌ spelling — `corrected: طاولة` |

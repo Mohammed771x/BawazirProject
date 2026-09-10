@@ -78,7 +78,14 @@ enum WordState {
   learning('LEARNING'),
   mature('MATURE'),
   active('ACTIVE'),
-  archived('ARCHIVED');
+  archived('ARCHIVED'),
+
+  /// The learner removed the word (ADR-071).
+  ///
+  /// A learner never sees this: the server does not send them a word in this
+  /// state at all. It reaches the client only through the Owner's views, where
+  /// a deletion is part of what is being measured.
+  deleted('DELETED');
 
   const WordState(this.wire);
 
@@ -264,7 +271,11 @@ enum WordEventType {
   becameMature('BECAME_MATURE'),
   enteredActive('ENTERED_ACTIVE'),
   exposureIncremented('EXPOSURE_INCREMENTED'),
-  archived('ARCHIVED');
+  archived('ARCHIVED'),
+
+  /// The learner removed the word (ADR-071). Seen in the Owner's journey view,
+  /// where it is usually the last thing that happened to a word.
+  deleted('DELETED');
 
   const WordEventType(this.wire);
 

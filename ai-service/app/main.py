@@ -178,6 +178,33 @@ class WritingResponse(BaseModel):
     tokens: int
 
 
+class MeaningCheckRequest(BaseModel):
+    """An Arabic meaning a learner typed, for checking (ADR-074)."""
+
+    word: str = Field(max_length=128)
+    # *Every* sense the lexicon has for this word, not the commonest one.
+    #
+    # Sending one was a real bug: `book` resolved to "a set of printed pages",
+    # so a learner writing "يحجز" — correct, and the reason they were allowed to
+    # type a meaning at all — was told they were wrong. A word the learner may
+    # mean any sense of must be judged against all of them.
+    definitions: list[str] = Field(default_factory=list, max_length=12)
+    part_of_speech: str = Field(default="", max_length=32)
+    meaning: str = Field(min_length=1, max_length=256)
+    # The language the note to the learner is written in (ADR-035).
+    feedback_language: str = Field(default="ar", max_length=8)
+
+
+class MeaningCheckResponse(BaseModel):
+    matches: bool
+    corrected: str | None = None
+    suggestions: list[str] = Field(default_factory=list)
+    note: str
+    prompt_version: str
+    model: str
+    tokens: int
+
+
 class TranscriptTurn(BaseModel):
     from_ai: bool
     text: str = Field(max_length=4000)
@@ -662,6 +689,68 @@ def evaluate_writing(request: WritingRequest) -> WritingResponse:
         feedback=str(payload.get("feedback", "")),
         suggestion=(payload.get("suggestion") or None),
         prompt_version=prompts.WRITING_PROMPT_VERSION,
+        model=SETTINGS.gemini_model,
+        tokens=tokens,
+    )
+
+
+@app.post(
+    "/ai/meaning/check",
+    response_model=MeaningCheckResponse,
+    dependencies=[Depends(require_service_token)],
+)
+def check_meaning(request: MeaningCheckRequest) -> MeaningCheckResponse:
+    """Judges an Arabic meaning a learner wrote for an English word (ADR-074).
+
+    Reports; does not decide. The backend refuses the add on `matches: false`,
+    and the learner may still insist — which is the point, because this feature
+    exists precisely because an automated source of meanings was wrong too
+    often to trust blindly (rule R2, ADR-072).
+
+    Temperature is low: two learners typing the same meaning for the same word
+    should get the same answer, and "is this a meaning of this word" is not a
+    question that benefits from invention.
+    """
+    generated = _generate_json(
+        prompts.meaning_check_prompt(
+            word=request.word,
+            definitions=request.definitions,
+            part_of_speech=request.part_of_speech,
+            meaning=request.meaning,
+            feedback_language=request.feedback_language,
+        ),
+        prompts.MEANING_CHECK_SCHEMA,
+        temperature=0.1,
+    )
+
+    payload, tokens = generated
+    matches = bool(payload.get("matches"))
+
+    # A correction is only meaningful when it actually differs. Models return
+    # the input unchanged often enough that passing it through would show the
+    # learner "did you mean: <exactly what you typed>".
+    corrected = (payload.get("corrected") or "").strip() or None
+    if corrected == request.meaning.strip():
+        corrected = None
+
+    suggestions = [
+        s.strip()
+        for s in (payload.get("suggestions") or [])
+        if isinstance(s, str) and s.strip()
+    ][:3]
+
+    log.info(
+        "meaning-check word=%s matches=%s tokens=%d",
+        request.word, matches, tokens,
+    )
+
+    return MeaningCheckResponse(
+        matches=matches,
+        corrected=corrected,
+        # Nothing to suggest when the meaning was accepted.
+        suggestions=[] if matches else suggestions,
+        note=str(payload.get("note", "")),
+        prompt_version=prompts.MEANING_CHECK_PROMPT_VERSION,
         model=SETTINGS.gemini_model,
         tokens=tokens,
     )

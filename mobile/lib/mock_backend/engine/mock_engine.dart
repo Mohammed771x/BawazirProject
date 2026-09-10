@@ -348,7 +348,9 @@ class MockEngine {
 
   AdminWordJourney adminWordJourney(MockUser caller, String wordId) {
     final owner = _usersById.values.firstWhere(
-      (u) => u.words.any((w) => w.id == wordId),
+      // `allWords`: a deleted word is exactly the one an Owner wants the
+      // journey of (ADR-071).
+      (u) => u.allWords.any((w) => w.id == wordId),
       orElse: () => throw const ApiException('WORD_NOT_FOUND', 'Word not found.',
           statusCode: 404),
     );
@@ -495,12 +497,184 @@ class MockEngine {
       );
     }
 
+    return _createWord(
+      user,
+      text: resolved.text,
+      meaning: resolved.meaning,
+      definitionEn: resolved.definitionEn,
+      partOfSpeech: resolved.partOfSpeech,
+      form: MockDictionary.formOf(candidate.senseId),
+      level: resolved.suggestedLevel,
+    );
+  }
+
+  /// Adds a word with a meaning the learner wrote themselves (ADR-072).
+  ///
+  /// The meaning is theirs; the word is not. It is still resolved against the
+  /// dictionary, because the level, the part of speech and the English
+  /// definition drive content generation and Spelling clues, and none of them
+  /// can be invented for a string nobody recognises.
+  Word addWordWithMeaning(
+    MockUser user, {
+    required String text,
+    required String meaning,
+    bool acceptAnyway = false,
+  }) {
+    final word = text.trim();
+    final written = meaning.trim();
+
+    if (word.isEmpty) {
+      throw const ApiException(
+        'BAD_WORD', 'Provide a word.', statusCode: 400);
+    }
+    if (written.isEmpty) {
+      throw const ApiException(
+        'INVALID_WORD', 'Write the meaning first.', statusCode: 400);
+    }
+
+    // Every skill marks answers against this string, so an English one makes
+    // its own questions unanswerable — refused now rather than discovered two
+    // days later in a session.
+    if (!_arabic.hasMatch(written)) {
+      throw const ApiException(
+        'MEANING_NOT_ARABIC', 'Write the meaning in Arabic.', statusCode: 400);
+    }
+
+    final facts = MockDictionary.define(word);
+    if (facts.senses.isEmpty) {
+      throw ApiException(
+        'WORD_NOT_FOUND', "'$word' is not in the dictionary.", statusCode: 404);
+    }
+
+    // The stand-in for the meaning checker (ADR-074). It cannot judge Arabic —
+    // there is no model here — so it does the one thing it honestly can: it
+    // accepts any meaning the dictionary already lists for this word, and
+    // rejects the rest with those meanings as suggestions.
+    //
+    // That is enough to exercise every path the real one has: accepted,
+    // rejected, and overridden. It is deliberately *not* a guess at Arabic
+    // correctness, because a mock that pretended to judge language would teach
+    // whoever develops against it that the checker is cleverer than it is.
+    if (!acceptAnyway) {
+      final known = facts.senses.map((s) => s.meaning.trim()).toList();
+      if (!known.contains(written)) {
+        throw MeaningRejectedException(
+          message: 'المعنى "$written" ليس من معاني كلمة '
+              '"${facts.senses.first.text}".',
+          suggestions: known.take(3).toList(),
+          statusCode: 409,
+        );
+      }
+    }
+
+    final base = facts.senses.first;
+    return _createWord(
+      user,
+      text: base.text,
+      meaning: written,
+      definitionEn: base.definitionEn,
+      partOfSpeech: base.partOfSpeech,
+      form: null,
+      level: base.suggestedLevel,
+      // Recorded the same way the server records it: whether the learner took
+      // the checker's word for it or their own.
+      checkOverridden: acceptAnyway,
+    );
+  }
+
+  /// Adds a word with the meaning it carried **in this session's passage**
+  /// (ADR-073).
+  ///
+  /// The meaning comes from the glossary this engine generated with the
+  /// passage — never from the caller. The client says which session and which
+  /// word; the answer to "what did it mean there" is the server's.
+  Word addWordFromPassage(
+    MockUser user, {
+    required String sessionId,
+    required String word,
+  }) {
+    final session = _requireSession(user, sessionId);
+    final tapped = word.trim();
+
+    final entry = session.snapshot?.content?.glossaryFor(tapped);
+    if (entry == null || entry.meaning.trim().isEmpty) {
+      // A name or a number: glossed by nothing, because it means nothing to
+      // translate. The caller answers this by offering the dictionary instead.
+      throw const ApiException(
+        'NOT_IN_PASSAGE',
+        'This passage has no meaning recorded for that word.',
+        statusCode: 404,
+      );
+    }
+
+    final facts = MockDictionary.define(tapped);
+    if (facts.senses.isEmpty) {
+      throw ApiException(
+        'WORD_NOT_FOUND', "'$tapped' is not in the dictionary.",
+        statusCode: 404);
+    }
+
+    final base = facts.senses.first;
+    return _createWord(
+      user,
+      text: base.text,
+      meaning: entry.meaning.trim(),
+      definitionEn: base.definitionEn,
+      // The glossary knows the word's role *in this sentence*, which the
+      // commonest dictionary sense does not.
+      partOfSpeech:
+          entry.partOfSpeech.isEmpty ? base.partOfSpeech : entry.partOfSpeech,
+      form: null,
+      level: base.suggestedLevel,
+    );
+  }
+
+  /// Removes a word from the learner's vocabulary (ADR-071).
+  ///
+  /// A state change, not a removal from the list: the learner stops seeing it
+  /// everywhere — `MockUser.words` filters it out — while the Owner's views,
+  /// which read `allWords`, keep the whole journey.
+  ///
+  /// Idempotent, because a retried request must not become a failure.
+  void deleteWord(MockUser user, String wordId) {
+    final word = user.allWords.where((w) => w.id == wordId).firstOrNull;
+    if (word == null) {
+      throw const ApiException(
+        'WORD_NOT_FOUND', 'Word not found.', statusCode: 404);
+    }
+
+    if (word.state == WordState.deleted) return;
+
+    word.state = WordState.deleted;
+    word.events.add(WordEvent(
+      type: WordEventType.deleted,
+      skill: null,
+      createdAt: now,
+    ));
+  }
+
+  /// Anything Arabic at all. Not a spelling check — a language check.
+  static final RegExp _arabic = RegExp(r'[\u0600-\u06FF]');
+
+  /// The shared half of every add: refuse a duplicate, then open the pipeline.
+  Word _createWord(
+    MockUser user, {
+    required String text,
+    required String meaning,
+    required String definitionEn,
+    required String partOfSpeech,
+    required String? form,
+    required CefrLevel level,
+    bool checkOverridden = false,
+  }) {
     // Duplicate identity is **word + meaning** (one sense), not word alone:
     // `book = كتاب` and `book = يحجز` are two independent journeys, but adding
     // either of them twice is a duplicate (§19–20, `04-DATA-MODEL.md`).
+    //
+    // Reads `words`, not `allWords`: a word the learner deleted is one they may
+    // add again, and it starts a genuinely new journey (ADR-071).
     final duplicate = user.words.any((w) =>
-        w.text.toLowerCase() == resolved.text.toLowerCase() &&
-        w.meaning == resolved.meaning);
+        w.text.toLowerCase() == text.toLowerCase() && w.meaning == meaning);
     if (duplicate) {
       throw const ApiException(
         'WORD_ALREADY_ADDED',
@@ -512,12 +686,13 @@ class MockEngine {
     final firstSkill = configuration.skillsOrder.first;
     final record = MockWord(
       id: _newId('w'),
-      text: resolved.text,
-      meaning: resolved.meaning,
-      definitionEn: resolved.definitionEn,
-      partOfSpeech: resolved.partOfSpeech,
-      form: MockDictionary.formOf(candidate.senseId),
-      level: resolved.suggestedLevel,
+      text: text,
+      meaning: meaning,
+      definitionEn: definitionEn,
+      partOfSpeech: partOfSpeech,
+      form: form,
+      level: level,
+      checkOverridden: checkOverridden,
       addedAt: now,
       currentSkill: firstSkill,
       skills: {
@@ -535,7 +710,7 @@ class MockEngine {
       skill: null,
       createdAt: now,
     ));
-    user.words.add(record);
+    user.allWords.add(record);
     return _wordModel(record);
   }
 
@@ -898,9 +1073,15 @@ class MockEngine {
       );
     }
 
-    final definitions = snapshot.targetWords
-        .map((w) => user.words.firstWhere((x) => x.id == w.wordId).definitionEn)
-        .toList();
+    // A word the learner deleted while this session was open is simply not
+    // described to the generator. `firstWhere` used to throw here, which turned
+    // a deletion into a crash in the middle of somebody's reading (ADR-071).
+    final definitions = [
+      for (final w in snapshot.targetWords)
+        if (user.words.where((x) => x.id == w.wordId).firstOrNull
+            case final word?)
+          word.definitionEn,
+    ];
 
     final generated = _content.buildComprehension(
       words: snapshot.targetWords,
@@ -1305,7 +1486,14 @@ class MockEngine {
     });
 
     for (final wordId in session.wordIds) {
-      final word = user.words.firstWhere((w) => w.id == wordId);
+      // Deleted mid-session (ADR-071). The session finishes normally and simply
+      // applies nothing to this word — the same answer the server gives, and
+      // the same one it already gave for a word that had moved on elsewhere.
+      // Tearing the session down instead would lose the answers the learner had
+      // given on the *other* words in it.
+      final word = user.words.where((w) => w.id == wordId).firstOrNull;
+      if (word == null) continue;
+
       final passed = session.passedFor(wordId);
       final state = word.skills[skill]!;
       state.attempts += 1;
@@ -1833,7 +2021,7 @@ class MockEngine {
         ..availableAt = cursor;
     }
 
-    user.words.add(
+    user.allWords.add(
       MockWord(
         id: wordId,
         text: candidate.text,
@@ -1876,6 +2064,7 @@ class MockWord {
     required this.partOfSpeech,
     this.form,
     required this.level,
+    this.checkOverridden = false,
     required this.addedAt,
     required this.currentSkill,
     required this.skills,
@@ -1894,6 +2083,11 @@ class MockWord {
   /// states it outright, which is the same fact by a shorter route.
   final String? form;
   final CefrLevel level;
+
+  /// Whether the learner saved this meaning over the checker's objection
+  /// (ADR-074). Never shown to them; kept because "the checker said no and the
+  /// learner said yes" is what explains a word failing later.
+  final bool checkOverridden;
   final DateTime addedAt;
   SkillType? currentSkill;
   final Map<SkillType, MockSkillState> skills;
@@ -2151,7 +2345,22 @@ class MockUser {
   OnboardingStage stage = OnboardingStage.interests;
   final List<String> interests = [];
   final Map<SkillType, SkillLevel> levels = {};
-  final List<MockWord> words = [];
+  /// Every word this learner ever added, deleted ones included.
+  ///
+  /// The Owner's views read this; nothing the learner touches does. It mirrors
+  /// `IgnoreQueryFilters()` on the server, and it is named so that reaching for
+  /// it is a visible decision rather than the default.
+  final List<MockWord> allWords = [];
+
+  /// The words the learner has — what every learner-facing path reads.
+  ///
+  /// The mock's stand-in for the server's global query filter on `words`
+  /// (ADR-071). A filter rather than a `where` at each of two dozen call sites,
+  /// for the same reason the server uses one: "remember to exclude deleted"
+  /// would be wrong in one of them within a month, and that one is a learner
+  /// being tested on a word they deleted.
+  List<MockWord> get words =>
+      [for (final w in allWords) if (w.state != WordState.deleted) w];
   DateTime? lastWeeklyReviewAt;
 
   /// What placement measured for Spelling instead of a CEFR band (ADR-008).

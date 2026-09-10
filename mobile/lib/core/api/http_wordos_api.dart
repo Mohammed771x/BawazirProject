@@ -163,6 +163,15 @@ class HttpWordOsApi implements WordOsApi {
     return _asMap(res);
   }
 
+  /// A call whose answer is 204, and whose body is therefore nothing.
+  ///
+  /// Kept apart from [_post] rather than folded into it: `_asMap` turns a body
+  /// that is not a JSON object into an empty map, so a delete routed through it
+  /// would report success for a response it never actually looked at.
+  Future<void> _delete(String path) async {
+    await _guard(() => _dio.delete<dynamic>(path));
+  }
+
   Future<Map<String, dynamic>> _patch(String path, [Object? body]) async {
     final res = await _guard(() => _dio.patch<dynamic>(path, data: body));
     return _asMap(res);
@@ -196,11 +205,24 @@ class HttpWordOsApi implements WordOsApi {
       // message is safe to show — the backend authored it for a user.
       if (data is Map && data['error'] is Map) {
         final error = (data['error'] as Map).cast<String, dynamic>();
-        throw ApiException(
-          error['code'] as String? ?? 'UNKNOWN',
-          error['message'] as String? ?? 'Request failed.',
-          statusCode: status,
-        );
+        final code = error['code'] as String? ?? 'UNKNOWN';
+        final message = error['message'] as String? ?? 'Request failed.';
+
+        // The meaning checker's refusal carries more than a sentence: what it
+        // would accept instead (ADR-074). A plain ApiException would drop that
+        // and leave the learner told "no" with nothing to do about it.
+        if (code == 'MEANING_REJECTED') {
+          throw MeaningRejectedException(
+            message: message,
+            suggestions: (error['suggestions'] as List<dynamic>? ?? const [])
+                .whereType<String>()
+                .toList(),
+            corrected: error['corrected'] as String?,
+            statusCode: status,
+          );
+        }
+
+        throw ApiException(code, message, statusCode: status);
       }
 
       // ASP.NET validation failures arrive as RFC 9110 ProblemDetails, with the
@@ -377,6 +399,39 @@ class HttpWordOsApi implements WordOsApi {
         'text': candidate.text,
         'meaning': candidate.meaning,
       }));
+
+  @override
+  Future<Word> addWordWithMeaning({
+    required String text,
+    required String meaning,
+    bool acceptAnyway = false,
+  }) async =>
+      // No sense id: there is no lexicon row for this meaning, which is the
+      // point of the call. The server resolves `text` for the word's grammar
+      // and stores `customMeaning` as written (ADR-072), after asking the
+      // checker about it (ADR-074).
+      Word.fromJson(await _post('/words', {
+        'text': text,
+        'customMeaning': meaning,
+        if (acceptAnyway) 'acceptAnyway': true,
+      }));
+
+  @override
+  Future<Word> addWordFromPassage({
+    required String sessionId,
+    required String word,
+  }) async =>
+      // Deliberately no meaning in the body. The server holds the glossary it
+      // wrote for this passage and answers from that; sending a meaning would
+      // only give it something to ignore, and would suggest the client had a
+      // say in what the word meant (ADR-073).
+      Word.fromJson(await _post('/words', {
+        'text': word,
+        'fromSessionId': sessionId,
+      }));
+
+  @override
+  Future<void> deleteWord(String wordId) => _delete('/words/$wordId');
 
   @override
   Future<WordPage> words({

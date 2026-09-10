@@ -198,6 +198,32 @@ public sealed class HttpAiContentService(
             Tokens: response.Tokens);
     }
 
+    public async Task<MeaningCheck> CheckMeaningAsync(
+        MeaningCheckRequest request,
+        CancellationToken ct = default)
+    {
+        var payload = new
+        {
+            word = request.Word,
+            definitions = request.Definitions,
+            part_of_speech = request.PartOfSpeech,
+            meaning = request.Meaning,
+            feedback_language = request.FeedbackLanguage,
+        };
+
+        var response =
+            await PostAsync<MeaningCheckDto>("/ai/meaning/check", payload, ct);
+
+        return new MeaningCheck(
+            response.Matches,
+            response.Corrected,
+            response.Suggestions ?? [],
+            response.Note,
+            PromptVersion: response.PromptVersion,
+            Model: response.Model,
+            Tokens: response.Tokens);
+    }
+
     public async Task<SpeakingObservation> SpeakingTurnAsync(
         SpeakingTurnRequest request,
         CancellationToken ct = default)
@@ -391,6 +417,15 @@ public sealed class HttpAiContentService(
         string GrammarNote,
         string Feedback,
         string? Suggestion,
+        string PromptVersion,
+        string Model,
+        int Tokens);
+
+    private sealed record MeaningCheckDto(
+        bool Matches,
+        string? Corrected,
+        List<string>? Suggestions,
+        string Note,
         string PromptVersion,
         string Model,
         int Tokens);

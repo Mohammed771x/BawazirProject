@@ -8,7 +8,9 @@ import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/widgets/speaker_button.dart';
 import '../../core/theme/skill_visuals.dart';
+import '../../core/api/wordos_api.dart';
 import '../../core/widgets/app_widgets.dart';
+import 'vocabulary_screen.dart';
 
 final wordDetailProvider =
     FutureProvider.autoDispose.family<WordDetail, String>((ref, id) {
@@ -17,18 +19,99 @@ final wordDetailProvider =
 
 /// The word's full journey: five skill states with their schedules, plus the
 /// event history that the MVP needs for algorithm validation.
-class WordDetailScreen extends ConsumerWidget {
+///
+/// Also where a word is removed (ADR-071). Deliberately here rather than as a
+/// swipe on the list: this is the one screen that shows what deleting actually
+/// costs — four passed skills, or none — and a learner who can see that is
+/// making a decision rather than a gesture.
+class WordDetailScreen extends ConsumerStatefulWidget {
   const WordDetailScreen({super.key, required this.wordId});
 
   final String wordId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<WordDetailScreen> createState() => _WordDetailScreenState();
+}
+
+class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
+  String get wordId => widget.wordId;
+
+  bool _deleting = false;
+
+  /// Asks, then deletes, then leaves.
+  ///
+  /// The confirmation is not ceremony: five skills and eight days of waiting
+  /// can be behind a word, and an accidental tap is not recoverable by anything
+  /// the learner can reach — adding it back starts from Reading.
+  Future<void> _confirmDelete(Word word) async {
+    final s = ref.read(stringsProvider);
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(s.deleteWordConfirmTitle),
+        content: Text(s.deleteWordConfirmBody(word.text)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(s.cancel),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: context.palette.danger,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(s.deleteWord),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _deleting = true);
+    try {
+      await ref.read(wordOsApiProvider).deleteWord(wordId);
+      if (!mounted) return;
+
+      // The list is stale the moment this succeeds, and it is the screen the
+      // learner is about to be standing on.
+      ref.invalidate(wordsProvider);
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(s.deleteWordDone)));
+      Navigator.of(context).maybePop();
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
+      if (!mounted) return;
+      setState(() => _deleting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(s.apiError(e.code, e.message))),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final s = ref.watch(stringsProvider);
     final detail = ref.watch(wordDetailProvider(wordId));
 
     return Scaffold(
-      appBar: AppBar(title: Text(s.wordJourney)),
+      appBar: AppBar(
+        title: Text(s.wordJourney),
+        actions: [
+          // Only once the word has loaded: there is nothing to confirm the
+          // deletion of, and nothing to name in the question, until then.
+          if (detail.valueOrNull case final data?)
+            IconButton(
+              tooltip: s.deleteWord,
+              icon: const Icon(Icons.delete_outline_rounded),
+              color: context.palette.danger,
+              onPressed:
+                  _deleting ? null : () => _confirmDelete(data.word),
+            ),
+        ],
+      ),
       body: detail.when(
         loading: () => BusyView(message: s.loading),
         error: (e, _) => ErrorView(
@@ -220,6 +303,9 @@ class _EventRow extends ConsumerWidget {
       WordEventType.enteredActive => s.stateLabel(WordState.active),
       WordEventType.exposureIncremented => s.exposure,
       WordEventType.archived => s.stateLabel(WordState.archived),
+      // Reachable only in the Owner's journey view: a learner's own detail
+      // screen closes the moment they delete the word (ADR-071).
+      WordEventType.deleted => s.stateLabel(WordState.deleted),
     };
   }
 

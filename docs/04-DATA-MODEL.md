@@ -11,10 +11,20 @@ names. The Dart models in `mobile/lib/core/models/` mirror the API projection of
 CefrLevel      : A1, A1_PLUS, A2, A2_PLUS, B1, B1_PLUS, B2, B2_PLUS, C1, C1_PLUS, C2
 SkillType      : READING, LISTENING, SPEAKING, WRITING, SPELLING
 SkillStatus    : PENDING, AVAILABLE, PASSED, FAILED
-WordState      : LEARNING, MATURE, ACTIVE, ARCHIVED
+WordState      : LEARNING, MATURE, ACTIVE, ARCHIVED, DELETED
+MeaningSource  : LEXICON, LEARNER, PASSAGE
+MeaningCheck   : APPROVED, OVERRIDDEN   (null unless MeaningSource = LEARNER)
 LevelChangeType: PLACEMENT, USER_MANUAL_CHANGE, SYSTEM_VALIDATED_CHANGE
 SessionKind    : READING, LISTENING, SPEAKING, WRITING, SPELLING, WEEKLY_REVIEW, PLACEMENT
 ```
+
+`DELETED` is the learner removing a word, never the system (ADR-071). A global query filter keeps
+it out of every learner-facing read; the Owner's analytics opt back in. Rule R8 is untouched by it:
+R8 forbids *the system* retiring a word, and this is the learner's own list.
+
+`MeaningSource` records where the Arabic meaning came from — the curated lexicon, the learner's own
+typing (ADR-072), or the passage that taught the word (ADR-073). Recorded because the three are not
+equally trustworthy and the experiment has to be able to tell them apart; never shown to a learner.
 
 `WordState` is the coarse lifecycle. Fine-grained progress lives in the five `word_skill_state`
 rows — the doc-level states such as `READING_PENDING` are a *projection* of
@@ -92,9 +102,23 @@ suggestions.
 
 ### `words` — one row per (user, word, intended meaning)
 `id`, `user_id`, `sense_id` (→ `lexicon_entries`), `text`, `meaning` (Arabic, user-chosen
-sense), `definition_en`, `part_of_speech`, `cefr_level`, `state`, `current_skill` (nullable),
-`added_at`, `matured_at`, `activated_at`, `archived_at`, `exposure_count`, `last_reviewed_at`,
-`next_eligible_at`, `updated_at`.
+sense), `meaning_source`, `definition_en`, `part_of_speech`, `cefr_level`, `state`,
+`meaning_check`, `current_skill`, `added_at`, `matured_at`, `activated_at`, `archived_at`, `deleted_at`,
+`exposure_count`, `last_reviewed_at`, `next_eligible_at`, `updated_at`.
+
+`sense_id` joins to `lexicon_entries` only when `meaning_source` is `LEXICON`.
+
+`meaning_check` records what the AI checker made of a learner-written meaning (ADR-074) — and, when
+it is `OVERRIDDEN`, that the learner saved it over the checker's objection. Null for the two sources
+that are not checked. Kept because "the model said no and the learner said yes" is what explains a
+word failing a fortnight later.
+
+A learner-written or passage-taken meaning has no synset to point at, so it carries a **derived** id —
+`custom:` + the first 128 bits of `SHA-256(text|meaning)` — which is what keeps the unique index on
+`(user_id, sense_id)` doing its job for those too (ADR-072).
+
+That index is filtered on `state <> 'DELETED'`: a learner who removes a word and adds it back gets a
+genuinely new row, starting at Reading with no history (ADR-071).
 
 Unique constraint: `(user_id, sense_id)` — that is the duplicate rule in the
 schema rather than only in code.
@@ -121,8 +145,11 @@ generated itself (ADR-018, rule R8).
 
 ### `word_events` — append-only word history
 `id`, `word_id`, `type` (`ADDED`, `SKILL_STARTED`, `SKILL_PASSED`, `SKILL_FAILED`,
-`BECAME_MATURE`, `ENTERED_ACTIVE`, `EXPOSURE_INCREMENTED`, `ARCHIVED`), `skill`, `payload` (jsonb),
-`created_at`.
+`BECAME_MATURE`, `ENTERED_ACTIVE`, `EXPOSURE_INCREMENTED`, `ARCHIVED`, `DELETED`), `skill`,
+`payload` (jsonb), `created_at`.
+
+Survives the word being deleted, which is the point of deleting by state: the journey a learner gave
+up on is still readable, and *where* they gave up is `words.current_skill` (ADR-071).
 
 ---
 

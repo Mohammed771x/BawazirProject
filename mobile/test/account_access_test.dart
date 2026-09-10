@@ -73,7 +73,13 @@ void main() {
     final prefs = InMemoryAppPreferences(
         locale: const Locale('en'), onboardingSeen: true);
     final overrides = [
+      // The mock backend, pinned — see the note on `testOverrides`.
+      appEnvironmentProvider.overrideWithValue(
+        const AppEnvironment(useMockBackend: true, baseUrl: ''),
+      ),
       appPreferencesProvider.overrideWithValue(prefs),
+      // Not `testOverrides`: this test needs the *same* store across two
+      // launches, which is the whole thing it is checking.
       tokenStoreProvider.overrideWith((ref) => tokens),
     ];
 
@@ -111,6 +117,10 @@ void main() {
     // sign out, not on slide one of a slide show.
     final prefs = InMemoryAppPreferences(onboardingSeen: false);
     final container = ProviderContainer(overrides: [
+      // The mock backend, pinned — see the note on `testOverrides`.
+      appEnvironmentProvider.overrideWithValue(
+        const AppEnvironment(useMockBackend: true, baseUrl: ''),
+      ),
       appPreferencesProvider.overrideWithValue(prefs),
       tokenStoreProvider.overrideWith((ref) => FakeTokenStore()),
     ]);

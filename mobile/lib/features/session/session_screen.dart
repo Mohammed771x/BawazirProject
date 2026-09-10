@@ -937,6 +937,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                         word: word,
                         isTarget: isTarget,
                         color: color,
+                        // Which passage the tap happened in, so adding the word
+                        // can ask the server what it meant *here* (ADR-073).
+                        sessionId: session.id,
                         // The meaning the generator gave this word in this
                         // sentence. Null falls back to the dictionary, which
                         // can only offer every sense the word has ever had.

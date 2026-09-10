@@ -923,7 +923,15 @@ public static class SessionEndpoints
         if (sentence.Length == 0)
             return Problems.BadRequest("EMPTY_ANSWER", "Write a sentence first.");
 
-        var word = await db.Words.FirstAsync(w => w.Id == item.WordId, ct);
+        // `IgnoreQueryFilters` because the learner may have deleted this word
+        // since the session opened (ADR-071), and the query filter would then
+        // make this `First` throw — a 500 in the middle of a sentence they have
+        // just written. The word is wanted here only to describe the task to
+        // the evaluator; whether it still belongs to the learner is decided at
+        // completion, which applies nothing to a deleted word.
+        var word = await db.Words
+            .IgnoreQueryFilters()
+            .FirstAsync(w => w.Id == item.WordId, ct);
 
         var observation = await ai.EvaluateWritingAsync(new WritingEvaluationRequest(
             word.Text, word.Meaning, word.DefinitionEn,

@@ -61,6 +61,25 @@ class AppStrings {
             'That word and meaning are not in the dictionary.',
             'هذه الكلمة بهذا المعنى غير موجودة في القاموس.',
           ),
+        // The meaning is the learner's to write; the word is not (ADR-072).
+        'MEANING_NOT_ARABIC' => _(
+            'Write the meaning in Arabic.',
+            'اكتب المعنى بالعربية.',
+          ),
+        // `BAD_WORD` is already answered under "Searching the dictionary"
+        // below; the add endpoint raises the same code for the same reason.
+        'BAD_SENSE' => _(
+            'That is not a dictionary meaning.',
+            'هذا ليس معنى من القاموس.',
+          ),
+        'MEANING_CHECK_UNAVAILABLE' => meaningCheckUnavailable,
+        // The passage never explained this word — a name, a number. The sheet
+        // falls back to the dictionary rather than showing this (ADR-073), so a
+        // learner should not normally meet it.
+        'NOT_IN_PASSAGE' => _(
+            'This passage has no meaning recorded for that word.',
+            'لا يوجد معنى مسجَّل لهذه الكلمة في هذا النص.',
+          ),
 
         // Sessions.
         'NO_WORDS_DUE' => _(
@@ -529,6 +548,7 @@ class AppStrings {
           _('Entered active vocabulary', 'دخلت المفردات النشطة'),
         WordEventType.exposureIncremented => _('Reused', 'أُعيد استخدامها'),
         WordEventType.archived => _('Archived', 'أُرشفت'),
+        WordEventType.deleted => _('Deleted by the learner', 'حذفها المتعلّم'),
       };
 
   String get pipeline => _('Pipeline', 'المسار');
@@ -550,7 +570,83 @@ class AppStrings {
         WordState.mature => _('Mature', 'ناضجة'),
         WordState.active => active,
         WordState.archived => archived,
+        // Only ever seen in the Owner's views: the server never hands a
+        // learner a word it has deleted for them (ADR-071).
+        WordState.deleted => _('Deleted', 'محذوفة'),
       };
+
+  // ── Deleting a word (ADR-071) ─────────────────────────────────────────────
+  String get deleteWord => _('Delete word', 'حذف الكلمة');
+  String get deleteWordConfirmTitle =>
+      _('Delete this word?', 'حذف هذه الكلمة؟');
+
+  /// Said plainly, and said honestly.
+  ///
+  /// It does not promise that nothing is kept — the row survives for the
+  /// Owner's measurements — only that the learner is finished with it, which is
+  /// the part that is theirs to know. What it must be clear about is the part
+  /// they might not expect: the progress goes too, and adding the word again
+  /// starts it from Reading.
+  String deleteWordConfirmBody(String word) => _(
+        'You will lose the progress "$word" has made. You can add it again '
+        'later, but it will start from the beginning.',
+        'ستفقد ما أحرزته كلمة "$word" من تقدّم. يمكنك إضافتها لاحقاً، '
+        'لكنها ستبدأ من جديد.',
+      );
+  String get deleteWordDone => _('Word deleted', 'تم حذف الكلمة');
+
+  // ── Writing your own meaning (ADR-072) ────────────────────────────────────
+  String get writeMeaningYourself =>
+      _('Write the meaning yourself', 'اكتب المعنى بنفسك');
+  String get writeMeaningTitle => _('The meaning you mean', 'المعنى الذي تقصده');
+
+  /// Why this exists, without blaming the learner for needing it.
+  String get writeMeaningSubtitle => _(
+        'Not finding the right meaning above? Write it in Arabic and this word '
+        'will be learned with your wording.',
+        'لم تجد المعنى الصحيح فوق؟ اكتبه بالعربية وستتعلّم الكلمة بصياغتك أنت.',
+      );
+  String get meaningFieldHint => _('The meaning in Arabic', 'المعنى بالعربية');
+  String get saveWord => _('Save the word', 'حفظ الكلمة');
+  String get meaningRequired =>
+      _('Write the meaning first', 'اكتب المعنى أولاً');
+
+  /// The word is checked even when the meaning is not.
+  ///
+  /// Worth saying out loud, because the two halves of the screen now follow
+  /// different rules and a learner refused after typing a meaning would
+  /// otherwise think the meaning was rejected.
+  // ── The meaning checker (ADR-074) ─────────────────────────────────────────
+  String get checkingMeaning =>
+      _('Checking the meaning…', 'يتحقق من المعنى…');
+
+  /// Said above the checker's own sentence, so the learner knows who is
+  /// speaking. The sentence itself is the model's, written in their language —
+  /// there is no canned string for "what is wrong with *this* meaning", which
+  /// is the entire reason for asking.
+  String get meaningLooksWrong =>
+      _('Check this meaning', 'راجع هذا المعنى');
+  String get meaningSuggestions => _('Did you mean:', 'هل تقصد:');
+  String get keepMyMeaning =>
+      _('Save it as I wrote it', 'احفظها كما كتبتها');
+  String get editMeaning => _('Edit', 'تعديل');
+
+  /// Shown when the checker cannot be reached at all.
+  ///
+  /// Deliberately not "something went wrong": the learner did nothing wrong,
+  /// their word is not lost, and the thing to do is wait a moment. Saving
+  /// without the check is not offered, because an unchecked meaning that looks
+  /// exactly like a checked one is worse than a delay.
+  String get meaningCheckUnavailable => _(
+        'Could not check that meaning just now. Try again in a moment.',
+        'تعذّر التحقق من المعنى الآن. حاول بعد قليل.',
+      );
+
+  String get meaningNeedsRealWord => _(
+        'The meaning is yours to write, but the word itself has to be one the '
+        'dictionary knows.',
+        'المعنى لك أن تكتبه، لكن الكلمة نفسها لا بد أن تكون في القاموس.',
+      );
 
   // Sessions
   String get readPassage => _('Read the passage', 'اقرأ النص');

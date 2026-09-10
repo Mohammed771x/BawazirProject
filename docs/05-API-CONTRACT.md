@@ -172,9 +172,12 @@ handed one item at a time instead of a fixed list.
 |---|---|---|
 | GET | `/words/lookup?q=bo` | → `[WordCandidate]` (either language; spelling suggestions when nothing matches) |
 | GET | `/words/define?w=researching` | → `{query, matchedText, senses:[WordCandidate]}` |
-| POST | `/words` | `{senseId, text?, meaning?}` → `Word` |
+| POST | `/words` | `{senseId, text?, meaning?}` → `Word` — a lexicon sense |
+| POST | `/words` | `{text, customMeaning, acceptAnyway?}` → `Word` — a meaning the learner wrote, AI-checked (ADR-072, ADR-074) |
+| POST | `/words` | `{text, fromSessionId}` → `Word` — the meaning that passage gave it (ADR-073) |
 | GET | `/words?state=LEARNING\|ACTIVE\|ARCHIVED&q=&page=&pageSize=` | → `{items:[Word], total, page, pageSize, hasMore}` |
 | GET | `/words/{id}` | → `WordDetail` |
+| DELETE | `/words/{id}` | → `204` — the learner removes it (ADR-071) |
 
 > **Lookup searches from either side and never invents an entry.** `bo` returns
 > every sense whose word starts with those letters, each row carrying the word,
@@ -189,8 +192,9 @@ handed one item at a time instead of a fixed list.
 >   letter still never returns the dictionary.
 >
 > If nothing matches, the response contains only candidates with
-> `isSpellingSuggestion: true`, or is empty. There is no "add it anyway" result,
-> and the client offers no way to type a meaning (ADR-012).
+> `isSpellingSuggestion: true`, or is empty. There is no "add it anyway" result:
+> the **word** must be one the lexicon knows, even when the meaning is not
+> (ADR-072).
 >
 > Closed-class words (`is`, `the`, `because`, `what`) carry a part of speech
 > WordNet does not use — `pron`, `det`, `aux`, `modal`, `prep`, `conj`, `part`,
@@ -208,11 +212,57 @@ handed one item at a time instead of a fixed list.
 > `pageSize` is clamped to 100, and omitting the paging parameters is
 > legitimate — they default rather than 400.
 >
-> **`POST /words` re-resolves.** The body is treated as a **lookup key**; the
-> row that gets stored is the lexicon's, so a forged level, definition or part
-> of speech is discarded. Errors: `INVALID_WORD` (400) for a missing word or
-> meaning; `WORD_NOT_FOUND` (404) when the sense is not in the lexicon;
-> `WORD_ALREADY_ADDED` (409) when this learner already has that sense.
+> **`POST /words` has three ways in, and they differ only in where the Arabic
+> meaning comes from.** The word itself is resolved against the lexicon in all
+> three: the meaning is what the learner may choose, not the spelling.
+>
+> * **`senseId`** — a lexicon sense. The body is treated as a **lookup key**;
+>   the row that gets stored is the lexicon's, so a forged level, definition or
+>   part of speech is discarded (ADR-012). A `custom:` id posted here is refused
+>   with `BAD_SENSE`.
+> * **`customMeaning`** — the Arabic meaning the learner typed (ADR-072). The
+>   word is resolved for its level, part of speech and English definition; the
+>   meaning is stored as written. Refused with `MEANING_NOT_ARABIC` (400) if it
+>   is not Arabic — every skill marks answers against this string.
+>
+>   **This path, and only this path, is checked by the AI** (ADR-074). A
+>   disagreement is `MEANING_REJECTED` (409) carrying the checker's own sentence
+>   plus `suggestions` (meanings it would accept) and `corrected` (their wording
+>   with its spelling fixed, when that was the only problem):
+>
+>   ```json
+>   { "error": { "code": "MEANING_REJECTED",
+>                "message": "كلمة \"إنسان\" تعني human، بينما \"book\" تعني كتاباً…",
+>                "suggestions": ["كتاب", "حجز", "سجل"],
+>                "corrected": null } }
+>   ```
+>
+>   Re-post with `acceptAnyway: true` to save it regardless — the learner's
+>   call, recorded as `Overridden`. If the checker is unreachable, nothing is
+>   saved: `MEANING_CHECK_UNAVAILABLE` (503). There is no fallback, deliberately.
+>
+>   The lexicon and passage paths are **not** checked: neither gloss is the
+>   learner's guess.
+> * **`fromSessionId`** — the meaning that session's passage gave the word
+>   (ADR-073). **No meaning is sent.** The server reads it from the glossary it
+>   stored when it generated the passage; a meaning in the body is ignored.
+>   `NOT_IN_PASSAGE` (404) for a word the generator did not gloss, which the
+>   client answers by offering the ordinary dictionary instead.
+>
+> Errors shared by all three: `BAD_WORD` (400) for a missing word;
+> `WORD_NOT_FOUND` (404) when the word — or the sense — is not in the lexicon;
+> `WORD_ALREADY_ADDED` (409) when this learner already has that word with that
+> meaning. Deleted words are invisible to the duplicate check, so a word the
+> learner removed can be added again (ADR-071).
+>
+> **`DELETE /words/{id}` is a state change, not a removal.** `204`, and the word
+> leaves every learner-facing response — this list, sessions, the weekly review.
+> The row and its whole history stay for the Owner's analytics, which is why
+> rule R8 is not in tension with it: R8 forbids the *system* removing a word
+> (ADR-071). `404` for a word belonging to another learner — never `403`, so the
+> id confirms nothing. Deleting an already-deleted word answers `204`: a retry
+> is not a failure. An open session that included the word finishes normally and
+> applies nothing to it.
 >
 > **Identity is the sense, not the word.** `book = كتاب` and `book = يحجز` are
 > different synsets and therefore independent vocabulary items with independent

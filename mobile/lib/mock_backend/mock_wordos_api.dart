@@ -108,6 +108,36 @@ class MockWordOsApi implements WordOsApi {
       _delay(() => engine.addWord(_user, candidate), _aiLatency);
 
   @override
+  Future<Word> addWordWithMeaning({
+    required String text,
+    required String meaning,
+    bool acceptAnyway = false,
+  }) =>
+      _delay(
+        () => engine.addWordWithMeaning(
+          _user,
+          text: text,
+          meaning: meaning,
+          acceptAnyway: acceptAnyway,
+        ),
+        _aiLatency,
+      );
+
+  @override
+  Future<Word> addWordFromPassage({
+    required String sessionId,
+    required String word,
+  }) =>
+      _delay(
+        () => engine.addWordFromPassage(_user, sessionId: sessionId, word: word),
+        _aiLatency,
+      );
+
+  @override
+  Future<void> deleteWord(String wordId) =>
+      _delay(() => engine.deleteWord(_user, wordId));
+
+  @override
   Future<WordPage> words({WordState? state, int page = 0, String? query}) =>
       _delay(() => engine.words(_user, state, query: query));
 

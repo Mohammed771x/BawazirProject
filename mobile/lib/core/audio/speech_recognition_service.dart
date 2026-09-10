@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
@@ -63,51 +64,85 @@ class SpeechRecognitionService {
   /// recogniser, or a simulator. The UI offers typing instead.
   bool get isAvailable => _available;
 
-  /// Asks for permission and checks a recogniser exists.
+  /// Asks for permission and checks that a recogniser exists.
   ///
   /// Called before the first listen rather than at construction, so the
-  /// permission prompt appears when the learner opens a Speaking session and
-  /// can see why it is being asked.
+  /// permission prompt appears when the learner opens a Speaking session
+  /// and can see why it is being asked.
   Future<bool> initialise() async {
     if (_initialised) return _available;
+
     _initialised = true;
 
     try {
       _available = await _speech
           .initialize(
-            onError: (_) {
+            onError: (error) {
               _listening = false;
+
+              debugPrint(
+                'WordOS SpeechToText error: '
+                '${error.errorMsg} '
+                'permanent=${error.permanent}',
+              );
+
               // An error ends the platform's session, not necessarily the
               // learner's turn — a transient one is recovered by reopening.
               unawaited(_resume());
             },
             onStatus: (status) {
+              debugPrint(
+                'WordOS SpeechToText status: $status',
+              );
+
               if (status == 'done' || status == 'notListening') {
                 _listening = false;
                 unawaited(_resume());
               }
             },
           )
-          .timeout(const Duration(seconds: 10), onTimeout: () => false);
-    } catch (_) {
-      // No plugin, no permission, no recogniser — all the same to the caller.
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () {
+              debugPrint(
+                'WordOS SpeechToText initialize timed out',
+              );
+
+              return false;
+            },
+          );
+
+      debugPrint(
+        'WordOS SpeechToText available: $_available',
+      );
+    } catch (e, stackTrace) {
+      debugPrint(
+        'WordOS SpeechToText initialize exception: $e',
+      );
+
+      debugPrint(
+        '$stackTrace',
+      );
+
       _available = false;
     }
+
     return _available;
   }
 
-  /// Opens the microphone and leaves it open until [stopAndRead] is called.
+    /// Opens the microphone and leaves it open until [stopAndRead] is called.
   ///
-  /// Push-to-talk, deliberately. Ending a turn on silence sounds elegant and is
-  /// miserable to use: a learner searching for the next word in a foreign
-  /// language pauses constantly, and every pause cut them off mid-sentence.
-  /// Nobody can speak "at their own pace" against a three-second timer.
+  /// Push-to-talk, deliberately. Ending a turn on silence sounds elegant and
+  /// is miserable to use: a learner searching for the next word in a foreign
+  /// language pauses constantly, and every pause cuts them off mid-sentence.
   ///
   /// [onPartial] receives the words as they are recognised, so the learner can
   /// see they are being heard while they talk.
   ///
   /// Returns false when this device cannot listen; the caller offers typing.
-  Future<bool> startListening({void Function(String heard)? onPartial}) async {
+  Future<bool> startListening({
+    void Function(String heard)? onPartial,
+  }) async {
     if (!await initialise()) return false;
     if (_wantsToListen) return true;
 
@@ -133,6 +168,7 @@ class SpeechRecognitionService {
 
     try {
       _listening = true;
+
       await _speech.listen(
         onResult: (result) {
           final words = result.recognizedWords.trim();
@@ -141,9 +177,11 @@ class SpeechRecognitionService {
             // The segment is closed. Move it into the transcript so the next
             // session's empty first result cannot take it away.
             if (words.isNotEmpty) {
-              _committed = _committed.isEmpty ? words : '$_committed $words';
+              _committed =
+                  _committed.isEmpty ? words : '$_committed $words';
               _emptyRestarts = 0;
             }
+
             _partial = '';
           } else {
             _partial = words;
@@ -161,17 +199,28 @@ class SpeechRecognitionService {
           listenFor: const Duration(minutes: 5),
           localeId: 'en_US',
           partialResults: true,
+
           // False, deliberately: an error that cancels the session would
           // discard the segment in progress. It is stopped and reopened
           // instead, keeping what was already heard.
           cancelOnError: false,
+
           // Dictation keeps the microphone open through natural pauses instead
           // of ending the turn at the first comma.
           listenMode: ListenMode.dictation,
         ),
       );
+
       return true;
-    } catch (_) {
+    } catch (e, stackTrace) {
+      debugPrint(
+        'WordOS SpeechToText listen exception: $e',
+      );
+
+      debugPrint(
+        '$stackTrace',
+      );
+
       _listening = false;
       return false;
     }
@@ -189,11 +238,15 @@ class SpeechRecognitionService {
       _wantsToListen = false;
       return;
     }
+
     _emptyRestarts++;
 
     // A beat, so a platform mid-teardown is not asked to start again while it
     // is still stopping.
-    await Future<void>.delayed(const Duration(milliseconds: 150));
+    await Future<void>.delayed(
+      const Duration(milliseconds: 150),
+    );
+
     if (!_wantsToListen || _listening) return;
 
     await _listen();
@@ -209,17 +262,20 @@ class SpeechRecognitionService {
     _wantsToListen = false;
 
     await stop();
+
     _listening = false;
 
     // The recogniser may deliver its last words just after `stop`; a short
     // wait keeps the end of the learner's sentence instead of clipping it.
-    await Future<void>.delayed(const Duration(milliseconds: 400));
+    await Future<void>.delayed(
+      const Duration(milliseconds: 400),
+    );
 
     final said = heard;
     return said.isEmpty ? null : said;
   }
 
-  /// Listens until the learner stops talking, and returns what they said.
+    /// Listens until the learner stops talking, and returns what they said.
   ///
   /// The automatic variant, kept for callers that genuinely want a hands-free
   /// turn. The learner-facing screens use [startListening] / [stopAndRead].
@@ -234,36 +290,47 @@ class SpeechRecognitionService {
 
     try {
       _listening = true;
+
       await _speech.listen(
         onResult: (result) {
-          if (result.recognizedWords.isNotEmpty) best = result.recognizedWords;
+          if (result.recognizedWords.isNotEmpty) {
+            best = result.recognizedWords;
+          }
+
           if (result.finalResult && !completer.isCompleted) {
-            completer.complete(best.trim().isEmpty ? null : best.trim());
+            completer.complete(
+              best.trim().isEmpty ? null : best.trim(),
+            );
           }
         },
         listenOptions: SpeechListenOptions(
           pauseFor: pauseFor,
           listenFor: listenFor,
           localeId: 'en_US',
-          // Partial results are what make the learner's words appear as they
-          // speak; without them the screen looks frozen for the whole turn.
           partialResults: true,
           cancelOnError: true,
-          // Dictation keeps the microphone open through natural pauses instead
-          // of ending the turn at the first comma.
           listenMode: ListenMode.dictation,
         ),
       );
 
-      // The hard ceiling. `listenFor` should end it first; this is the backstop
-      // for a recogniser that stops reporting.
+      // The hard ceiling. `listenFor` should end it first; this is the
+      // backstop for a recogniser that stops reporting.
       final heard = await completer.future.timeout(
         listenFor + const Duration(seconds: 5),
-        onTimeout: () => best.trim().isEmpty ? null : best.trim(),
+        onTimeout: () =>
+            best.trim().isEmpty ? null : best.trim(),
       );
 
       return heard;
-    } catch (_) {
+    } catch (e, stackTrace) {
+      debugPrint(
+        'WordOS SpeechToText listenOnce exception: $e',
+      );
+
+      debugPrint(
+        '$stackTrace',
+      );
+
       return null;
     } finally {
       _listening = false;
@@ -274,26 +341,35 @@ class SpeechRecognitionService {
   Future<void> stop() async {
     try {
       await _speech.stop();
-    } catch (_) {
-      // Nothing useful to do; the turn is over either way.
+    } catch (e) {
+      debugPrint(
+        'WordOS SpeechToText stop exception: $e',
+      );
     }
   }
 
   Future<void> cancel() async {
     _wantsToListen = false;
+
     try {
       await _speech.cancel();
-    } catch (_) {
-      // Ignore.
+    } catch (e) {
+      debugPrint(
+        'WordOS SpeechToText cancel exception: $e',
+      );
     }
+
     _listening = false;
     _committed = '';
     _partial = '';
   }
 }
 
-final speechRecognitionProvider = Provider<SpeechRecognitionService>((ref) {
+final speechRecognitionProvider =
+    Provider<SpeechRecognitionService>((ref) {
   final service = SpeechRecognitionService();
+
   ref.onDispose(service.cancel);
+
   return service;
 });

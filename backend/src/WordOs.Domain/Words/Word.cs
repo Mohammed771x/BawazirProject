@@ -30,6 +30,22 @@ public class Word
     /// <summary>The Arabic meaning of this sense, copied from the lexicon.</summary>
     public string Meaning { get; private set; } = string.Empty;
 
+    /// <summary>Where <see cref="Meaning"/> came from (ADR-072).</summary>
+    /// <remarks>
+    /// Not a display concern — the learner is shown a meaning, not its
+    /// provenance. It is here so the Owner's analytics can separate a curated
+    /// gloss from one the learner typed, which is the only way to tell whether
+    /// letting them type it helped or hurt.
+    /// </remarks>
+    public MeaningSource MeaningSource { get; private set; } = MeaningSource.Lexicon;
+
+    /// <summary>
+    /// What the checker made of a learner-written meaning (ADR-074), or null
+    /// when there was nothing to check — a lexicon or passage gloss is not the
+    /// learner's guess.
+    /// </summary>
+    public MeaningCheckResult? MeaningCheck { get; private set; }
+
     public string DefinitionEn { get; private set; } = string.Empty;
 
     public string PartOfSpeech { get; private set; } = string.Empty;
@@ -47,6 +63,9 @@ public class Word
     public DateTimeOffset? ActivatedAt { get; private set; }
 
     public DateTimeOffset? ArchivedAt { get; private set; }
+
+    /// <summary>When the learner removed it (ADR-071); null while they have it.</summary>
+    public DateTimeOffset? DeletedAt { get; private set; }
 
     /// <summary>
     /// How often the AI has reused this word in generated content. A priority
@@ -74,7 +93,9 @@ public class Word
         string partOfSpeech,
         CefrLevel cefrLevel,
         WordOsConfiguration config,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        MeaningSource meaningSource = MeaningSource.Lexicon,
+        MeaningCheckResult? meaningCheck = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(senseId);
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
@@ -86,6 +107,8 @@ public class Word
             SenseId = senseId,
             Text = text.Trim(),
             Meaning = meaning.Trim(),
+            MeaningSource = meaningSource,
+            MeaningCheck = meaningCheck,
             DefinitionEn = definitionEn,
             PartOfSpeech = partOfSpeech,
             CefrLevel = cefrLevel,
@@ -197,6 +220,39 @@ public class Word
         State = WordState.Archived;
         ArchivedAt = now;
         _events.Add(WordEvent.Create(Id, WordEventType.Archived, null, now));
+    }
+
+    /// <summary>
+    /// Removes the word from the learner's vocabulary (ADR-071).
+    /// </summary>
+    /// <remarks>
+    /// A state change, not a <c>DELETE</c>. The learner's experience is that the
+    /// word is gone — a global query filter keeps <see cref="WordState.Deleted"/>
+    /// out of every list, session and review, and the unique index that stops a
+    /// word being added twice ignores deleted rows, so they may add it again and
+    /// get a genuinely fresh journey.
+    ///
+    /// <para>What survives is the evidence: five skill rows, the event log, the
+    /// exposures. Rule R8 forbids the <i>system</i> ever removing a word; this is
+    /// the learner removing one, which the rules never spoke to, and keeping the
+    /// history is what stops a deletion from quietly rewriting the measurements
+    /// the MVP exists to take.</para>
+    ///
+    /// <para><see cref="CurrentSkill"/> is deliberately left where it was. It is
+    /// no longer a schedule — nothing eligible is ever <c>Deleted</c> — but it is
+    /// the answer to the question the Owner will actually ask about a deletion:
+    /// how far had the word got before the learner gave up on it.</para>
+    ///
+    /// <para>Deleting twice is not an error. The second call is what a retried
+    /// request looks like, and it must not turn into a failure the learner sees.</para>
+    /// </remarks>
+    public void Delete(DateTimeOffset now)
+    {
+        if (State == WordState.Deleted) return;
+
+        State = WordState.Deleted;
+        DeletedAt = now;
+        _events.Add(WordEvent.Create(Id, WordEventType.Deleted, null, now));
     }
 
     public void RecordExposure(DateTimeOffset now)

@@ -76,15 +76,50 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
   void _snack(String message) => ScaffoldMessenger.of(context)
       .showSnackBar(SnackBar(content: Text(message)));
 
-  /// The learner may only ever pick a meaning the lexicon provided. There is no
-  /// path to typing one: a hand-written meaning can be wrong, mistranslated, or
-  /// attached to a string that is not English at all, and the whole learning
-  /// pipeline is built on the meaning being trustworthy (demo review §16,
-  /// ADR-012). The server enforces the same rule independently.
-  Future<void> _select(WordCandidate candidate) async {
+  /// Which candidate the "write your own" card goes after.
+  ///
+  /// A single index, computed once, because the obvious spelling of this —
+  /// `i == 2 || i == last` — draws the card twice on every list longer than
+  /// three.
+  int get _writeYourOwnAfter =>
+      _candidates.length > 3 ? 2 : _candidates.length - 1;
+
+  /// The word the learner is looking at, or null while they are still choosing
+  /// one.
+  ///
+  /// Two ways to be sure which word is meant, and the first matters more than
+  /// it looks. Typing `sell` returns `sell`, `selling`, `seller` and `sell off`
+  /// — four different words — so "every candidate shares one text" is false for
+  /// the most ordinary search there is, and the offer to write a meaning
+  /// silently never appeared. If what was typed *is* one of the words on
+  /// offer, that is the word.
+  ///
+  /// Null for a query the lexicon did not recognise: the server refuses a
+  /// written meaning for a spelling it does not know (ADR-072), so offering it
+  /// would be offering a refusal.
+  String? get _resolvedWord {
+    if (_notFoundQuery != null || _candidates.isEmpty) return null;
+
+    final typed = _controller.text.trim().toLowerCase();
+    for (final candidate in _candidates) {
+      if (candidate.text.toLowerCase() == typed) return candidate.text;
+    }
+
+    // Nothing typed matches exactly, but every result is the same word — a
+    // prefix that only one word answers.
+    final words = _candidates.map((c) => c.text.toLowerCase()).toSet();
+    return words.length == 1 ? _candidates.first.text : null;
+  }
+
+  /// Adds the word with the lexicon's own meaning.
+  Future<void> _select(WordCandidate candidate) =>
+      _save(() => ref.read(wordOsApiProvider).addWord(candidate));
+
+  /// The shared half: run it, show the result, clear the field.
+  Future<void> _save(Future<Word> Function() add) async {
     setState(() => _saving = true);
     try {
-      final word = await ref.read(wordOsApiProvider).addWord(candidate);
+      final word = await add();
       if (mounted) {
         setState(() {
           _added = word;
@@ -99,6 +134,38 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// Asks for a meaning in a sheet, and shows what the checker made of it.
+  ///
+  /// A sheet rather than a field wedged into the list: the learner is switching
+  /// from *choosing* to *writing*, and the two want different room. It also
+  /// keeps the suggestions on screen behind it, so backing out returns them to
+  /// exactly where they were.
+  ///
+  /// The sheet does the saving itself (ADR-074). It has to: a rejected meaning
+  /// is answered with what the checker would accept, and that conversation
+  /// belongs beside the field they typed it in — closing the sheet to report it
+  /// in a snackbar would throw away both their text and the suggestions.
+  Future<void> _writeMeaningFor(String text) async {
+    final saved = await showModalBottomSheet<Word>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      // Dismissing by tapping outside mid-check would leave a request in
+      // flight with nowhere to report to.
+      isDismissible: true,
+      builder: (_) => _WriteMeaningSheet(word: text),
+    );
+
+    if (saved == null || !mounted) return;
+
+    setState(() {
+      _added = saved;
+      _candidates = const [];
+      _notFoundQuery = null;
+      _controller.clear();
+    });
   }
 
   @override
@@ -160,23 +227,35 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
                         SectionHeader(title: s.spellingSuggestion),
                     ] else
                       SectionHeader(
-                        title: _candidates
-                                    .map((c) => c.text.toLowerCase())
-                                    .toSet()
-                                    .length >
-                                1
+                        title: _resolvedWord == null
                             // Several different words matched the prefix, so
                             // the learner is still choosing a word.
                             ? s.chooseWord
                             : s.chooseMeaning,
                         subtitle: s.chooseMeaningSubtitle,
                       ),
-                    for (final candidate in _candidates) ...[
+                    for (var i = 0; i < _candidates.length; i++) ...[
                       _CandidateTile(
-                        candidate: candidate,
-                        onTap: () => _select(candidate),
+                        candidate: _candidates[i],
+                        onTap: () => _select(_candidates[i]),
                       ),
                       const SizedBox(height: AppSpacing.xs),
+
+                      // After the first few meanings, not after all of them.
+                      // `sell` returns more than twenty rows, and a card at the
+                      // foot of that is a card nobody reaches — which is the
+                      // same as not having built it. Still *below* real
+                      // meanings, because the lexicon's answer is the one to
+                      // try first.
+                      if (i == _writeYourOwnAfter)
+                        if (_resolvedWord case final word?) ...[
+                          const SizedBox(height: AppSpacing.xs),
+                          _WriteYourOwnCard(
+                            word: word,
+                            onTap: () => _writeMeaningFor(word),
+                          ),
+                          const SizedBox(height: AppSpacing.sm),
+                        ],
                     ],
                   ],
                 ),
@@ -353,6 +432,321 @@ class _AddedView extends ConsumerWidget {
             onPressed: () => Navigator.of(context).maybePop(),
             child: Text(s.done),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+
+/// The way out of the dictionary's answer, offered under it.
+///
+/// Under, not above: the lexicon's meanings are still the first thing to try,
+/// and a learner who finds the right one there should take it. This is for the
+/// case the list does not cover — which, for a machine-joined lexicon, is more
+/// often than anybody would like.
+class _WriteYourOwnCard extends ConsumerWidget {
+  const _WriteYourOwnCard({required this.word, required this.onTap});
+
+  final String word;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+
+    return AppCard(
+      onTap: onTap,
+      color: context.palette.subtleSurface,
+      child: Row(
+        children: [
+          Icon(Icons.edit_note_rounded, color: context.colors.primary),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(s.writeMeaningYourself, style: context.text.titleSmall),
+                const SizedBox(height: AppSpacing.xxs),
+                Text(
+                  s.writeMeaningSubtitle,
+                  style: context.text.bodySmall?.copyWith(
+                    color: context.colors.onSurface.withValues(alpha: 0.65),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Where the learner writes what the word means to them (ADR-072), and where
+/// the checker answers (ADR-074).
+///
+/// Pops the saved [Word], or null if they backed out. It saves rather than
+/// handing the text back because a rejection is a conversation: the checker
+/// says what it thinks the word means and offers meanings it would accept, and
+/// that has to appear beside the field the learner typed in — with their text
+/// still in it.
+class _WriteMeaningSheet extends ConsumerStatefulWidget {
+  const _WriteMeaningSheet({required this.word});
+
+  final String word;
+
+  @override
+  ConsumerState<_WriteMeaningSheet> createState() => _WriteMeaningSheetState();
+}
+
+class _WriteMeaningSheetState extends ConsumerState<_WriteMeaningSheet> {
+  final _controller = TextEditingController();
+
+  bool _saving = false;
+
+  /// The checker's objection to what is currently in the field, or null.
+  ///
+  /// Cleared the moment they edit: an objection to text they have since changed
+  /// is just noise, and leaving it there makes the sheet look broken.
+  MeaningRejectedException? _rejection;
+
+  /// Anything else that went wrong, already localized.
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit({bool acceptAnyway = false}) async {
+    final meaning = _controller.text.trim();
+    if (meaning.isEmpty || _saving) return;
+
+    final s = ref.read(stringsProvider);
+    setState(() {
+      _saving = true;
+      _error = null;
+      if (!acceptAnyway) _rejection = null;
+    });
+
+    try {
+      final word = await ref.read(wordOsApiProvider).addWordWithMeaning(
+            text: widget.word,
+            meaning: meaning,
+            acceptAnyway: acceptAnyway,
+          );
+      if (mounted) Navigator.of(context).pop(word);
+    } on MeaningRejectedException catch (rejection) {
+      // Not a failure — the checker's answer. Their text stays exactly where
+      // it is, with the suggestions underneath it.
+      if (mounted) setState(() => _rejection = rejection);
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
+      if (mounted) setState(() => _error = s.apiError(e.code, e.message));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Takes one of the checker's suggestions and saves it.
+  ///
+  /// Sent as a fresh meaning rather than as an override: it is the checker's
+  /// own wording, so it will be accepted, and it is recorded as approved —
+  /// which is true, and is what makes `Overridden` mean something.
+  void _useSuggestion(String suggestion) {
+    _controller.text = suggestion;
+    setState(() => _rejection = null);
+    _submit();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ref.watch(stringsProvider);
+    final canSave = _controller.text.trim().isNotEmpty && !_saving;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        left: AppSpacing.md,
+        right: AppSpacing.md,
+        bottom: MediaQuery.of(context).viewInsets.bottom + AppSpacing.md,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // The word stays in front of them while they write, left-to-right
+            // wherever the interface is not.
+            Directionality(
+              textDirection: TextDirection.ltr,
+              child: Text(widget.word, style: context.text.headlineSmall),
+            ),
+            const SizedBox(height: AppSpacing.xxs),
+            Text(
+              s.writeMeaningTitle,
+              style: context.text.labelMedium?.copyWith(
+                color: context.colors.onSurface.withValues(alpha: 0.65),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              enabled: !_saving,
+              // Arabic, because that is what the server accepts and what every
+              // skill will mark answers against.
+              textDirection: TextDirection.rtl,
+              textInputAction: TextInputAction.done,
+              maxLength: 256,
+              decoration: InputDecoration(hintText: s.meaningFieldHint),
+              onSubmitted: (_) => _submit(),
+              onChanged: (_) => setState(() {
+                // Their edit answers the objection; keeping it would be the
+                // sheet arguing with text that no longer exists.
+                _rejection = null;
+                _error = null;
+              }),
+            ),
+
+            if (_rejection case final rejection?) ...[
+              const SizedBox(height: AppSpacing.xs),
+              _CheckerVerdict(
+                rejection: rejection,
+                onUse: _saving ? null : _useSuggestion,
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              // Below the suggestions, and quieter than them: the checker is
+              // usually right, and the learner is allowed to know better
+              // (ADR-074).
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton(
+                  onPressed:
+                      _saving ? null : () => _submit(acceptAnyway: true),
+                  child: Text(s.keepMyMeaning),
+                ),
+              ),
+            ] else ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                s.meaningNeedsRealWord,
+                style: context.text.bodySmall?.copyWith(
+                  color: context.colors.onSurface.withValues(alpha: 0.6),
+                ),
+              ),
+            ],
+
+            if (_error != null) ...[
+              const SizedBox(height: AppSpacing.xs),
+              AppCard(
+                color: context.palette.warningSurface,
+                child: Text(_error!, style: context.text.bodyMedium),
+              ),
+            ],
+
+            const SizedBox(height: AppSpacing.md),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                // Disabled rather than failing on an empty meaning: the refusal
+                // would be the app telling the learner off for pressing the
+                // button it just offered them.
+                onPressed: canSave ? () => _submit() : null,
+                child: _saving
+                    ? Row(
+                        // `min` and a `Flexible` label: a full-width Row inside
+                        // a button overflows the moment the label is long,
+                        // which "يتحقق من المعنى…" is on a narrow phone.
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Flexible(
+                            child: Text(
+                              s.checkingMeaning,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Text(s.saveWord),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// What the checker said, and what it would accept instead.
+class _CheckerVerdict extends ConsumerWidget {
+  const _CheckerVerdict({required this.rejection, required this.onUse});
+
+  final MeaningRejectedException rejection;
+  final void Function(String suggestion)? onUse;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+
+    return AppCard(
+      color: context.palette.warningSurface,
+      borderColor: context.palette.warning.withValues(alpha: 0.35),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                // A misspelling and a wrong meaning are different news, and the
+                // icon should not tell the learner they got it wrong when they
+                // got it right and mistyped it.
+                rejection.isSpellingOnly
+                    ? Icons.spellcheck_rounded
+                    : Icons.info_outline_rounded,
+                size: 18,
+                color: context.palette.warning,
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Text(s.meaningLooksWrong, style: context.text.titleSmall),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xxs),
+          // The checker's own sentence, in the learner's language. Shown as
+          // written: there is no canned string for what is wrong with *this*
+          // meaning, which is the whole reason for asking.
+          Text(rejection.message, style: context.text.bodyMedium),
+
+          if (rejection.suggestions.isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              s.meaningSuggestions,
+              style: context.text.labelMedium?.copyWith(
+                color: context.colors.onSurface.withValues(alpha: 0.7),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xxs),
+            Wrap(
+              spacing: AppSpacing.xs,
+              runSpacing: AppSpacing.xs,
+              children: [
+                for (final suggestion in rejection.suggestions)
+                  ActionChip(
+                    label: Text(suggestion),
+                    onPressed:
+                        onUse == null ? null : () => onUse!(suggestion),
+                  ),
+              ],
+            ),
+          ],
         ],
       ),
     );

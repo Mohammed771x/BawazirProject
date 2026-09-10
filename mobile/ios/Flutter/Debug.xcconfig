@@ -18,7 +18,22 @@
 // (docs/07-SECURITY.md §2), so it has no business pointing at a plain-HTTP
 // address on anyone's desk.
 //
-// Decoded, the two below are:
-//   WORDOS_MOCK=false
-//   WORDOS_API_BASE_URL=http://192.168.1.35:5199/api
-DART_DEFINES=$(inherited),V09SRE9TX01PQ0s9ZmFsc2U=,V09SRE9TX0FQSV9CQVNFX1VSTD1odHRwOi8vMTkyLjE2OC4xLjM1OjUxOTkvYXBp
+// Two lines, because the two destinations need different addresses and the
+// device one goes stale.
+//
+// A simulator shares this Mac's network stack, so 127.0.0.1 is the API and
+// always will be — it survives changing Wi-Fi, moving desk, and a DHCP lease
+// expiring overnight. A phone does not: it needs the address this Mac has on
+// the network they share, which changes, and when it does the app hangs on a
+// loading spinner with nothing to say why. That happened during a demo, and
+// `./wordos status` is the thing that tells you.
+//
+// `[sdk=...]` is an xcconfig conditional — Xcode picks the matching line — so
+// `./wordos ip` now rewrites only the device one and the simulator is never
+// broken by a network change.
+//
+// Decoded:
+//   iphonesimulator → WORDOS_MOCK=false, WORDOS_API_BASE_URL=http://127.0.0.1:5199/api
+//   iphoneos        → WORDOS_MOCK=false, WORDOS_API_BASE_URL=http://192.168.1.152:5199/api
+DART_DEFINES[sdk=iphonesimulator*]=$(inherited),V09SRE9TX01PQ0s9ZmFsc2U=,V09SRE9TX0FQSV9CQVNFX1VSTD1odHRwOi8vMTI3LjAuMC4xOjUxOTkvYXBp
+DART_DEFINES[sdk=iphoneos*]=$(inherited),V09SRE9TX01PQ0s9ZmFsc2U=,V09SRE9TX0FQSV9CQVNFX1VSTD1odHRwOi8vMTkyLjE2OC4xLjE1Mjo1MTk5L2FwaQ==

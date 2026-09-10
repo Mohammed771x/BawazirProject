@@ -43,6 +43,21 @@ public sealed class ThrottledAiContentService(
         WritingEvaluationRequest request, CancellationToken ct = default) =>
         RunAsync(() => _inner.EvaluateWritingAsync(request, ct), ct);
 
+    /// <summary>
+    /// Throttled like everything else (ADR-074).
+    /// </summary>
+    /// <remarks>
+    /// Adding a word is not a session, so it is tempting to let this one past
+    /// the gate. It must not be: it is a Gemini call like any other, and the
+    /// gate exists to stop AI latency from becoming an outage in parts of the
+    /// app that never call it. A learner refused for capacity here is told to
+    /// try again in a moment and has lost nothing — which is the same answer
+    /// they get when the check itself is unreachable.
+    /// </remarks>
+    public Task<MeaningCheck> CheckMeaningAsync(
+        MeaningCheckRequest request, CancellationToken ct = default) =>
+        RunAsync(() => _inner.CheckMeaningAsync(request, ct), ct);
+
     public Task<SpeakingObservation> SpeakingTurnAsync(
         SpeakingTurnRequest request, CancellationToken ct = default) =>
         RunAsync(() => _inner.SpeakingTurnAsync(request, ct), ct);

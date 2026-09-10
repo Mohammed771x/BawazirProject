@@ -40,6 +40,8 @@ measurable.
 6. **R6 — User-selected level ≠ system-validated level.** Only the latter drives progression/archiving.
 7. **R7 — The backend shuffles answer options.**
 8. **R8 — Exposure count is a priority signal, never a limit or a delete trigger.**
+   A rule about *the system*. A learner may delete their own word, and it becomes
+   `DELETED` rather than a `DELETE` — invisible to them, kept for the Owner (ADR-071).
 9. **R9 — Weekly Review measures only; it never changes pipeline state.**
 
 Full detail and sources: [`docs/00-PROJECT-PLAN.md`](docs/00-PROJECT-PLAN.md) §2.
@@ -57,6 +59,11 @@ flutter run              # demo account: demo@wordos.app / wordos123
 Architecture:
 
 - **State**: Riverpod (no codegen). **Routing**: go_router with onboarding guards.
+- **Widget tests pin the mock backend** in `testOverrides`. `WORDOS_MOCK` defaults
+  to `false` for device builds, so a test that lets the real environment through
+  points at an HTTP server that is not running — and fails with "Found 0 widgets
+  with text 'Skills Hub'", which reads as a UI regression and is not one. Read the
+  environment from `appEnvironmentProvider`, never from `AppEnvironment.current`.
 - **`lib/core/api/wordos_api.dart`** is *the* contract. Two implementations:
   `HttpWordOsApi` (real backend, ready) and `MockWordOsApi` (development).
   Swap via `AppEnvironment` / `--dart-define=WORDOS_MOCK=false`.

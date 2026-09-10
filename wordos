@@ -33,7 +33,8 @@ lan_ip() {
   echo "127.0.0.1"
 }
 
-# What the Xcode build was last told to call.
+# What a *device* build was last told to call. The simulator line is pinned to
+# loopback and never goes stale, so it is not what this warns about.
 configured_url() {
   python3 - "$ROOT/mobile/ios/Flutter/Debug.xcconfig" <<'PY' 2>/dev/null
 import base64, sys
@@ -146,7 +147,27 @@ path, ip, port = sys.argv[1], sys.argv[2], sys.argv[3]
 text = open(path).read()
 defines = [f"WORDOS_MOCK=false", f"WORDOS_API_BASE_URL=http://{ip}:{port}/api"]
 encoded = ",".join(base64.b64encode(d.encode()).decode() for d in defines)
-text = re.sub(r"(?m)^DART_DEFINES=.*$", f"DART_DEFINES=$(inherited),{encoded}", text)
+
+# Only the device line. The simulator shares this Mac's network stack, so it is
+# pinned to 127.0.0.1 and a changing Wi-Fi address must not reach it — that is
+# the whole reason the two are separate settings.
+text, count = re.subn(
+    r"(?m)^DART_DEFINES\[sdk=iphoneos\*\]=.*$",
+    f"DART_DEFINES[sdk=iphoneos*]=$(inherited),{encoded}", text)
+
+if count == 0:
+    print("   ! Debug.xcconfig has no iphoneos line — nothing was changed.")
+    raise SystemExit(1)
+
+# The comment above says what the base64 decodes to, and it is the only readable
+# copy of the address in the file. Leaving it behind means the file states an
+# address the build does not use, which is worse than no comment at all because
+# somebody will believe it.
+text = re.sub(
+    r"(?m)^//   iphoneos        → .*$",
+    f"//   iphoneos        → WORDOS_MOCK=false, WORDOS_API_BASE_URL=http://{ip}:{port}/api",
+    text)
+
 open(path, "w").write(text)
 print(f"   the app will now call http://{ip}:{port}/api")
 print("   Stop and Run again in Xcode to pick it up.")

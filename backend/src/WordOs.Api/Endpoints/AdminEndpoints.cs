@@ -264,7 +264,13 @@ public static class AdminEndpoints
             .CountAsync(ct);
 
         // Words added inside the window — the figure the window is about.
+        // `IgnoreQueryFilters` throughout the Owner's figures: a word the
+        // learner deleted was still added, still ran through skills, still
+        // produced evidence (ADR-071). Hiding it here would make a deletion
+        // look like the word had never existed, which is the one reading of
+        // the data that is certainly false.
         var wordsTotal = await db.Words
+            .IgnoreQueryFilters()
             .CountAsync(w => w.AddedAt >= from && learnerIds.Contains(w.UserId), ct);
 
         // Pipeline completion is deliberately *not* windowed. A word needs five
@@ -272,6 +278,7 @@ public static class AdminEndpoints
         // today, how many are Active?" is structurally zero and would read as a
         // collapse rather than as arithmetic.
         var wordsEver = await db.Words
+            .IgnoreQueryFilters()
             .CountAsync(w => learnerIds.Contains(w.UserId), ct);
         var wordsActive = await db.Words
             .CountAsync(w => w.State == WordState.Active
@@ -318,6 +325,7 @@ public static class AdminEndpoints
         // pass, and its current row remembers none of that. The event log is
         // append-only, which is what makes these figures reproducible.
         var learnerWordIds = db.Words
+            .IgnoreQueryFilters()
             .Where(w => learnerIds.Contains(w.UserId))
             .Select(w => w.Id);
 
@@ -516,8 +524,9 @@ public static class AdminEndpoints
                     .Where(e => e.UserId == u.Id)
                     .Max(e => (DateTimeOffset?)e.CreatedAt)
                 ?? u.LastLoginAt,
-                db.Words.Count(w => w.UserId == u.Id),
-                db.Words.Count(w => w.UserId == u.Id && w.State == WordState.Active),
+                db.Words.IgnoreQueryFilters().Count(w => w.UserId == u.Id),
+                db.Words.IgnoreQueryFilters()
+                    .Count(w => w.UserId == u.Id && w.State == WordState.Active),
                 // The client has always drawn this number; the server had never
                 // sent it, so every row read "0 sessions" however much the
                 // learner had done.
@@ -560,7 +569,12 @@ public static class AdminEndpoints
 
         var paging = Page.From(page, pageSize, maxSize: 200);
 
-        var query = db.Words.Include(w => w.Skills).Where(w => w.UserId == id);
+        // The Owner sees deleted words too, marked `DELETED` like any other
+        // state — this list is the evidence trail, not the learner's shelf.
+        var query = db.Words
+            .IgnoreQueryFilters()
+            .Include(w => w.Skills)
+            .Where(w => w.UserId == id);
 
         if (!string.IsNullOrWhiteSpace(state))
         {
@@ -593,10 +607,16 @@ public static class AdminEndpoints
                 w.Id,
                 w.Text,
                 w.Meaning,
+                // Where the meaning came from (ADR-072). The learner never sees
+                // this — a meaning is a meaning to them — but the Owner cannot
+                // read "learner-written meanings fail Spelling more often"
+                // out of a column that does not exist.
+                meaningSource = w.MeaningSource.ToWire(),
                 cefrLevel = w.CefrLevel.ToWire(),
                 state = w.State.ToWire(),
                 currentSkill = w.CurrentSkill?.ToWire(),
                 w.AddedAt,
+                w.DeletedAt,
                 w.ExposureCount,
                 skillsPassed = w.Skills.Count(sk => sk.Status == SkillStatus.Passed),
                 attempts = w.Skills.Sum(sk => sk.Attempts),
@@ -630,6 +650,7 @@ public static class AdminEndpoints
         if (RequireOwner(principal) is { } denied) return denied;
 
         var word = await db.Words
+            .IgnoreQueryFilters()
             .Include(w => w.Skills)
             .Include(w => w.Events)
             .FirstOrDefaultAsync(w => w.Id == wordId, ct);
@@ -810,6 +831,7 @@ public static class AdminEndpoints
             return Problems.NotFound("NOT_FOUND", "User not found.");
 
         var words = await db.Words
+            .IgnoreQueryFilters()
             .Where(w => w.UserId == id)
             .Include(w => w.Skills)
             .Include(w => w.Events)

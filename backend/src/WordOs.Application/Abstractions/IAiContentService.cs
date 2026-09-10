@@ -26,6 +26,22 @@ public interface IAiContentService
         WritingEvaluationRequest request,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Checks an Arabic meaning the learner typed for an English word
+    /// (ADR-074).
+    /// </summary>
+    /// <remarks>
+    /// The one call in this interface that is <b>not</b> allowed to fall back.
+    /// Everywhere else an AI outage degrades into hand-written content and the
+    /// learner keeps working; here a fabricated "looks fine" would let an
+    /// unchecked meaning into the pipeline wearing the same badge as a checked
+    /// one, and nothing downstream could tell them apart. It throws instead,
+    /// and the endpoint answers 503.
+    /// </remarks>
+    Task<MeaningCheck> CheckMeaningAsync(
+        MeaningCheckRequest request,
+        CancellationToken ct = default);
+
     /// <summary>Produces one conversational turn.</summary>
     Task<SpeakingObservation> SpeakingTurnAsync(
         SpeakingTurnRequest request,
@@ -228,6 +244,53 @@ public sealed record WritingObservation(
     // shift in pass rates can be traced to a prompt edit rather than blamed on
     // learners (`MVP Core.txt` §62) — the same attribution Reading and
     // Listening already carry.
+    string PromptVersion = "",
+    string Model = "",
+    int Tokens = 0);
+
+/// <summary>One Arabic meaning a learner typed, for checking (ADR-074).</summary>
+public sealed record MeaningCheckRequest(
+    string Word,
+    /// <summary>
+    /// <b>Every</b> sense the lexicon holds for this word, not the commonest.
+    /// </summary>
+    /// <remarks>
+    /// Sending one was a real bug, caught by running it: `book` resolved to "a
+    /// set of printed pages", so a learner writing <c>يحجز</c> — correct, and
+    /// precisely the kind of meaning ADR-072 exists to let them write — was
+    /// told they were wrong. A learner allowed to mean any sense has to be
+    /// judged against all of them.
+    /// </remarks>
+    IReadOnlyList<string> Definitions,
+    string PartOfSpeech,
+    string Meaning,
+    /// <summary>
+    /// The language the note to the learner is written in (ADR-035). The word
+    /// and the meaning they typed are untouched by it.
+    /// </summary>
+    string FeedbackLanguage = "ar");
+
+/// <summary>
+/// What the checker made of it. No <c>Allowed</c> field, deliberately: whether
+/// the word may be added is the backend's decision and the learner's to
+/// overrule (rule R2, ADR-074).
+/// </summary>
+/// <param name="Matches">
+/// Whether the Arabic names one of the word's real meanings.
+/// </param>
+/// <param name="Corrected">
+/// The learner's own wording with its spelling fixed, or null when it needed
+/// none. Distinct from <see cref="Suggestions"/>: this is their meaning
+/// repaired, not a different meaning offered.
+/// </param>
+/// <param name="Suggestions">
+/// Meanings that would be right, when theirs is not. Empty when it is.
+/// </param>
+public sealed record MeaningCheck(
+    bool Matches,
+    string? Corrected,
+    IReadOnlyList<string> Suggestions,
+    string Note,
     string PromptVersion = "",
     string Model = "",
     int Tokens = 0);

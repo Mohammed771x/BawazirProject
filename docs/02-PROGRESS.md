@@ -3,7 +3,7 @@
 > **The live state of the project.** Update this at the end of every working session.
 > A new session should read `CLAUDE.md` → this file → then start at "Next up".
 
-**Last updated:** 2026-08-17
+**Last updated:** 2026-09-10
 
 ---
 
@@ -22,6 +22,91 @@
 | 7 | Integration (swap mock → real, voice capture) | ✅ All five skills on the real API; voice conversation built |
 | 8 | Analytics & Owner dashboard | ✅ Real PostgreSQL-backed analytics |
 | 9 | Hardening & pilot | ⬜ Not started |
+
+## Demo review round 2 — 2026-09-10
+
+Three items from the product owner, all shipped and all against the real backend.
+
+| Item | Status |
+|---|---|
+| Delete a word from My Words | ✅ Soft delete (ADR-071) — swipe a row or the word's own screen |
+| The dictionary's meanings are wrong; let the learner write one | ✅ `customMeaning` (ADR-072) — the word is still the lexicon's, the meaning is theirs |
+| A word added from a passage lands under a different meaning | ✅ `fromSessionId` (ADR-073) — the server answers from its own stored glossary |
+
+**What was actually wrong with the third one.** The reading sheet showed the
+passage's gloss and then discarded it on "add": it fetched the dictionary senses
+and picked whichever *read* closest, falling back to `senses.first`. For a word
+with six senses that is a coin flip, and it was also the client deciding a
+question that belongs to the server (rule R1). The guessing is gone.
+
+**The lexicon complaint is measurable.** From the live database, `sell` offers
+`أَقْنَعَ بِـ · باع · بِيعَ · بَاعَ · قُبِلَ · إقناع بالشراء` — "persuade to" first,
+three vocalisations of one verb, and the wanted meaning second. Re-ranking would
+not fix the glosses; letting the learner write one does.
+
+**Found and fixed while doing it — the Flutter suite was not running at all.**
+Every widget test that signed in was pointing at a real HTTP server, because
+`WORDOS_MOCK` defaults to `false` (right, for a device build) and `LoginScreen`
+read `AppEnvironment.current` **statically**, behind the provider, so no test
+override could reach it. 75 of 369 tests failed, and the failure read as
+"Found 0 widgets with text 'Skills Hub'" — a UI regression that had not
+happened. The environment now comes from the provider, and `testOverrides` pins
+the mock so a widget test cannot depend on a server being up.
+
+**Verified against real Gemini**, not only against the tests. A generated
+passage was searched for a word whose gloss disagrees with the lexicon's first
+sense — the exact shape of the bug — and adding it now stores the passage's
+meaning: `Learning` → **تعلم**, where the old client stored the dictionary's
+**اكتسب (صيغة الاستمرار)**.
+
+| A learner-written meaning is checked by the AI | ✅ `POST /ai/meaning/check` (ADR-074) — rejects with suggestions; the learner may still insist |
+
+**The checker, in one line:** it runs only on the path where the learner
+invented the meaning, it reports rather than decides, and if it cannot be
+reached nothing is saved. `book = إنسان` comes back as *"إنسان تعني human،
+بينما book تعني كتاباً أو عملية الحجز"* with `كتاب · حجز · سجل` to tap, and
+**احفظها كما كتبتها** underneath for the learner who knows better.
+
+**Two bugs it found, both in the wiring, both only visible by running it.**
+The checker was sent the *commonest* sense, so `book` arrived as "a set of
+printed pages" and `يحجز` was rejected — the exact meaning ADR-072 exists to
+allow. Sending "every sense" then turned out to be nine nouns, because `book`'s
+three verb senses rank below them and `Take(8)` cut them all. Senses are now
+spread across parts of speech.
+
+**Verified in the app itself**, on the iOS simulator against the real backend
+and real Gemini — not only in tests:
+
+* deleting `several` by swipe → the confirmation names the word → the list goes
+  6 → 5, and SQL shows the row still there as `Deleted` with `CurrentSkill =
+  Writing` preserved;
+* Add Word for `sell` shows the lexicon's bad order — `أَقْنَعَ بِـ` first — with
+  "اكتب المعنى بنفسك" after the third meaning, and a non-Arabic meaning is
+  refused with the localized `اكتب المعنى بالعربية.`;
+* writing `إنسان` for `book`: the sheet stays open with the text still in it,
+  the checker's sentence beside it and three tappable suggestions; tapping
+  `حجز` saves it as `Approved`, and SQL shows the three sources side by side —
+  `Learner/Approved`, `Passage/—`, `Lexicon/—`;
+* a generated Reading passage, tapping `hidden`: the sheet says **مخفي**
+  (adjective), and adding it stores **مخفي** / `adjective` / `Passage` — where
+  the dictionary's first sense is `أَخْفَى (التصريف الثالث)`, a verb.
+
+**Found while running it:** the "write your own" card never appeared for the
+most ordinary search there is. `sell` returns `sell`, `selling`, `seller` and
+`sell off`, so the rule "every candidate shares one text" was false and the
+offer was silently absent. It now keys on the word the learner actually typed,
+and sits after the third meaning rather than below twenty.
+
+**Also:** `Debug.xcconfig` now carries two `DART_DEFINES` lines —
+`[sdk=iphonesimulator*]` pinned to `127.0.0.1`, `[sdk=iphoneos*]` holding the
+LAN address that `./wordos ip` rewrites. The Mac's address changed mid-session
+and the simulator hung on a loading spinner with nothing to say why; a simulator
+shares this Mac's network stack and never needed the LAN address at all.
+
+**Verification:** `flutter analyze` clean · `flutter test` **386/386** ·
+backend **94 domain + 373 API** green on real PostgreSQL · a curl walkthrough of
+add-with-written-meaning → refuse English → refuse unknown word → delete →
+delete again → re-add, with the rows confirmed by SQL.
 
 ## Demo review round 1 — status
 
@@ -72,7 +157,7 @@ release, no 401 recovery).
 | Weekly review | Measurement only (R9) — no path from it to any pipeline write |
 | AI | FastAPI → Gemini `gemini-3.1-flash-lite`, JSON-schema-constrained output, `X-Service-Token` required, prompt versions recorded per session |
 | Exposure | Credited when generated content actually reuses an Active word, once per session, enforced by a unique index (ADR-018) |
-| Tests | **189 green** (69 domain + 120 API over real PostgreSQL), plus 118 Flutter widget tests and 3 real-stack integration journeys |
+| Tests | **467 green** (94 domain + 373 API over real PostgreSQL), plus 386 Flutter widget tests and 3 real-stack integration journeys |
 
 Verified end to end with real Gemini, not mocks: register → interests → add two
 dictionary words → Reading session (generated passage using the learner's
@@ -99,7 +184,9 @@ Login / Register → Interests → Placement test → per-skill levels
    → Session results → Weekly Review → Vocabulary (Learning/Active/Archive) → Settings
 ```
 
-**Verification:** `flutter analyze` clean · `flutter test` **118/118 green**.
+**Verification:** `flutter analyze` clean · `flutter test` **380/380 green**
+(the count in this file said 118 for a long time; the suite had grown and, for
+the last stretch, was not running at all — see demo review round 2).
 
 Test suites:
 - `test/word_pipeline_test.dart` — pins the learning rules (written as a spec for the C#

@@ -26,10 +26,10 @@ class AppEnvironment {
   /// dictionary provider is fetched *through our backend*, which holds the
   /// credentials server-side (`docs/07-SECURITY.md` §1).
   static const AppEnvironment current = AppEnvironment(
-    useMockBackend: bool.fromEnvironment('WORDOS_MOCK', defaultValue: true),
+    useMockBackend: bool.fromEnvironment('WORDOS_MOCK', defaultValue: false),
     baseUrl: String.fromEnvironment(
       'WORDOS_API_BASE_URL',
-      defaultValue: 'http://localhost:5080/api',
+      defaultValue: 'https://wordos-api.onrender.com/api',
     ),
   );
 

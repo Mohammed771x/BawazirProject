@@ -36,7 +36,11 @@ class MockAdmin {
     final learners = users.where((u) => u.role == UserRole.user).toList();
     final order = MockEngine.configuration.skillsOrder;
 
-    final allWords = [for (final u in learners) ...u.words];
+    // Deleted words included, here and throughout the Owner's figures: a word
+    // the learner removed was still added and still produced evidence
+    // (ADR-071). Hiding it would make a deletion look like the word had never
+    // existed, which is the one reading of the data that is certainly false.
+    final allWords = [for (final u in learners) ...u.allWords];
     final activeWords =
         allWords.where((w) => w.state == WordState.active).length;
 
@@ -169,9 +173,9 @@ class MockAdmin {
         role: user.role,
         createdAt: user.createdAt,
         lastActiveAt: _analytics.lastActivityFor(user.id),
-        wordsTotal: user.words.length,
+        wordsTotal: user.allWords.length,
         wordsActive:
-            user.words.where((w) => w.state == WordState.active).length,
+            user.allWords.where((w) => w.state == WordState.active).length,
         sessionsCompleted:
             _analytics.sessions.where((s) => s.userId == user.id).length,
       );
@@ -190,7 +194,7 @@ class MockAdmin {
     }
 
     final term = (query ?? '').trim().toLowerCase();
-    final items = target.words
+    final items = target.allWords
         .where((w) => state == null || w.state == state)
         .where((w) =>
             term.isEmpty ||
@@ -212,7 +216,7 @@ class MockAdmin {
     String wordId,
   ) {
     requireOwner(caller);
-    final word = owner.words.firstWhere(
+    final word = owner.allWords.firstWhere(
       (w) => w.id == wordId,
       orElse: () => throw const ApiException(
           'WORD_NOT_FOUND', 'Word not found.', statusCode: 404),
@@ -261,7 +265,7 @@ class MockAdmin {
     final now = _engine.now;
     final order = MockEngine.configuration.skillsOrder;
 
-    int addedWithin(Duration window) => target.words
+    int addedWithin(Duration window) => target.allWords
         .where((w) => now.difference(w.addedAt) <= window)
         .length;
 
@@ -276,18 +280,19 @@ class MockAdmin {
             supportMode: SpellingInputMode.letterTiles,
           ),
       wordsLearning:
-          target.words.where((w) => w.state == WordState.learning).length,
-      wordsActive: target.words.where((w) => w.state == WordState.active).length,
+          target.allWords.where((w) => w.state == WordState.learning).length,
+      wordsActive:
+          target.allWords.where((w) => w.state == WordState.active).length,
       wordsArchived:
-          target.words.where((w) => w.state == WordState.archived).length,
+          target.allWords.where((w) => w.state == WordState.archived).length,
       wordsAddedToday:
-          target.words.where((w) => _isSameDay(w.addedAt, now)).length,
+          target.allWords.where((w) => _isSameDay(w.addedAt, now)).length,
       wordsAddedThisWeek: addedWithin(const Duration(days: 7)),
       wordsAddedThisMonth: addedWithin(const Duration(days: 30)),
       skillStats: _analytics.skillStats(userId: target.id, order: order),
       daily: _dailyRows(target, now, order),
       mistakes: _mistakes(target),
-      masteredWords: target.words
+      masteredWords: target.allWords
           .where((w) => w.state == WordState.active)
           .map((w) => w.text)
           .toList(),
@@ -309,7 +314,7 @@ class MockAdmin {
           return AdminDailyRow(
             date: DateTime.utc(day.year, day.month, day.day),
             wordsAdded:
-                user.words.where((w) => _isSameDay(w.addedAt, day)).length,
+                user.allWords.where((w) => _isSameDay(w.addedAt, day)).length,
             perSkillCompleted: {
               for (final skill in order)
                 skill: _analytics.attempts
@@ -341,7 +346,8 @@ class MockAdmin {
     final mistakes = <AdminMistake>[];
     for (final entry in byKey.entries) {
       final first = entry.value.first;
-      final word = user.words.where((w) => w.id == first.wordId).firstOrNull;
+      final word =
+          user.allWords.where((w) => w.id == first.wordId).firstOrNull;
       if (word == null) continue;
       mistakes.add(
         AdminMistake(

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using WordOs.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using WordOs.Infrastructure.Persistence;
 namespace WordOs.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(WordOsDbContext))]
-    partial class WordOsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260910121053_WordDeletionAndMeaningSource")]
+    partial class WordDeletionAndMeaningSource
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -786,10 +789,6 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
-
-                    b.Property<string>("MeaningCheck")
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
 
                     b.Property<string>("MeaningSource")
                         .IsRequired()

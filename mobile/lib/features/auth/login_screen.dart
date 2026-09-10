@@ -18,16 +18,34 @@ class LoginScreen extends ConsumerStatefulWidget {
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  // The seeded demo account exists only in the mock backend. Prefilling it
-  // against the real API hands the learner credentials that cannot work, and
-  // the failure reads as "the app is broken" rather than "that account is not
-  // yours".
-  static bool get _isDemoBackend => AppEnvironment.current.useMockBackend;
 
-  final _email =
-      TextEditingController(text: _isDemoBackend ? 'demo@wordos.app' : '');
-  final _password =
-      TextEditingController(text: _isDemoBackend ? 'wordos123' : '');
+  late final TextEditingController _email;
+  late final TextEditingController _password;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // The seeded demo account exists only in the mock backend. Prefilling it
+    // against the real API hands the learner credentials that cannot work, and
+    // the failure reads as "the app is broken" rather than "that account is not
+    // yours".
+    //
+    // Read from the provider, not from `AppEnvironment.current`. This was the
+    // one place in the app that went round the provider to the compile-time
+    // constant, and it could not be overridden: a widget test that pinned the
+    // mock still got an empty form here, tapped "Sign in", failed validation
+    // and never reached the hub — reported as "Found 0 widgets with text
+    // 'Skills Hub'", which is a UI regression that had not happened.
+    //
+    // In `initState` rather than as a field initializer because `ref` is not
+    // available until the state is mounted.
+    final isDemoBackend = ref.read(appEnvironmentProvider).useMockBackend;
+
+    _email = TextEditingController(
+        text: isDemoBackend ? 'demo@wordos.app' : '');
+    _password = TextEditingController(text: isDemoBackend ? 'wordos123' : '');
+  }
 
   @override
   void dispose() {
@@ -126,7 +144,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             ),
           ],
         ),
-        if (_isDemoBackend) ...[
+        if (ref.watch(appEnvironmentProvider).useMockBackend) ...[
           const SizedBox(height: AppSpacing.md),
           Container(
             padding: const EdgeInsets.all(AppSpacing.sm),

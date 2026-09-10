@@ -184,6 +184,23 @@ public sealed class CapacityTests
         TimeSpan cost, Action? entered = null, Action? left = null)
         : IAiContentService
     {
+        // Slow like every other call: the gate is what this class exists to
+        // exercise, and the meaning checker goes through it too (ADR-074).
+        public async Task<MeaningCheck> CheckMeaningAsync(
+            MeaningCheckRequest request, CancellationToken ct = default)
+        {
+            entered?.Invoke();
+            try
+            {
+                await Task.Delay(cost, ct);
+                return new MeaningCheck(true, null, [], "ok");
+            }
+            finally
+            {
+                left?.Invoke();
+            }
+        }
+
         public async Task<WritingObservation> EvaluateWritingAsync(
             WritingEvaluationRequest request, CancellationToken ct = default)
         {

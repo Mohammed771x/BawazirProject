@@ -69,7 +69,65 @@ abstract class WordOsApi {
   /// every platform (rule R1).
   Future<WordDefinition> defineWord(String word);
 
+  /// Adds the word with a meaning the lexicon supplied.
+  ///
+  /// The candidate is a **lookup key**, not content: the server re-resolves the
+  /// sense and stores its own row, so nothing this client sends decides what
+  /// the word means (ADR-012).
   Future<Word> addWord(WordCandidate candidate);
+
+  /// Adds [text] with a meaning the learner wrote themselves (ADR-072).
+  ///
+  /// The meaning is the one thing in this app the client may genuinely author,
+  /// and it is authored by the learner rather than by the app. The **word** is
+  /// still resolved against the lexicon on the server — a CEFR level, a part of
+  /// speech and an English definition decide which passages the word appears in
+  /// and how Spelling clues it, and none of those can be invented for a string
+  /// nobody recognises.
+  ///
+  /// Throws `MEANING_NOT_ARABIC` for a meaning written in English: every skill
+  /// marks answers against this string, so an English one makes its own
+  /// questions unanswerable.
+  /// Throws [MeaningRejectedException] when the checker disagrees (ADR-074),
+  /// carrying what it would accept. Pass [acceptAnyway] to save the learner's
+  /// wording regardless — only after they have seen what it said and chosen to
+  /// keep theirs. The check still runs; the disagreement is recorded.
+  ///
+  /// Throws `MEANING_CHECK_UNAVAILABLE` when the checker cannot be reached.
+  /// Nothing is saved: there is no fallback for "does this Arabic mean what
+  /// this English word means", and inventing one would let an unchecked meaning
+  /// in wearing the same badge as a checked one.
+  Future<Word> addWordWithMeaning({
+    required String text,
+    required String meaning,
+    bool acceptAnyway = false,
+  });
+
+  /// Adds [word] with the meaning it carries **in this session's passage**
+  /// (ADR-073).
+  ///
+  /// The meaning is not sent: the server reads it from the glossary it stored
+  /// when it generated the passage. That is the whole point of the call. The
+  /// client used to fetch the word's dictionary senses and pick whichever read
+  /// closest to the passage's gloss, which is a guess — and a wrong guess filed
+  /// the word under a meaning the learner had never seen.
+  ///
+  /// Throws `NOT_IN_PASSAGE` for a word the generator did not gloss, which the
+  /// caller answers by offering the ordinary dictionary instead.
+  Future<Word> addWordFromPassage({
+    required String sessionId,
+    required String word,
+  });
+
+  /// Removes a word from the learner's vocabulary (ADR-071).
+  ///
+  /// Gone as far as this app is concerned: it leaves every list, no session
+  /// will ask about it again, and adding it back starts a new journey from
+  /// Reading. What the server does with the row afterwards is the server's
+  /// business — the client neither knows nor renders it.
+  ///
+  /// Succeeds for a word that is already deleted, so a retry is safe.
+  Future<void> deleteWord(String wordId);
 
   /// The learner's own vocabulary, newest first.
   ///
@@ -222,6 +280,38 @@ abstract class WordOsApi {
   /// The placement test behind a learner's starting levels, with the answers
   /// that produced them (Part 3).
   Future<PlacementEvidence> adminPlacementEvidence(String userId);
+}
+
+/// The meaning checker disagreed with what the learner wrote (ADR-074).
+///
+/// An [ApiException] rather than a result type, because every caller of
+/// `addWordWithMeaning` already handles `ApiException` and this must not be the
+/// one failure that slips past a `catch` into a spinner that never stops. It
+/// carries what the ordinary exception cannot: what the checker would accept.
+///
+/// [message] is the checker's own sentence, written in the learner's language
+/// by the model. It is shown as-is — there is no localized string for "what is
+/// wrong with *this* meaning", which is the whole point of asking.
+class MeaningRejectedException extends ApiException {
+  const MeaningRejectedException({
+    required String message,
+    required this.suggestions,
+    this.corrected,
+    int? statusCode,
+  }) : super('MEANING_REJECTED', message, statusCode: statusCode);
+
+  /// Meanings the checker would accept, for the learner to tap.
+  final List<String> suggestions;
+
+  /// Their own wording with its spelling fixed, when that is all that was
+  /// wrong. Null when the meaning itself was the problem.
+  final String? corrected;
+
+  /// Whether this is a spelling correction rather than a wrong meaning.
+  ///
+  /// The two deserve different words to the learner: "you meant the right
+  /// thing, spelled slightly wrong" is not "that is not what this word means".
+  bool get isSpellingOnly => corrected != null;
 }
 
 /// A failure surfaced to the UI. `code` mirrors the backend error code so

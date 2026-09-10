@@ -79,7 +79,12 @@ void main() {
     // matters is what the sheet does with a word the dictionary knows (§20).
     final context = tester.element(find.byType(HighlightedPassage));
     unawaited(showWordLookup(context,
-        word: 'research', isTarget: false, color: Colors.blue));
+        word: 'research',
+        isTarget: false,
+        color: Colors.blue,
+        // No glossary entry is passed, so this exercises the dictionary path;
+        // the session id only matters to the passage path (ADR-073).
+        sessionId: 'session-under-test'));
     await tester.pumpAndSettle();
     await tester.pump(const Duration(seconds: 1));
     await tester.pumpAndSettle();

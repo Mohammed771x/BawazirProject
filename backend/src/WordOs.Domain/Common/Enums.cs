@@ -42,6 +42,67 @@ public enum WordState
     Mature,
     Active,
     Archived,
+
+    /// <summary>
+    /// The learner removed it from their vocabulary (ADR-071).
+    /// </summary>
+    /// <remarks>
+    /// Gone as far as the learner is concerned — a global query filter keeps it
+    /// out of every list, session and review — but the row and its whole
+    /// history stay, because this service exists to measure whether the
+    /// pipeline works (<c>docs/00-PROJECT-PLAN.md</c> §1) and a word that
+    /// vanishes takes its evidence with it. The Owner still sees it.
+    /// </remarks>
+    Deleted,
+}
+
+/// <summary>
+/// Where a word's Arabic meaning came from (ADR-072).
+/// </summary>
+/// <remarks>
+/// Recorded because the three are not equally trustworthy and the experiment
+/// has to be able to tell them apart. <see cref="Lexicon"/> is a curated gloss;
+/// <see cref="Passage"/> is what the generator meant by the word in one
+/// sentence; <see cref="Learner"/> is whatever the learner typed. If words with
+/// learner-written meanings turn out to fail Spelling twice as often, that is a
+/// finding — and it is unreadable if every meaning looks alike in the data.
+/// </remarks>
+public enum MeaningSource
+{
+    /// <summary>Copied from <c>lexicon_entries</c>, the curated join.</summary>
+    Lexicon,
+
+    /// <summary>The learner wrote it themselves in Add Word (ADR-072).</summary>
+    Learner,
+
+    /// <summary>
+    /// The meaning the passage generator gave the word in the sentence the
+    /// learner tapped it in (ADR-073).
+    /// </summary>
+    Passage,
+}
+
+/// <summary>
+/// What the meaning checker made of a learner-written meaning (ADR-074).
+/// </summary>
+/// <remarks>
+/// Only ever set for <see cref="MeaningSource.Learner"/>. A lexicon gloss and a
+/// passage gloss are not the learner's guesses and are not checked.
+///
+/// <para><see cref="Overridden"/> is the one that earns its place. The learner
+/// may save a meaning the checker rejected, because the checker is sometimes
+/// wrong and this whole feature exists to escape an automated source that was
+/// (ADR-072). But "the model said no and the learner said yes anyway" is
+/// exactly the fact that explains a word failing Spelling four times a fortnight
+/// later, and it is unrecoverable if it was never written down.</para>
+/// </remarks>
+public enum MeaningCheckResult
+{
+    /// <summary>The checker agreed the Arabic means what the word means.</summary>
+    Approved,
+
+    /// <summary>The checker disagreed; the learner saved it regardless.</summary>
+    Overridden,
 }
 
 public enum UserRole
@@ -78,6 +139,9 @@ public enum WordEventType
     EnteredActive,
     ExposureIncremented,
     Archived,
+
+    /// <summary>The learner removed the word (ADR-071).</summary>
+    Deleted,
 }
 
 public enum SpellingInputMode

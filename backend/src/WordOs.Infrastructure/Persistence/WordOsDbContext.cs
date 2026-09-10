@@ -211,6 +211,10 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
             e.Property(x => x.SenseId).HasMaxLength(64).IsRequired();
             e.Property(x => x.Text).HasMaxLength(128).IsRequired();
             e.Property(x => x.Meaning).HasMaxLength(256).IsRequired();
+            e.Property(x => x.MeaningSource)
+                .HasConversion<string>().HasMaxLength(16);
+            e.Property(x => x.MeaningCheck)
+                .HasConversion<string?>().HasMaxLength(16);
             e.Property(x => x.DefinitionEn).HasMaxLength(1024);
             e.Property(x => x.PartOfSpeech).HasMaxLength(32);
             e.Property(x => x.CefrLevel).HasConversion<string>().HasMaxLength(8);
@@ -220,7 +224,25 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
 
             // The duplicate rule lives in the schema, not only in code: one
             // learner may hold a given sense exactly once (ADR-012).
-            e.HasIndex(x => new { x.UserId, x.SenseId }).IsUnique();
+            //
+            // Filtered on deletion (ADR-071): a learner who removes a word and
+            // adds it again must get a genuinely new journey, and an unfiltered
+            // index would refuse the second add for ever on the strength of a
+            // row the learner believes is gone.
+            e.HasIndex(x => new { x.UserId, x.SenseId })
+                .IsUnique()
+                .HasFilter("\"State\" <> 'Deleted'")
+                .HasDatabaseName("IX_words_UserId_SenseId");
+
+            // A deleted word is gone *for the learner* (ADR-071). Doing that
+            // with a filter here rather than a `Where` at each call site is the
+            // whole point: there are two dozen places that read words — five
+            // skill sessions, the hub, the weekly review, eligibility scans —
+            // and "remember to exclude deleted" would be wrong in one of them
+            // within a month, which is a learner being tested on a word they
+            // deleted. The Owner's analytics opt back in with
+            // `IgnoreQueryFilters()`, deliberately and visibly.
+            e.HasQueryFilter(x => x.State != WordState.Deleted);
 
             // Every session query filters on these three.
             e.HasIndex(x => new { x.UserId, x.State, x.CurrentSkill });
