@@ -72,8 +72,14 @@ Architecture:
 - **`lib/core/theme/app_tokens.dart`** holds every colour, spacing and radius. No inline values.
 - **`lib/core/l10n/app_strings.dart`** holds all UI copy (English + Arabic, RTL supported).
 
-- **`lib/core/storage/app_preferences.dart`** holds the *only* device-owned state: UI language
-  and theme (ADR-010). Everything else is server state. Default language is **Arabic**.
+- **`lib/core/storage/app_preferences.dart`** holds the *only* device-owned state: UI language,
+  theme (ADR-010) and whether this phone raises daily reminders (ADR-076). Everything else is
+  server state. Default language is **Arabic**.
+- **`lib/core/notifications/`** schedules the daily reminders. Local notifications only — no
+  Firebase, no push, no device token. The phone fires them offline with the app closed, so the
+  *server* decides what each one says (`GET /api/notifications/daily`) and this layer only
+  translates and schedules. Widget tests pin `notificationSchedulerProvider` to a fake; the real
+  one is a platform channel a test binary does not have.
 
 **The local stack.** `./wordos start` brings up the AI service and the API and
 reports where they are; `./wordos stop` shuts both down; `./wordos status` says
@@ -120,6 +126,31 @@ A normal account cannot reach the dashboard — the route is guarded *and* the A
 - Models mirror the API contract exactly; update `docs/05-API-CONTRACT.md` in the same change.
 - Every judgement call or documentation conflict gets a new ADR in `docs/03-DECISIONS.md` — append, never rewrite.
 - Update `docs/02-PROGRESS.md` at the end of a working session so the next one can resume.
+
+## Building an Android release
+
+```bash
+cd mobile
+flutter build apk --release --split-per-abi   --dart-define=WORDOS_MOCK=false   --dart-define=WORDOS_API_BASE_URL=https://wordos-api.onrender.com/api
+```
+
+Three APKs land in `build/app/outputs/flutter-apk/`; `app-arm64-v8a-release.apk`
+is the one for any modern phone. The URL must be **https** — a release build
+refuses cleartext.
+
+**Run it on its own.** A debug-mode Flutter command — `flutter test`, `flutter
+analyze`, an iOS build — regenerates
+`android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java`
+for *every* platform the project has, in debug mode, which includes the
+`integration_test` plugin. The release build then skips regenerating it when pub
+is already up to date, and Gradle fails with *"package
+dev.flutter.plugins.integration_test does not exist"* — a compile error about a
+file nobody wrote, naming a plugin nobody asked for. Delete that file and build
+again, with nothing else running.
+
+Release is currently signed with the **debug key**. It installs and runs, and it
+is not a store-ready build: a real upload key is still to be created, and
+switching to one later means anyone who installed this must uninstall first.
 
 ## The app icon
 

@@ -222,6 +222,17 @@ class HttpWordOsApi implements WordOsApi {
           );
         }
 
+        // Likewise for a word the checker does not think is English: the
+        // spelling it thinks was meant is one tap away from being the word the
+        // learner actually wanted (ADR-075).
+        if (code == 'WORD_NOT_RECOGNIZED') {
+          throw WordRejectedException(
+            message: message,
+            correctedWord: error['correctedWord'] as String?,
+            statusCode: status,
+          );
+        }
+
         throw ApiException(code, message, statusCode: status);
       }
 
@@ -432,6 +443,16 @@ class HttpWordOsApi implements WordOsApi {
 
   @override
   Future<void> deleteWord(String wordId) => _delete('/words/$wordId');
+
+  @override
+  Future<List<DailyReminder>> dailyReminders() async {
+    final body = await _get('/notifications/daily', const {});
+
+    return (body['reminders'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(DailyReminder.fromJson)
+        .toList();
+  }
 
   @override
   Future<WordPage> words({

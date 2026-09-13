@@ -79,11 +79,15 @@ abstract class WordOsApi {
   /// Adds [text] with a meaning the learner wrote themselves (ADR-072).
   ///
   /// The meaning is the one thing in this app the client may genuinely author,
-  /// and it is authored by the learner rather than by the app. The **word** is
-  /// still resolved against the lexicon on the server — a CEFR level, a part of
-  /// speech and an English definition decide which passages the word appears in
-  /// and how Spelling clues it, and none of those can be invented for a string
-  /// nobody recognises.
+  /// and it is authored by the learner rather than by the app.
+  ///
+  /// The **word** need not be in the dictionary (ADR-075). It must still be a
+  /// word: a CEFR level, a part of speech and an English definition decide
+  /// which passages it appears in and how Spelling clues it, so for a word the
+  /// lexicon does not hold the checker is asked for all three — and a string it
+  /// does not recognise as English throws [WordRejectedException], carrying the
+  /// spelling it thinks was meant. Unlike a contested meaning that one cannot
+  /// be overridden, because insisting does not make something a word.
   ///
   /// Throws `MEANING_NOT_ARABIC` for a meaning written in English: every skill
   /// marks answers against this string, so an English one makes its own
@@ -128,6 +132,18 @@ abstract class WordOsApi {
   ///
   /// Succeeds for a word that is already deleted, so a retry is safe.
   Future<void> deleteWord(String wordId);
+
+  /// The daily reminders this device should schedule (ADR-076).
+  ///
+  /// One entry per time of day for the next several days, each carrying what
+  /// will be true when it fires. They are computed here rather than on the
+  /// phone for the ordinary reason (rule R1) and one specific one: a local
+  /// notification goes off with no network and usually with the app closed, so
+  /// whatever it says has to be settled days in advance.
+  ///
+  /// Refetched whenever the app is opened, which is also what keeps a learner
+  /// who uses the app daily from ever reaching the end of the list.
+  Future<List<DailyReminder>> dailyReminders();
 
   /// The learner's own vocabulary, newest first.
   ///
@@ -312,6 +328,26 @@ class MeaningRejectedException extends ApiException {
   /// The two deserve different words to the learner: "you meant the right
   /// thing, spelled slightly wrong" is not "that is not what this word means".
   bool get isSpellingOnly => corrected != null;
+}
+
+/// The checker does not believe the typed word is English (ADR-075).
+///
+/// Only ever raised for a word the lexicon does not hold — a dictionary entry
+/// is not re-judged. Sibling of [MeaningRejectedException] and deliberately not
+/// the same class: that one is a question the learner may answer "keep mine"
+/// to, and this one is not. There is no `acceptAnyway` for it, because a
+/// pipeline cannot teach a string that is not a word.
+class WordRejectedException extends ApiException {
+  const WordRejectedException({
+    required String message,
+    this.correctedWord,
+    int? statusCode,
+  }) : super('WORD_NOT_RECOGNIZED', message, statusCode: statusCode);
+
+  /// The spelling the checker thinks was meant, for the learner to tap. Null
+  /// when it could not find one — a refusal with nothing beside it is the case
+  /// this field exists to avoid, but it cannot always be avoided.
+  final String? correctedWord;
 }
 
 /// A failure surfaced to the UI. `code` mirrors the backend error code so

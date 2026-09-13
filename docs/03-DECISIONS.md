@@ -3119,3 +3119,193 @@ model believed the headline.
 | `book` = `إنسان` | ❌ *"إنسان تعني human، بينما book تعني كتاباً أو عملية حجز"* — كتاب · حجز · سجل |
 | `book` = `إنسان`, insisting | ✅ saved, `Overridden` |
 | `table` = `طاولةةة` | ❌ spelling — `corrected: طاولة` |
+
+---
+
+## ADR-075 — A word the dictionary has never heard of can still be added
+
+**Date:** 2026-09-13 · **Status:** Accepted · **Supersedes the lexicon gate in ADR-072**
+
+The product owner, plainly: *"القاموس حقنا فيه كلمات مش موجودة… عادي لو إنه يدخل
+الكلمة من عنده ويدخل المعنى ويسوي إضافة."*
+
+ADR-072 let a learner write the meaning and kept the *word* behind the lexicon,
+on the reasoning that a CEFR level, a part of speech and an English definition
+are not a learner's to invent — they decide which passages a word appears in and
+how Spelling clues it. That reasoning is still right. The conclusion was wrong,
+because the lexicon is a machine join of WordNet and two CEFR lists and it has
+holes, and **the word a learner most wants to add is disproportionately the one
+that fell down a hole**: `deepfake`, `microservice`, `doomscroll` — every word
+newer than the datasets, and every word too specialised for them.
+
+So the lexicon is no longer a gate. It is a *preference*.
+
+### What answers the question instead
+
+The three facts still have to come from somewhere, and there is exactly one
+thing in this system that knows them for a word no dataset has: the meaning
+checker, which is already being asked about this word on this code path
+(ADR-074). It now answers two questions instead of one, and only when the
+lexicon came back empty:
+
+| | lexicon has the word | lexicon does not |
+|---|---|---|
+| is it English? | not asked — it is in the dictionary | asked |
+| level, part of speech, definition | the lexicon's | the checker's |
+| does the Arabic match? | asked | asked |
+
+`known_word: false` in the request is what turns the second question on. It is
+sent explicitly rather than inferred from an empty definition list, because a
+word the lexicon *has* and holds no English gloss for is a real case, and
+inferring "unknown word" from it would ask the model to invent facts this
+service already holds.
+
+**A word the lexicon has is never re-judged as a word.** The stub AI in the test
+suite is deliberately configured to deny everything, and `crucible` still goes
+in: a model saying "that is not a word" must not be able to refuse a dictionary
+entry.
+
+### The refusal is not overridable, and that is the interesting part
+
+ADR-074's whole argument is that the learner may overrule the checker: the
+feature exists *because* an automated source of meanings was wrong often enough
+to be unusable, and replacing it with a confident model the learner cannot get
+past would be the same mistake wearing a different hat.
+
+That argument does not transfer. It is about *meaning*, where the learner may
+genuinely know better — a dialect gloss, a sense the list omits. "Is this a
+word" is not a matter of opinion, and nothing downstream can teach `asdfghjkl`:
+the generator cannot build a passage around it, Spelling cannot clue it, the
+level engine cannot read a failure on it as evidence. Five sessions would be
+spent on a typo.
+
+So `acceptAnyway` does not reach this refusal. What the learner gets instead is
+smaller and more useful: the spelling the checker thinks they meant, one tap
+away — `recieve` comes back with `receive`, and tapping it retries with the
+corrected word, not merely a corrected label.
+
+### R2 holds: the model reports, the backend decides
+
+The part of speech is filtered through a fixed list (`KnownPartOfSpeech`) and
+anything outside it becomes empty — which every reader already handles, since a
+lexicon row can lack one too. The CEFR band goes through `TryFromWire` and falls
+back to B1, the neutral default the level engine corrects from real performance.
+A model answering `gerundive` / `Z9` does not get to write either into the
+database.
+
+**Verified against real Gemini**, end to end through the API:
+
+| typed | result |
+|---|---|
+| `deepfake` = `تزييف عميق` | ✅ saved — noun, C1, *"a piece of media that has been digitally manipulated…"* |
+| `asdfghjkl` = `كلمة` | ❌ *"ليست كلمة إنجليزية حقيقية، بل هي مجرد سلسلة من الحروف المتجاورة على لوحة المفاتيح"* |
+| `recieve` = `يستلم` | ❌ spelling — `correctedWord: receive` |
+| `microservice` = `طاولة` | ❌ meaning — *"تعني في مجال البرمجيات جزءاً صغيراً ومستقلاً من نظام برمجي كبير، ولا علاقة لها بكلمة طاولة"* |
+| `crucible` = `بوتقة كبيرة`, checker denying everything | ✅ saved — the lexicon has it, so it was never asked |
+
+### One thing this gives up
+
+`Word.DefinitionEn` and `Word.PartOfSpeech` for these rows are a model's
+recollection rather than WordNet's. They are good enough for what reads them and
+they are marked: `MeaningSource.Learner` plus a `custom:` sense id identifies
+every such row, so a later audit can find them all.
+
+---
+
+## ADR-076 — Daily reminders, scheduled by the phone and written by the server
+
+**Date:** 2026-09-13 · **Status:** Accepted
+
+The product owner: *"أبغى يومياً يوصل إشعار لليوزر… من دون فايربيس ستور… خله
+إشعارين، واحد الصباح واحد المساء… يقول له لديك كذا كذا كلمة جاهزة… عشان ما ينسى
+البرنامج."*
+
+Two reminders a day, morning and evening. **No Firebase, no push.** Every
+notification here is an alarm the phone sets for itself.
+
+### The problem that shapes everything else
+
+A local notification fires with no network and usually with the app not running.
+There is nobody to ask what it should say at the moment it goes off — so
+whatever it says has to be decided days in advance, and stored on the device.
+
+That collides with rule R1 (the client renders server state, it never computes
+it), and the collision has to be resolved rather than ignored: the phone cannot
+count how many words are due, because the pipeline lives in PostgreSQL and the
+phone is offline and asleep.
+
+**The resolution:** the server computes the plan, the phone schedules it.
+
+`GET /api/notifications/daily` returns one entry per time of day for the next
+seven days, each carrying a wall-clock time, a stable `kind` and a `count`. The
+client turns that into sentences in the learner's language (ADR-035) and hands
+them to the OS. Neither half can do the other's job — the server does not know
+the language, and the phone does not know the pipeline.
+
+### Why per-day and not one repeating notification
+
+A repeating daily notification can only carry one sentence, so it would say the
+same number for ever. But a word's due date is *known*: a word that passed
+Reading on Monday is due for Listening on Wednesday, and the server can say so.
+Each day therefore gets its own reminder with its own count, computed against
+that day's instant:
+
+```
+Tue 08:00  NOTHING_DUE  (word is waiting out the gap)
+Thu 08:00  WORDS_DUE 1  (the same word, now due)
+```
+
+Seven days × two slots = fourteen, comfortably inside iOS's limit of 64 pending
+notifications. The plan is refetched on every app open and on every resume, so a
+learner who uses the app never reaches the end of it — and one who does not,
+stops being reminded, which is honest: by then every count would be a guess.
+
+### Three kinds, because they are three different things to say
+
+`NO_WORDS`, `NOTHING_DUE`, `WORDS_DUE`. "You have 0 words ready" is a true
+sentence for both a learner who has never added a word and one who finished
+everything yesterday, and it is the wrong thing to say to either.
+
+### Details that are decisions
+
+**Wall-clock times, not instants.** The server sends `date`, `hour`, `minute`;
+the phone schedules in its own timezone. A learner means the time on their own
+phone when they say "morning". The *counts* are still computed against
+`ReportingUtcOffsetHours`, the one product-wide offset ADR-0xx already settled.
+
+**A past slot is dropped server-side, and again client-side.** A phone handed a
+past time either fires it the instant it is set — an alert the learner never
+asked for, at the moment they opened the app — or drops it silently. The server
+drops against its own idea of the day, so a phone in another timezone can still
+be handed one; both ends check.
+
+**Inexact alarms.** `SCHEDULE_EXACT_ALARM` is a special Android permission the
+learner must grant in system settings. A practice reminder does not care whether
+it arrives at 08:00 or 08:09, so the permission is not requested and
+`inexactAllowWhileIdle` is used.
+
+**Every refresh replaces, never appends.** Each reminder names a specific day and
+carries a count that was true when it was written. Two passes leaving two of
+each would have the phone say a number the server no longer believes.
+
+**The switch is device-local** (`AppPreferences.remindersEnabled`), and that is
+not a breach of rule R4. What is stored is not learning state: it is whether
+*this phone* sets alarms for itself. A learner with the app on a tablet at home
+and a phone in their pocket has a real reason to want one and not the other, and
+the OS permission it sits on is per-device too. Defaults to on — the OS asks
+before a single notification is shown, so a learner who does not want them says
+no once; defaulting to off would mean the feature never ran for anybody who did
+not go looking for a switch.
+
+**Reminders are cancelled on sign-out.** A pending "you have 4 words ready" for
+an account nobody is signed into is a notification about somebody else's
+vocabulary.
+
+### Two platform lines that are silent if missed
+
+The receivers in `AndroidManifest.xml` — `ScheduledNotificationReceiver` and
+`ScheduledNotificationBootReceiver` — are declared by the app, not by the
+plugin. Without them scheduling succeeds and nothing is ever shown. Likewise
+`UNUserNotificationCenter.current().delegate` in `AppDelegate.swift`: without it
+a notification arriving while the app is open is swallowed, which is exactly the
+case anyone testing the feature hits first.

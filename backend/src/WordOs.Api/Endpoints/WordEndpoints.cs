@@ -35,8 +35,9 @@ public static class WordEndpoints
     /// </param>
     /// <param name="CustomMeaning">
     /// The Arabic meaning the learner typed for themselves (ADR-072). The word
-    /// itself is still resolved against the lexicon — the meaning is what is
-    /// free, not the spelling.
+    /// need not be one the lexicon holds (ADR-075) — but it must still be a
+    /// word: the checker is asked, and a string it does not recognise as
+    /// English is refused with the spelling it thinks was meant.
     /// </param>
     /// <param name="AcceptAnyway">
     /// Save the written meaning even though the checker rejected it (ADR-074).
@@ -464,8 +465,13 @@ public static class WordEndpoints
                     "Write the meaning in Arabic.");
             }
 
+            // Null is no longer a refusal (ADR-075). The lexicon is a machine
+            // join of WordNet and a CEFR list and it has holes — and a word it
+            // has never heard of is precisely the word a learner is most likely
+            // to want to write their own meaning for. What the lexicon used to
+            // settle — is this an English word, what kind of word, how hard —
+            // the checker is asked instead.
             var facts = await ResolveLexiconAsync(text, db, ct);
-            if (facts is null) return LexiconMiss(text);
 
             // The one place in this service where a model is asked about
             // something the learner typed *before* it is stored (ADR-074).
@@ -477,11 +483,16 @@ public static class WordEndpoints
             {
                 verdict = await ai.CheckMeaningAsync(
                     new MeaningCheckRequest(
-                        facts.Text,
-                        await SensesOfAsync(facts.Text, db, ct),
-                        facts.PartOfSpeech,
+                        facts?.Text ?? text,
+                        // Nothing to judge against for an unknown word, and
+                        // that is the signal: the checker answers from its own
+                        // knowledge instead of from a list this service does
+                        // not have.
+                        facts is null ? [] : await SensesOfAsync(facts.Text, db, ct),
+                        facts?.PartOfSpeech ?? string.Empty,
                         custom,
-                        LearnerLanguage.From(http.Request)),
+                        LearnerLanguage.From(http.Request),
+                        KnownWord: facts is not null),
                     ct);
             }
             catch (Exception e) when (e is AiServiceException
@@ -494,6 +505,28 @@ public static class WordEndpoints
                 return Problems.Unavailable(
                     "MEANING_CHECK_UNAVAILABLE",
                     "Could not check that meaning just now. Try again in a moment.");
+            }
+
+            // Asked first, and not overridable (ADR-075). "What does this mean"
+            // is a question about a word, so there is nothing to ask about a
+            // string that is not one — and unlike a contested meaning, nobody
+            // is served by `asdfgh` entering a pipeline that will spend five
+            // sessions on it. The learner is told the spelling we think they
+            // meant and can add that instead, which is a smaller, better ask
+            // than "are you sure?".
+            if (facts is null && !verdict.WordRecognized)
+            {
+                return Results.Json(
+                    new
+                    {
+                        error = new
+                        {
+                            code = "WORD_NOT_RECOGNIZED",
+                            message = verdict.Note,
+                            correctedWord = verdict.CorrectedWord,
+                        },
+                    },
+                    statusCode: StatusCodes.Status409Conflict);
             }
 
             if (!verdict.Matches && !request.AcceptAnyway)
@@ -538,11 +571,18 @@ public static class WordEndpoints
                     statusCode: StatusCodes.Status409Conflict);
             }
 
-            storedText = facts.Text;
+            storedText = facts?.Text ?? text;
             storedMeaning = custom;
-            definitionEn = facts.DefinitionEn;
-            partOfSpeech = facts.PartOfSpeech;
-            level = facts.CefrLevel;
+            // For a word the lexicon has, its own facts — they come from
+            // WordNet and a published CEFR list and are worth more than a
+            // model's recollection of them. For one it does not, the checker's,
+            // filtered: the model reports and this decides (rule R2), so a part
+            // of speech outside the set this app can label and a band outside
+            // the ladder are dropped rather than stored.
+            definitionEn = facts?.DefinitionEn ?? verdict.DefinitionEn ?? string.Empty;
+            partOfSpeech = facts?.PartOfSpeech ?? KnownPartOfSpeech(verdict.PartOfSpeech);
+            level = facts?.CefrLevel ?? CefrLevelExtensions.TryFromWire(
+                verdict.Level?.Trim().ToUpperInvariant());
             source = MeaningSource.Learner;
             // Recorded, not just acted on: "the model said no and the learner
             // said yes anyway" is the fact that explains a word failing
@@ -655,6 +695,32 @@ public static class WordEndpoints
         return Results.Ok(ToResponse(word));
     }
 
+    /// <summary>
+    /// A part of speech this app can actually say, or nothing (ADR-075).
+    /// </summary>
+    /// <remarks>
+    /// The checker is asked for one of a fixed list and generally returns one,
+    /// but "generally" is not a contract and the field is stored rather than
+    /// displayed once and forgotten: it decides how Speaking invites the word
+    /// and how Spelling clues it. Anything unrecognised becomes empty, which
+    /// every reader already handles — a lexicon row can lack one too.
+    /// </remarks>
+    private static string KnownPartOfSpeech(string? raw) =>
+        raw?.Trim().ToLowerInvariant() switch
+        {
+            "noun" or "n" => "noun",
+            "verb" or "v" => "verb",
+            "adjective" or "adj" or "a" or "s" => "adjective",
+            "adverb" or "adv" or "r" => "adverb",
+            "pronoun" or "pron" => "pronoun",
+            "preposition" or "prep" => "preposition",
+            "conjunction" or "conj" => "conjunction",
+            "determiner" or "det" => "determiner",
+            "interjection" or "intj" => "interjection",
+            "numeral" or "num" => "numeral",
+            _ => string.Empty,
+        };
+
     private static IResult LexiconMiss(string text) =>
         Problems.NotFound(
             "WORD_NOT_FOUND",
@@ -668,9 +734,14 @@ public static class WordEndpoints
     /// The level, the part of speech and the English definition are not the
     /// learner's to write: they drive which passages a word appears in, how
     /// Spelling clues it, and whether the level engine reads a failure as
-    /// evidence. So even a hand-written meaning is hung on a real entry — which
-    /// also settles what a "word" is, and keeps <c>asdfgh</c> out of a pipeline
-    /// that would spend five sessions on it.
+    /// evidence. So a hand-written meaning is hung on a real entry whenever
+    /// there is one to hang it on.
+    ///
+    /// <para>Returns null for a word the lexicon does not hold, which is no
+    /// longer the end of the matter (ADR-075): the caller asks the checker for
+    /// the same three facts instead. What used to keep <c>asdfgh</c> out of the
+    /// pipeline was this returning null; what keeps it out now is the checker
+    /// being asked whether it is a word.</para>
     ///
     /// <para>Resolved through <see cref="SurfaceForms"/> for the same reason
     /// <c>/define</c> is: the learner types the word as they met it. The

@@ -94,11 +94,13 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
   /// silently never appeared. If what was typed *is* one of the words on
   /// offer, that is the word.
   ///
-  /// Null for a query the lexicon did not recognise: the server refuses a
-  /// written meaning for a spelling it does not know (ADR-072), so offering it
-  /// would be offering a refusal.
+  /// A query the lexicon did not recognise still resolves — to itself
+  /// (ADR-075). The dictionary is a machine join with holes in it, and refusing
+  /// to let a learner write a meaning for a word that fell down one is refusing
+  /// exactly the word they came here for.
   String? get _resolvedWord {
-    if (_notFoundQuery != null || _candidates.isEmpty) return null;
+    if (_notFoundQuery != null) return _notFoundQuery;
+    if (_candidates.isEmpty) return null;
 
     final typed = _controller.text.trim().toLowerCase();
     for (final candidate in _candidates) {
@@ -222,6 +224,18 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
                   children: [
                     if (_notFoundQuery != null) ...[
                       _NotFoundNotice(query: _notFoundQuery!),
+                      const SizedBox(height: AppSpacing.sm),
+                      // Above the spelling suggestions here, and below the
+                      // meanings in the other branch. The order follows what is
+                      // most likely to be right: when the word is known, its
+                      // own meanings are; when it is not, writing one is — and
+                      // a suggestion list for an unrecognised string is a list
+                      // of guesses.
+                      _WriteYourOwnCard(
+                        word: _notFoundQuery!,
+                        unknownWord: true,
+                        onTap: () => _writeMeaningFor(_notFoundQuery!),
+                      ),
                       const SizedBox(height: AppSpacing.md),
                       if (_candidates.isNotEmpty)
                         SectionHeader(title: s.spellingSuggestion),
@@ -446,10 +460,21 @@ class _AddedView extends ConsumerWidget {
 /// case the list does not cover — which, for a machine-joined lexicon, is more
 /// often than anybody would like.
 class _WriteYourOwnCard extends ConsumerWidget {
-  const _WriteYourOwnCard({required this.word, required this.onTap});
+  const _WriteYourOwnCard({
+    required this.word,
+    required this.onTap,
+    this.unknownWord = false,
+  });
 
   final String word;
   final VoidCallback onTap;
+
+  /// Whether the dictionary has never heard of this word (ADR-075).
+  ///
+  /// Only the wording changes. Under a list of meanings this is "write your
+  /// own"; under "not in the dictionary" it has to name the word, because it is
+  /// the only way forward on that screen rather than one of several.
+  final bool unknownWord;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -466,7 +491,10 @@ class _WriteYourOwnCard extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(s.writeMeaningYourself, style: context.text.titleSmall),
+                Text(
+                  unknownWord ? s.addItAnyway(word) : s.writeMeaningYourself,
+                  style: context.text.titleSmall,
+                ),
                 const SizedBox(height: AppSpacing.xxs),
                 Text(
                   s.writeMeaningSubtitle,
@@ -505,11 +533,25 @@ class _WriteMeaningSheetState extends ConsumerState<_WriteMeaningSheet> {
 
   bool _saving = false;
 
+  /// The word being added, which is not always the word the sheet opened on.
+  ///
+  /// The checker may say the English is misspelled (ADR-075), and taking its
+  /// spelling has to change what is *saved*, not merely what is displayed —
+  /// otherwise tapping "use this spelling" sends the same wrong word again.
+  late String _word = widget.word;
+
   /// The checker's objection to what is currently in the field, or null.
   ///
   /// Cleared the moment they edit: an objection to text they have since changed
   /// is just noise, and leaving it there makes the sheet look broken.
   MeaningRejectedException? _rejection;
+
+  /// The checker's objection to the *word*, which is a different conversation.
+  ///
+  /// It has no "keep mine": a meaning is the learner's to insist on and a
+  /// spelling is not, because nothing downstream can teach a string that is not
+  /// a word.
+  WordRejectedException? _wordRejection;
 
   /// Anything else that went wrong, already localized.
   String? _error;
@@ -528,16 +570,21 @@ class _WriteMeaningSheetState extends ConsumerState<_WriteMeaningSheet> {
     setState(() {
       _saving = true;
       _error = null;
+      _wordRejection = null;
       if (!acceptAnyway) _rejection = null;
     });
 
     try {
       final word = await ref.read(wordOsApiProvider).addWordWithMeaning(
-            text: widget.word,
+            text: _word,
             meaning: meaning,
             acceptAnyway: acceptAnyway,
           );
       if (mounted) Navigator.of(context).pop(word);
+    } on WordRejectedException catch (rejection) {
+      // The English is the problem, not the Arabic. Shown as its own thing so
+      // the learner does not go back and rewrite the half that was right.
+      if (mounted) setState(() => _wordRejection = rejection);
     } on MeaningRejectedException catch (rejection) {
       // Not a failure — the checker's answer. Their text stays exactly where
       // it is, with the suggestions underneath it.
@@ -548,6 +595,15 @@ class _WriteMeaningSheetState extends ConsumerState<_WriteMeaningSheet> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// Takes the checker's spelling of the English word and tries again.
+  void _useSpelling(String spelling) {
+    setState(() {
+      _word = spelling;
+      _wordRejection = null;
+    });
+    _submit();
   }
 
   /// Takes one of the checker's suggestions and saves it.
@@ -581,7 +637,7 @@ class _WriteMeaningSheetState extends ConsumerState<_WriteMeaningSheet> {
             // wherever the interface is not.
             Directionality(
               textDirection: TextDirection.ltr,
-              child: Text(widget.word, style: context.text.headlineSmall),
+              child: Text(_word, style: context.text.headlineSmall),
             ),
             const SizedBox(height: AppSpacing.xxs),
             Text(
@@ -607,10 +663,23 @@ class _WriteMeaningSheetState extends ConsumerState<_WriteMeaningSheet> {
                 // sheet arguing with text that no longer exists.
                 _rejection = null;
                 _error = null;
+                // Not `_wordRejection`: that one is about the English above the
+                // field, which editing the Arabic does not change.
               }),
             ),
 
-            if (_rejection case final rejection?) ...[
+            if (_wordRejection case final rejection?) ...[
+              const SizedBox(height: AppSpacing.xs),
+              _WordVerdict(
+                rejection: rejection,
+                onUse: _saving ? null : _useSpelling,
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              // No "save it anyway" beneath this one, deliberately. The
+              // learner may overrule a meaning (ADR-074); they may not
+              // overrule "that is not a word", because five sessions would
+              // then be spent teaching a typo.
+            ] else if (_rejection case final rejection?) ...[
               const SizedBox(height: AppSpacing.xs),
               _CheckerVerdict(
                 rejection: rejection,
@@ -745,6 +814,71 @@ class _CheckerVerdict extends ConsumerWidget {
                         onUse == null ? null : () => onUse!(suggestion),
                   ),
               ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// What the checker said about the English word itself (ADR-075).
+///
+/// Sibling of [_CheckerVerdict] and deliberately its own widget rather than a
+/// flag on it. They are two different pieces of news — "that is not what this
+/// word means" and "that is not a word" — and the second one offers a spelling
+/// rather than a meaning, with no way to insist underneath it.
+class _WordVerdict extends ConsumerWidget {
+  const _WordVerdict({required this.rejection, required this.onUse});
+
+  final WordRejectedException rejection;
+  final void Function(String spelling)? onUse;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+    final corrected = rejection.correctedWord;
+
+    return AppCard(
+      color: context.palette.warningSurface,
+      borderColor: context.palette.warning.withValues(alpha: 0.35),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.spellcheck_rounded,
+                  size: 18, color: context.palette.warning),
+              const SizedBox(width: AppSpacing.xs),
+              Text(s.wordLooksWrong, style: context.text.titleSmall),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xxs),
+          // The checker's own sentence, in the learner's language.
+          Text(rejection.message, style: context.text.bodyMedium),
+
+          if (corrected != null && corrected.isNotEmpty) ...[
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              s.didYouMeanWord(corrected),
+              style: context.text.labelMedium?.copyWith(
+                color: context.colors.onSurface.withValues(alpha: 0.7),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xxs),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: ActionChip(
+                // Left-to-right whatever the interface is: it is an English
+                // word, and the Arabic layout would otherwise reverse it.
+                label: Directionality(
+                  textDirection: TextDirection.ltr,
+                  child: Text(corrected),
+                ),
+                avatar: const Icon(Icons.auto_fix_high_rounded, size: 18),
+                onPressed: onUse == null ? null : () => onUse!(corrected),
+                tooltip: s.useThisSpelling,
+              ),
             ),
           ],
         ],

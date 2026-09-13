@@ -1171,7 +1171,7 @@ longer exist{" — and a glossary of the new passage" if inline_glossary else ""
 {"The glossary is not optional and not a summary: the learner taps words in this text to see what they mean here, and a word missing from it falls through to a dictionary, which answers about every sense the word has ever had instead of this one." if inline_glossary else "The learner is waiting for this. Write the passage and nothing else."}"""
 
 
-MEANING_CHECK_PROMPT_VERSION = "meaning-check-v1"
+MEANING_CHECK_PROMPT_VERSION = "meaning-check-v2"
 
 MEANING_CHECK_SCHEMA = {
     "type": "object",
@@ -1190,6 +1190,22 @@ MEANING_CHECK_SCHEMA = {
         },
         # One sentence to the learner, in the language they read the app in.
         "note": {"type": "string"},
+        # ── Only asked when the dictionary does not have the word (ADR-075) ──
+        #
+        # Is this an English word at all, and is it spelled right? The lexicon
+        # answered that by containing the word; for one it does not contain,
+        # nothing else can.
+        "word_recognized": {"type": "boolean"},
+        # Their English spelling, fixed — "recieve" -> "receive". Null when the
+        # word was fine, and null when it is not a word at all.
+        "corrected_word": {"type": "string"},
+        # The facts a word needs to enter the pipeline. They are not decoration:
+        # the definition is what the passage generator is handed and what
+        # Spelling clues from, and the band decides which passages the word can
+        # appear in. A word added without them is half-built.
+        "definition_en": {"type": "string"},
+        "word_part_of_speech": {"type": "string"},
+        "cefr_level": {"type": "string"},
     },
     "required": ["matches", "note"],
 }
@@ -1197,7 +1213,8 @@ MEANING_CHECK_SCHEMA = {
 
 def meaning_check_prompt(*, word: str, definitions: list[str],
                          part_of_speech: str, meaning: str,
-                         feedback_language: str = "ar") -> str:
+                         feedback_language: str = "ar",
+                         known_word: bool = True) -> str:
     """Checks an Arabic meaning a learner typed for an English word (ADR-074).
 
     Note what this does NOT do: decide whether the word may be added. It
@@ -1222,19 +1239,47 @@ def meaning_check_prompt(*, word: str, definitions: list[str],
     # sense's part of speech, and stating it above a list that already carries
     # one per sense told the model "book is a noun" while the list said book is
     # also a verb — and the model believed the headline. The list is the truth.
-    senses = "\n".join(f"  - {d}" for d in definitions if d) or "  - (unknown)"
+    if known_word:
+        senses = "\n".join(f"  - {d}" for d in definitions if d) or "  - (unknown)"
+        known = f"""The word: {word}
+Everything it can mean in English:
+{senses}"""
+        # Nothing to ask: the dictionary contains the word, so it is a word.
+        word_task = ""
+    else:
+        known = f"""The word: {word}
+This word is NOT in our dictionary, so judge it from your own knowledge — \
+including whether it is an English word at all."""
+        word_task = f"""
+- word_recognized: true if "{word}" is a real English word, spelled correctly. \
+Count anything a dictionary would: technical terms, proper nouns, informal but \
+established words, and inflected forms. Set false for a typo, for a word from \
+another language, and for a string that is not a word.
+
+- corrected_word: when it is a misspelling of a real English word, the correct \
+spelling. Omit otherwise — never "correct" a word that was already right.
+
+- definition_en: a short English definition of "{word}", one clause, no \
+example sentence. Required when word_recognized is true.
+
+- word_part_of_speech: exactly one of noun, verb, adjective, adverb, \
+pronoun, preposition, conjunction, determiner, interjection, numeral. \
+Required when word_recognized is true.
+
+- cefr_level: exactly one of A1, A2, B1, B2, C1, C2 — how hard "{word}" is for \
+a learner of English. Required when word_recognized is true.
+"""
+
     return f"""A learner is adding the English word "{word}" to their \
 vocabulary, and has written what they think it means in Arabic.
 
-The word: {word}
-Everything it can mean in English:
-{senses}
+{known}
 
 The learner wrote this Arabic meaning:
 "{meaning}"
 
 Judge it:
-
+{word_task}
 - matches: true if the Arabic names one of this word's real meanings. Be \
 generous. Accept a dialect word, a one-word gloss, a longer paraphrase, a \
 different but valid synonym, and **any** of the senses listed above — not only \
@@ -1256,6 +1301,7 @@ guess what it was.
 when matches is true.
 
 - note: one short sentence addressed to the learner. If it is right, say so \
-plainly. If the spelling needs fixing, say which word. If the meaning is \
-wrong, say what "{word}" actually means. Do not scold, and do not hedge. \
+plainly. If the English word is misspelled, say the correct spelling. If the \
+Arabic spelling needs fixing, say which word. If the meaning is wrong, say \
+what "{word}" actually means. Do not scold, and do not hedge. \
 {feedback_language_rule(feedback_language)}"""

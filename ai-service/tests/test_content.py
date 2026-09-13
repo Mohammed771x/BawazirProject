@@ -14,6 +14,8 @@ import json
 
 import pytest
 
+from app import prompts
+
 
 def _content_request(**overrides) -> dict:
     body = {
@@ -431,3 +433,150 @@ def test_a_re_told_passage_is_glossed_as_completely_as_a_fresh_one(
     # and this stub answers the same way every time.
     assert len(recorder.prompts) >= 2
     assert "breakfast" in {g["word"] for g in body["glossary"]}
+
+
+# ── The meaning checker (ADR-074, ADR-075) ───────────────────────────────────
+#
+# Two questions, and which are asked depends on whether the backend found the
+# word in its own lexicon. A word it has is a word; a word it does not have has
+# to be judged from the model's own knowledge — including whether it is English
+# at all, and the three facts the pipeline needs that nothing else can supply.
+
+
+def test_a_known_word_is_never_questioned_as_a_word(client, auth, stub_gemini):
+    """The dictionary contains it, so it is a word — whatever the model says.
+
+    Nothing asks the question in this mode, so a `false` appearing in the
+    payload is noise from a model answering a prompt it was not given. Letting
+    it through would let a hallucination refuse a dictionary entry.
+    """
+    stub_gemini({
+        "matches": True,
+        "note": "المعنى صحيح.",
+        "word_recognized": False,
+        "definition_en": "invented",
+        "word_part_of_speech": "noun",
+        "cefr_level": "C2",
+    })
+
+    body = client.post("/ai/meaning/check", headers=auth, json={
+        "word": "book",
+        "definitions": ["noun: a set of printed pages", "verb: to reserve"],
+        "part_of_speech": "noun",
+        "meaning": "يحجز",
+    }).json()
+
+    assert body["matches"] is True
+    assert body["word_recognized"] is True
+    # And the facts the backend already holds are not echoed back at it in a
+    # worse version, where a caller could pick the wrong one.
+    assert body["definition_en"] is None
+    assert body["word_part_of_speech"] is None
+    assert body["cefr_level"] is None
+
+
+def test_an_unknown_word_comes_back_with_what_the_pipeline_needs(
+        client, auth, stub_gemini):
+    """A definition, a part of speech and a band — or the word is half-built."""
+    stub_gemini({
+        "matches": True,
+        "note": "المعنى صحيح.",
+        "word_recognized": True,
+        "definition_en": "to astonish someone completely",
+        "word_part_of_speech": "verb",
+        "cefr_level": "C1",
+    })
+
+    body = client.post("/ai/meaning/check", headers=auth, json={
+        "word": "flabbergast",
+        "definitions": [],
+        "meaning": "يذهل",
+        "known_word": False,
+    }).json()
+
+    assert body["word_recognized"] is True
+    assert body["definition_en"] == "to astonish someone completely"
+    assert body["word_part_of_speech"] == "verb"
+    assert body["cefr_level"] == "C1"
+
+
+def test_a_misspelled_word_comes_back_with_the_spelling(
+        client, auth, stub_gemini):
+    stub_gemini({
+        "matches": True,
+        "note": "هل تقصد receive؟",
+        "word_recognized": False,
+        "corrected_word": "receive",
+    })
+
+    body = client.post("/ai/meaning/check", headers=auth, json={
+        "word": "recieve", "definitions": [], "meaning": "يستلم",
+        "known_word": False,
+    }).json()
+
+    assert body["word_recognized"] is False
+    assert body["corrected_word"] == "receive"
+
+
+def test_a_correction_identical_to_the_word_is_not_a_correction(
+        client, auth, stub_gemini):
+    """Otherwise the learner is shown "did you mean: exactly what you typed".
+
+    Models hand back the input in an optional field often enough that this is
+    not a hypothetical, and case alone is not a misspelling.
+    """
+    stub_gemini({
+        "matches": True,
+        "note": "المعنى صحيح.",
+        "word_recognized": True,
+        "corrected_word": "Flabbergast",
+    })
+
+    body = client.post("/ai/meaning/check", headers=auth, json={
+        "word": "flabbergast", "definitions": [], "meaning": "يذهل",
+        "known_word": False,
+    }).json()
+
+    assert body["corrected_word"] is None
+
+
+def test_an_empty_definition_reaches_the_backend_as_nothing(
+        client, auth, stub_gemini):
+    """An empty string looks like an answer and stores as one."""
+    stub_gemini({
+        "matches": True,
+        "note": "المعنى صحيح.",
+        "word_recognized": True,
+        "definition_en": "   ",
+        "word_part_of_speech": "",
+    })
+
+    body = client.post("/ai/meaning/check", headers=auth, json={
+        "word": "flabbergast", "definitions": [], "meaning": "يذهل",
+        "known_word": False,
+    }).json()
+
+    assert body["definition_en"] is None
+    assert body["word_part_of_speech"] is None
+
+
+def test_the_unknown_word_prompt_asks_the_extra_question():
+    """The prompt, not the plumbing: this is what the model actually reads."""
+    unknown = prompts.meaning_check_prompt(
+        word="flabbergast", definitions=[], part_of_speech="",
+        meaning="يذهل", known_word=False)
+
+    assert "word_recognized" in unknown
+    assert "cefr_level" in unknown
+    assert "NOT in our dictionary" in unknown
+
+
+def test_the_known_word_prompt_does_not_ask_it():
+    """Asking a word the lexicon has to be re-judged invites a wrong refusal."""
+    known = prompts.meaning_check_prompt(
+        word="book", definitions=["noun: a set of printed pages"],
+        part_of_speech="noun", meaning="كتاب")
+
+    assert "word_recognized" not in known
+    # Every sense, not the commonest — the bug this whole feature tripped over.
+    assert "a set of printed pages" in known

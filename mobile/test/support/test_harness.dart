@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wordos/app/wordos_app.dart';
 import 'package:wordos/core/api/api_providers.dart';
+import 'package:wordos/core/notifications/notification_scheduler.dart';
+import 'package:wordos/core/notifications/reminder_providers.dart';
 import 'package:wordos/core/storage/app_preferences.dart';
 import 'package:wordos/core/storage/preferences_providers.dart';
 import 'package:wordos/core/storage/token_store.dart';
@@ -34,6 +36,42 @@ class FakeTokenStore extends TokenStore {
   }
 }
 
+/// Records what the app asked the phone to schedule, instead of asking it.
+///
+/// The real scheduler talks to a platform channel that does not exist in a test
+/// binary, so this is what makes the reminders testable at all — and everything
+/// worth testing about them (which are kept, what they say, what a refused
+/// permission does) lives above the channel anyway.
+class FakeNotificationScheduler implements NotificationScheduler {
+  /// The last set handed over. Replaced, not appended, exactly as the real one
+  /// replaces what is pending.
+  List<ScheduledNotification> scheduled = const [];
+
+  int cancelCount = 0;
+
+  /// Set by a test to stand for a learner who said no to notifications.
+  bool permissionGranted = true;
+
+  bool initialized = false;
+
+  @override
+  Future<bool> initialize() async {
+    initialized = true;
+    return permissionGranted;
+  }
+
+  @override
+  Future<void> schedule(List<ScheduledNotification> notifications) async {
+    scheduled = notifications;
+  }
+
+  @override
+  Future<void> cancelAll() async {
+    cancelCount++;
+    scheduled = const [];
+  }
+}
+
 /// Overrides every provider that would otherwise reach a platform channel —
 /// or the network.
 ///
@@ -50,13 +88,22 @@ class FakeTokenStore extends TokenStore {
 ///
 /// A widget test must never depend on something outside the process being up,
 /// so the choice is made here rather than left to how the runner was invoked.
-List<Override> testOverrides({Locale locale = const Locale('en')}) => [
+List<Override> testOverrides({
+  Locale locale = const Locale('en'),
+  NotificationScheduler? scheduler,
+}) =>
+    [
       appEnvironmentProvider.overrideWithValue(
         const AppEnvironment(useMockBackend: true, baseUrl: ''),
       ),
       appPreferencesProvider
           .overrideWithValue(InMemoryAppPreferences(locale: locale)),
       tokenStoreProvider.overrideWith((ref) => FakeTokenStore()),
+      // Pinned for every test, not only the ones about notifications: the app
+      // schedules reminders on sign-in, so without this every signed-in test
+      // would reach a platform channel that is not there.
+      notificationSchedulerProvider
+          .overrideWithValue(scheduler ?? FakeNotificationScheduler()),
     ];
 
 /// Pumps the real app with test-safe dependencies.
@@ -67,6 +114,7 @@ Future<void> bootApp(
   /// Extra overrides, for a test that needs to watch what a service was asked
   /// to do — a fake voice engine, say.
   List<Override> overrides = const [],
+  NotificationScheduler? scheduler,
 }) async {
   if (surfaceSize != null) {
     tester.view.physicalSize = surfaceSize;
@@ -76,7 +124,10 @@ Future<void> bootApp(
 
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [...testOverrides(locale: locale), ...overrides],
+      overrides: [
+        ...testOverrides(locale: locale, scheduler: scheduler),
+        ...overrides,
+      ],
       child: const WordOsApp(),
     ),
   );
@@ -86,8 +137,9 @@ Future<void> bootApp(
 Future<void> bootAndSignIn(
   WidgetTester tester, {
   Size surfaceSize = const Size(1200, 2600),
+  NotificationScheduler? scheduler,
 }) async {
-  await bootApp(tester, surfaceSize: surfaceSize);
+  await bootApp(tester, surfaceSize: surfaceSize, scheduler: scheduler);
   await tester.pumpAndSettle();
   await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
   await tester.pumpAndSettle();

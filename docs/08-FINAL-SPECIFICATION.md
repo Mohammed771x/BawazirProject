@@ -145,12 +145,47 @@ The learner types into one field, **in English or in Arabic**:
 
 **The learner picks a sense, not a word.** `book = كتاب` and `book = يحجز` are two
 different vocabulary items with two different pipelines, because they are two different
-synsets (ADR-012). There is no path to typing your own meaning: the request body is a
-lookup key, the stored lexicon row is what gets copied, and a forged level or
-definition is discarded.
+synsets (ADR-012). When a sense is chosen the request body is a lookup key: the stored
+lexicon row is what gets copied, and a forged level or definition is discarded.
 
-**Nothing is invented.** A string the lexicon does not carry produces spelling
-suggestions and an explanation — never an "add it anyway" button.
+### Three ways a word gets its meaning
+
+The Arabic glosses are a machine join of three datasets and it shows — `sell` offers
+"أَقْنَعَ بِـ" before "باع". So the lexicon's answer is offered first and is not the only one.
+
+1. **A lexicon sense**, as above.
+2. **A meaning the learner writes** (ADR-072). Offered under the list of meanings, for
+   when none of them is right. It must be Arabic — every skill marks answers against
+   this string — and **it is checked by the AI before it is stored** (ADR-074), which no
+   other path is: this is the one place a learner's own words enter the pipeline, and a
+   wrong or misspelled meaning is not cosmetic but five sessions asking the wrong
+   question. A disagreement comes back as a conversation, not an error: what the checker
+   thinks the word means, up to three meanings it would accept as tappable chips, and a
+   spelling correction offered rather than applied. **The learner may still insist**, and
+   that is recorded — the feature exists because an automated source of meanings was
+   wrong often enough to be unusable, and replacing it with a model nobody can get past
+   would be the same mistake wearing a different hat.
+3. **The meaning the passage gave it** (ADR-073). Tapping a word while reading adds it
+   with the sense it carried *in that sentence*, read from the glossary the server stored
+   when it generated the passage — never guessed at by the client.
+
+**A word the dictionary has never heard of can still be added** (ADR-075). The lexicon
+has holes — anything newer than its datasets, anything too specialised for them — and the
+word a learner most wants is disproportionately one of them. Writing a meaning for such a
+word is offered exactly as it is for a known one; what changes is who answers the three
+questions the pipeline needs. The checker supplies the CEFR band, the part of speech and
+the English definition, and is asked one more thing first: **is this English at all?**
+
+`asdfghjkl` is refused. Unlike a contested meaning that refusal cannot be overridden —
+nothing downstream can teach a string that is not a word — so what the learner gets
+instead is the spelling the checker thinks they meant, one tap from being tried:
+`recieve` comes back offering `receive`. A word the lexicon *does* hold is never
+re-judged; a model does not get to refuse a dictionary entry.
+
+**Removing a word is the learner's to do** (ADR-071), by swiping the row in My Words or
+from the word's own screen, with a confirmation — five skills and eight days of waiting
+can sit behind one. It leaves every list and no session asks about it again; adding it
+back starts a fresh journey from Reading.
 
 ---
 
@@ -406,7 +441,28 @@ spelling alone cannot tell apart.
 | Per-skill level | the server | user-selected, shown apart from the validated level |
 | Per-skill daily target (5–15) | the server | |
 | Interests | the server | editable at any time |
+| Daily reminders on/off | the device | ADR-076 — the alarms are this phone's, and so is the OS permission |
 | Sign out | — | in the toolbar, one tap, with a confirmation |
+
+### Daily reminders (ADR-076)
+
+Two a day, morning and evening, telling the learner how many words are ready. They are
+**local notifications** — no Firebase, no push, no device token — so the phone fires them
+offline with the app closed.
+
+That is what shapes the design. There is nobody to ask what a notification should say at
+the moment it goes off, so the *server* decides in advance: a week of them, one per slot
+per day, each carrying the count that will be true at that moment. A word waiting out a
+spaced gap is "nothing due yet" on Tuesday and "1 word is ready" on Thursday, and both
+are settled before either is scheduled. The phone translates them into the learner's
+language and hands them to the OS; it counts nothing (rule R1).
+
+Three messages, because they are three situations: words are due, words are resting, and
+nothing has been added yet — "you have 0 words ready" is the wrong thing to say to the
+last two. Times are the learner's own wall clock. The plan is refetched on every app open
+and resume, and each refresh replaces what is pending rather than adding to it. Signing
+out cancels everything: a pending "you have 4 words ready" for an account nobody is
+signed into is a notification about somebody else's vocabulary.
 
 ### Which language the app uses (ADR-035)
 

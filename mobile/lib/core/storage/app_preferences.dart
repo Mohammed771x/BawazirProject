@@ -43,6 +43,22 @@ abstract class AppPreferences {
   bool get onboardingSeen;
 
   Future<void> setOnboardingSeen(bool seen);
+
+  /// Whether this installation raises daily reminders (ADR-076).
+  ///
+  /// Device-local, and not a contradiction of rule R4. What is being stored is
+  /// not learning state: it is whether *this phone* should set alarms for
+  /// itself. A learner with the app on a tablet they use at home and a phone
+  /// they carry has a real reason to want one and not the other, and a
+  /// server-side flag could not express it.
+  ///
+  /// Defaults to on. The OS still asks before a single notification is shown,
+  /// so a learner who does not want them says no once and is never asked again;
+  /// defaulting to off would mean the feature never ran for anybody who did not
+  /// go looking for a switch.
+  bool get remindersEnabled;
+
+  Future<void> setRemindersEnabled(bool enabled);
 }
 
 class _StoredAppPreferences implements AppPreferences {
@@ -51,6 +67,7 @@ class _StoredAppPreferences implements AppPreferences {
   static const _localeKey = 'wordos.ui.locale';
   static const _themeKey = 'wordos.ui.themeMode';
   static const _onboardingKey = 'wordos.ui.onboardingSeen';
+  static const _remindersKey = 'wordos.ui.remindersEnabled';
 
   final SharedPreferences _prefs;
 
@@ -97,6 +114,18 @@ class _StoredAppPreferences implements AppPreferences {
       // Non-fatal: worst case the tour is offered once more.
     }
   }
+
+  @override
+  bool get remindersEnabled => _prefs.getBool(_remindersKey) ?? true;
+
+  @override
+  Future<void> setRemindersEnabled(bool enabled) async {
+    try {
+      await _prefs.setBool(_remindersKey, enabled);
+    } catch (_) {
+      // Non-fatal: the choice still applies for this app run.
+    }
+  }
 }
 
 /// Used by tests and as the fallback when the platform store is unavailable.
@@ -106,6 +135,7 @@ class InMemoryAppPreferences implements AppPreferences {
     ThemeMode? themeMode,
     // Tests start past the tour unless they are testing the tour itself.
     this.onboardingSeen = true,
+    this.remindersEnabled = true,
   })  : locale = locale ?? AppPreferences.defaultLocale,
         themeMode = themeMode ?? ThemeMode.system;
 
@@ -126,4 +156,11 @@ class InMemoryAppPreferences implements AppPreferences {
 
   @override
   Future<void> setThemeMode(ThemeMode mode) async => themeMode = mode;
+
+  @override
+  bool remindersEnabled;
+
+  @override
+  Future<void> setRemindersEnabled(bool enabled) async =>
+      remindersEnabled = enabled;
 }

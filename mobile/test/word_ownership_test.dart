@@ -341,17 +341,17 @@ void main() {
     expect(find.text('Write the meaning yourself'), findsOneWidget);
   });
 
-  test('a written meaning must be Arabic, and the word must be real',
+  test('a written meaning must be Arabic, and the word must be a word',
       () async {
     final api = await signedInApi();
 
-    // The meaning is the learner's; the word is not. Nothing can generate a
-    // passage around `zzzznotaword`, or say what level it is, or clue it in
-    // Spelling.
+    // The word no longer has to be in the dictionary (ADR-075) — but it does
+    // have to be a word. Nothing can generate a passage around `zzzznotaword`
+    // or clue it in Spelling, and unlike a contested meaning, insisting does
+    // not make it one: there is no `acceptAnyway` for this refusal.
     await expectLater(
       api.addWordWithMeaning(text: 'zzzznotaword', meaning: 'معنى'),
-      throwsA(isA<ApiException>().having((e) => e.code, 'code',
-          'WORD_NOT_FOUND')),
+      throwsA(isA<WordRejectedException>()),
     );
 
     // Every skill marks answers against this string. An English one makes its
@@ -362,6 +362,82 @@ void main() {
       throwsA(isA<ApiException>().having((e) => e.code, 'code',
           'MEANING_NOT_ARABIC')),
     );
+  });
+
+  test('a word the dictionary lacks is added on the learner\'s own terms',
+      () async {
+    final api = await signedInApi();
+
+    // The case the whole change exists for: the dictionary is a machine join
+    // with holes in it, and the word a learner most wants to write a meaning
+    // for is the one that fell down one. It must not be a dead end.
+    final word = await api.addWordWithMeaning(
+      text: 'flabbergast',
+      meaning: 'يذهل',
+    );
+
+    expect(word.text, 'flabbergast');
+    expect(word.meaning, 'يذهل');
+
+    // And it is really theirs — it appears in My Words like any other.
+    final page = await api.words();
+    expect(page.items.any((w) => w.text == 'flabbergast'), isTrue);
+  });
+
+  testWidgets('a word the dictionary lacks is offered, not refused',
+      (tester) async {
+    await openAddWord(tester);
+
+    await tester.enterText(find.byType(TextField).first, 'flabbergast');
+    await tester.pump(const Duration(milliseconds: 400)); // debounce
+    await tester.pumpAndSettle();
+
+    // The old screen stopped here with an apology. The dictionary is a machine
+    // join with holes in it, and the word a learner most wants is often the one
+    // that fell down one (ADR-075).
+    expect(find.textContaining('is not in the dictionary'), findsOneWidget);
+    expect(find.text('Add "flabbergast" with your own meaning'), findsOneWidget);
+
+    await tester.tap(find.text('Add "flabbergast" with your own meaning'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).last, 'يذهل');
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Save the word'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Added to the learning pipeline'), findsOneWidget);
+  });
+
+  testWidgets('a string that is not a word is refused, and says so',
+      (tester) async {
+    await openAddWord(tester);
+
+    await tester.enterText(find.byType(TextField).first, 'zzzznotaword');
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Add "zzzznotaword" with your own meaning'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).last, 'معنى');
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Save the word'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    // The English is what is wrong, and the heading says so — told "the meaning
+    // is wrong" the learner would go and rewrite the half that was right.
+    expect(find.text('Check the spelling'), findsOneWidget);
+    expect(find.text('Added to the learning pipeline'), findsNothing);
+
+    // And there is no way to insist past it. A meaning is the learner's to
+    // stand behind; a spelling is not, because nothing downstream can teach a
+    // string that is not a word.
+    expect(find.text('Save it as I wrote it'), findsNothing);
   });
 
   test('the checker carries what it would accept, not just a refusal',

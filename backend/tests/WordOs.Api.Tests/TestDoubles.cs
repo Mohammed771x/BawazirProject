@@ -64,11 +64,37 @@ public sealed class StubAiContentService : IAiContentService
     /// for the paths that must not call the checker at all.</summary>
     public int MeaningChecks { get; private set; }
 
+    /// <summary>Set by a test to make the checker deny the word is English
+    /// (ADR-075).</summary>
+    public bool RejectWords { get; set; }
+
+    /// <summary>The spelling the checker offers for a rejected word.</summary>
+    public string? WordCorrection { get; set; }
+
+    /// <summary>
+    /// Whether the lexicon was consulted on the last check — i.e. whether the
+    /// backend found the word before asking.
+    /// </summary>
+    /// <remarks>
+    /// The distinction is the whole of ADR-075, and it is invisible in the
+    /// response: a test that only looked at the returned word could not tell
+    /// "found it and asked about the meaning" from "did not find it and asked
+    /// about both".
+    /// </remarks>
+    public bool? LastCheckKnownWord { get; private set; }
+
+    /// <summary>The part of speech the checker reports for an unknown word.</summary>
+    public string UnknownWordPartOfSpeech { get; set; } = "verb";
+
+    /// <summary>The CEFR band the checker reports for an unknown word.</summary>
+    public string UnknownWordLevel { get; set; } = "C1";
+
     public Task<MeaningCheck> CheckMeaningAsync(
         MeaningCheckRequest request,
         CancellationToken ct = default)
     {
         MeaningChecks++;
+        LastCheckKnownWord = request.KnownWord;
 
         // `Fail` is the AI outage switch the whole double shares. The check has
         // no fallback (ADR-074), so it throws where the others degrade.
@@ -78,7 +104,14 @@ public sealed class StubAiContentService : IAiContentService
             Matches: !RejectMeanings,
             Corrected: MeaningCorrection,
             Suggestions: RejectMeanings ? ["كتاب", "مؤلف"] : [],
-            Note: RejectMeanings ? "هذا المعنى غير صحيح." : "المعنى صحيح."));
+            Note: RejectMeanings ? "هذا المعنى غير صحيح." : "المعنى صحيح.",
+            // Mirrors the real service: a word the backend already had is never
+            // questioned, whatever this double is configured to say.
+            WordRecognized: request.KnownWord || !RejectWords,
+            CorrectedWord: request.KnownWord ? null : WordCorrection,
+            DefinitionEn: request.KnownWord ? null : "a stub definition",
+            PartOfSpeech: request.KnownWord ? null : UnknownWordPartOfSpeech,
+            Level: request.KnownWord ? null : UnknownWordLevel));
     }
 
     public Task<GeneratedContent> GenerateContentAsync(

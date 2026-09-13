@@ -22,9 +22,11 @@ namespace WordOs.Api.Tests;
 ///
 /// So: deletion is real to the learner and invisible to the Owner's data
 /// (ADR-071), and a meaning may be written by the learner (ADR-072) or taken
-/// from the passage that taught it (ADR-073) — while the <i>word</i> is still
-/// resolved against the lexicon in every one of the three cases, because a
-/// CEFR level and a part of speech are not the learner's to invent.
+/// from the passage that taught it (ADR-073). The <i>word</i> is no longer
+/// required to be in the lexicon (ADR-075) — but a CEFR level and a part of
+/// speech are still not the learner's to invent, so a word the lexicon lacks
+/// gets them from the checker, and a string the checker does not recognise as
+/// English gets no further.
 /// </remarks>
 [Collection(PostgresCollection.Name)]
 public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
@@ -219,23 +221,142 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         Assert.Equal(MeaningSource.Learner, word.MeaningSource);
     }
 
+    // ── A word the lexicon does not have (ADR-075) ────────────────────────
+
     [SkippableFact]
-    public async Task A_written_meaning_still_requires_a_word_the_lexicon_knows()
+    public async Task A_word_the_lexicon_never_heard_of_can_still_be_added()
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);
         await SignInAsync();
 
-        // The meaning is free; the spelling is not. Nothing can generate a
-        // passage around `asdfgh`, or say what level it is, or clue it in
-        // Spelling — so it never enters a pipeline that would spend five
-        // sessions on it.
+        // Deliberately not seeded. The lexicon is a machine join with holes in
+        // it, and the word a learner most wants to write their own meaning for
+        // is exactly the one that fell down one.
+        Ai.UnknownWordPartOfSpeech = "verb";
+        Ai.UnknownWordLevel = "C1";
+
+        var body = await AddAndReadAsync(
+            new { text = "flabbergast", customMeaning = "يذهل" });
+
+        Assert.Equal("flabbergast", body.GetProperty("text").GetString());
+        Assert.Equal("يذهل", body.GetProperty("meaning").GetString());
+
+        // The three facts the lexicon could not supply came from the checker
+        // and were stored — a word missing them enters the pipeline half-built.
+        Assert.Equal("verb", body.GetProperty("partOfSpeech").GetString());
+        Assert.Equal("C1", body.GetProperty("cefrLevel").GetString());
+        Assert.NotEmpty(body.GetProperty("definitionEn").GetString()!);
+
+        // And the checker was told there was no dictionary row, which is what
+        // makes it answer the extra question at all.
+        Assert.False(Ai.LastCheckKnownWord);
+    }
+
+    [SkippableFact]
+    public async Task A_string_that_is_not_a_word_is_refused_with_no_way_past_it()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // What used to be the lexicon's job. Nothing can generate a passage
+        // around `asdfghjkl`, or clue it in Spelling, so it must not enter a
+        // pipeline that would spend five sessions on it — and unlike a
+        // contested *meaning*, insisting does not make it a word.
+        Ai.RejectWords = true;
+        Ai.WordCorrection = null;
+
         var response = await Client.PostAsJsonAsync("/api/words", new
         {
             text = "asdfghjkl",
             customMeaning = "كلمة",
+            acceptAnyway = true,
         });
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            "WORD_NOT_RECOGNIZED",
+            body.GetProperty("error").GetProperty("code").GetString());
+
+        // By text, not by counting the table: these tests share one database,
+        // so an empty-collection assertion would be asserting that no other
+        // test ran first.
+        await using var context = db.CreateContext();
+        Assert.False(await context.Words.AnyAsync(w => w.Text == "asdfghjkl"));
+    }
+
+    [SkippableFact]
+    public async Task A_misspelled_word_comes_back_with_the_spelling_meant()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // The useful half of a refusal: "that is not a word" leaves the learner
+        // to guess, and the guess they need is one keystroke away.
+        Ai.RejectWords = true;
+        Ai.WordCorrection = "receive";
+
+        var response = await Client.PostAsJsonAsync("/api/words", new
+        {
+            text = "recieve",
+            customMeaning = "يستلم",
+        });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            "receive",
+            body.GetProperty("error").GetProperty("correctedWord").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_word_the_lexicon_has_is_never_questioned_as_a_word()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        await SeedAsync("obsidian", "n", "a dark volcanic glass", "سبج");
+
+        // The checker is in a mood to deny everything. It is not asked: the
+        // lexicon contains the word, so the word is a word, and a model saying
+        // otherwise must not be able to refuse a dictionary entry.
+        Ai.RejectWords = true;
+
+        var body = await AddAndReadAsync(
+            new { text = "obsidian", customMeaning = "زجاج بركاني" });
+
+        Assert.Equal("obsidian", body.GetProperty("text").GetString());
+        Assert.True(Ai.LastCheckKnownWord);
+
+        // And its own facts won, rather than the checker's stub ones.
+        Assert.Equal("n", body.GetProperty("partOfSpeech").GetString());
+        Assert.Equal("a dark volcanic glass",
+            body.GetProperty("definitionEn").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_part_of_speech_the_app_cannot_say_is_not_stored()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // Rule R2: the checker reports and the backend decides. The field is
+        // not decoration — it decides how Speaking invites the word and how
+        // Spelling clues it — so a value outside the set this app can label is
+        // dropped rather than written through.
+        Ai.UnknownWordPartOfSpeech = "gerundive";
+        Ai.UnknownWordLevel = "Z9";
+
+        var body = await AddAndReadAsync(
+            new { text = "flabbergast", customMeaning = "يذهل" });
+
+        Assert.Equal("", body.GetProperty("partOfSpeech").GetString());
+
+        // And a band off the ladder falls back to the neutral default the
+        // level engine corrects from real performance.
+        Assert.Equal("B1", body.GetProperty("cefrLevel").GetString());
     }
 
     [SkippableFact]

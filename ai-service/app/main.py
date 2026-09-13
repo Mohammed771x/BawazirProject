@@ -193,6 +193,11 @@ class MeaningCheckRequest(BaseModel):
     meaning: str = Field(min_length=1, max_length=256)
     # The language the note to the learner is written in (ADR-035).
     feedback_language: str = Field(default="ar", max_length=8)
+    # Whether the backend's lexicon holds this word (ADR-075). False asks a
+    # second question — is this even an English word — and asks for the facts a
+    # word needs to enter the pipeline, because there is no dictionary row to
+    # take them from.
+    known_word: bool = True
 
 
 class MeaningCheckResponse(BaseModel):
@@ -203,6 +208,13 @@ class MeaningCheckResponse(BaseModel):
     prompt_version: str
     model: str
     tokens: int
+    # Only meaningful when the request said known_word=False (ADR-075). True
+    # otherwise, which is the truth: a word the dictionary holds is a word.
+    word_recognized: bool = True
+    corrected_word: str | None = None
+    definition_en: str | None = None
+    word_part_of_speech: str | None = None
+    cefr_level: str | None = None
 
 
 class TranscriptTurn(BaseModel):
@@ -395,6 +407,17 @@ _WORD = re.compile(r"[^\W_](?:[^\W_]|['’-])*")
 #: rather than running out of room.
 _REPAIR_BATCH_WORDS = 150
 _MAX_REPAIR_CALLS = 6
+
+
+def _text_or_none(value: object) -> str | None:
+    """A model's string field, or None when it did not really answer.
+
+    Structured output guarantees the *type* of an optional field, never that it
+    was filled — and an empty string reaching the backend is worse than a null,
+    because it looks like an answer and stores as one.
+    """
+    text = str(value or "").strip()
+    return text or None
 
 
 def _uncovered_words(sentences: list[str], glossary: list[GlossaryEntry]) -> list[str]:
@@ -718,6 +741,7 @@ def check_meaning(request: MeaningCheckRequest) -> MeaningCheckResponse:
             part_of_speech=request.part_of_speech,
             meaning=request.meaning,
             feedback_language=request.feedback_language,
+            known_word=request.known_word,
         ),
         prompts.MEANING_CHECK_SCHEMA,
         temperature=0.1,
@@ -739,9 +763,19 @@ def check_meaning(request: MeaningCheckRequest) -> MeaningCheckResponse:
         if isinstance(s, str) and s.strip()
     ][:3]
 
+    # A word the backend already had is a word; it was never asked about, so a
+    # `false` hallucinated into the field must not be able to refuse it.
+    recognized = True if request.known_word else bool(payload.get("word_recognized"))
+
+    # Same rule as `corrected`, for the English side: a "correction" identical
+    # to the input is not one, and case alone is not a misspelling.
+    corrected_word = (payload.get("corrected_word") or "").strip() or None
+    if corrected_word and corrected_word.lower() == request.word.strip().lower():
+        corrected_word = None
+
     log.info(
-        "meaning-check word=%s matches=%s tokens=%d",
-        request.word, matches, tokens,
+        "meaning-check word=%s known=%s recognized=%s matches=%s tokens=%d",
+        request.word, request.known_word, recognized, matches, tokens,
     )
 
     return MeaningCheckResponse(
@@ -753,6 +787,17 @@ def check_meaning(request: MeaningCheckRequest) -> MeaningCheckResponse:
         prompt_version=prompts.MEANING_CHECK_PROMPT_VERSION,
         model=SETTINGS.gemini_model,
         tokens=tokens,
+        word_recognized=recognized,
+        corrected_word=corrected_word,
+        # Left out for a word the lexicon has: it already holds better versions
+        # of all three, and sending the model's guess alongside them invites a
+        # caller to pick the wrong one.
+        definition_en=_text_or_none(payload.get("definition_en"))
+        if not request.known_word else None,
+        word_part_of_speech=_text_or_none(payload.get("word_part_of_speech"))
+        if not request.known_word else None,
+        cefr_level=_text_or_none(payload.get("cefr_level"))
+        if not request.known_word else None,
     )
 
 

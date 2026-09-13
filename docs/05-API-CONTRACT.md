@@ -192,9 +192,9 @@ handed one item at a time instead of a fixed list.
 >   letter still never returns the dictionary.
 >
 > If nothing matches, the response contains only candidates with
-> `isSpellingSuggestion: true`, or is empty. There is no "add it anyway" result:
-> the **word** must be one the lexicon knows, even when the meaning is not
-> (ADR-072).
+> `isSpellingSuggestion: true`, or is empty. That is no longer the end of the
+> road: the word can still be added with a written meaning, and the checker
+> answers for it instead of the lexicon (ADR-075).
 >
 > Closed-class words (`is`, `the`, `because`, `what`) carry a part of speech
 > WordNet does not use — `pron`, `det`, `aux`, `modal`, `prep`, `conj`, `part`,
@@ -213,8 +213,8 @@ handed one item at a time instead of a fixed list.
 > legitimate — they default rather than 400.
 >
 > **`POST /words` has three ways in, and they differ only in where the Arabic
-> meaning comes from.** The word itself is resolved against the lexicon in all
-> three: the meaning is what the learner may choose, not the spelling.
+> meaning comes from.** The word is resolved against the lexicon in all three —
+> but on the `customMeaning` path a miss is no longer a refusal (ADR-075).
 >
 > * **`senseId`** — a lexicon sense. The body is treated as a **lookup key**;
 >   the row that gets stored is the lexicon's, so a forged level, definition or
@@ -224,6 +224,23 @@ handed one item at a time instead of a fixed list.
 >   word is resolved for its level, part of speech and English definition; the
 >   meaning is stored as written. Refused with `MEANING_NOT_ARABIC` (400) if it
 >   is not Arabic — every skill marks answers against this string.
+>
+>   **The word need not be in the lexicon** (ADR-075). When it is not, the
+>   checker is asked a second question — *is this English, and what kind of word
+>   is it* — and supplies the level, part of speech and English definition the
+>   lexicon could not. A string it does not recognise is `WORD_NOT_RECOGNIZED`
+>   (409), carrying `correctedWord` when it can name the spelling that was meant:
+>
+>   ```json
+>   { "error": { "code": "WORD_NOT_RECOGNIZED",
+>                "message": "كلمة \"recieve\" مكتوبة بشكل خاطئ، والصحيح هو \"receive\".",
+>                "correctedWord": "receive" } }
+>   ```
+>
+>   `acceptAnyway` does **not** reach this refusal. A meaning is the learner's
+>   to insist on; a spelling is not, because nothing downstream can teach a
+>   string that is not a word. A word the lexicon *does* hold is never
+>   re-judged — the model does not get to refuse a dictionary entry.
 >
 >   **This path, and only this path, is checked by the AI** (ADR-074). A
 >   disagreement is `MEANING_REJECTED` (409) carrying the checker's own sentence
@@ -296,6 +313,42 @@ handed one item at a time instead of a fixed list.
 
 // WordDetail = Word + { "events": [{"type":"SKILL_PASSED","skill":"READING","createdAt":"…"}] }
 ```
+
+## Notifications
+
+| Method | Path | Body → Response |
+|---|---|---|
+| GET | `/notifications/daily` | → `{reminders:[Reminder]}` — what this learner's phone should schedule (ADR-076) |
+
+```json
+{ "reminders": [
+    { "slot": "MORNING", "date": "2026-09-14", "hour": 8, "minute": 0,
+      "kind": "WORDS_DUE", "count": 4 },
+    { "slot": "EVENING", "date": "2026-09-14", "hour": 20, "minute": 0,
+      "kind": "WORDS_DUE", "count": 4 } ] }
+```
+
+> **There is no push.** These are local notifications: the phone sets alarms for
+> itself, fires them offline with the app closed, and has nobody to ask what
+> they should say at the time. So the server decides in advance and the phone
+> only schedules — which is rule R1 applied to a sentence about the future.
+>
+> * **One entry per time of day for the next seven days**, each with the count
+>   that will be true *at that moment*. A word waiting out a spaced gap is
+>   `NOTHING_DUE` on Tuesday and `WORDS_DUE` on Thursday, and both are in the
+>   same response.
+> * **`hour`/`minute` are wall-clock**, scheduled in the device's own timezone;
+>   a learner means the time on their own phone. The counts are computed against
+>   the product's reporting offset.
+> * **`kind`** is a stable key, never a sentence — the server does not know
+>   which language the installation reads (ADR-035). `WORDS_DUE` (count = words
+>   due), `NOTHING_DUE` (count = words in the pipeline), `NO_WORDS` (count 0,
+>   and a different message from `NOTHING_DUE`: never having started is not the
+>   same as having nothing due).
+> * **Slots already past are omitted.** A phone handed a past time fires it
+>   immediately or drops it silently; neither is a reminder.
+> * Refetched on every app open and resume, and each refresh **replaces** what
+>   is pending rather than adding to it.
 
 ## Skill sessions
 

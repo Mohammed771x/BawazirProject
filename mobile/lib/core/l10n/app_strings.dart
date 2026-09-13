@@ -57,6 +57,12 @@ class AppStrings {
 
         // Adding words.
         'WORD_ALREADY_ADDED' => alreadyInYourWords,
+        // Shown only when the checker's own sentence is unavailable — it
+        // normally says which spelling it thinks was meant (ADR-075).
+        'WORD_NOT_RECOGNIZED' => _(
+            'That does not look like an English word. Check the spelling.',
+            'لا تبدو كلمة إنجليزية. تحقّق من الإملاء.',
+          ),
         'WORD_NOT_FOUND' => _(
             'That word and meaning are not in the dictionary.',
             'هذه الكلمة بهذا المعنى غير موجودة في القاموس.',
@@ -479,9 +485,16 @@ class AppStrings {
         '"$query" is not in the dictionary',
         '«$query» غير موجودة في القاموس',
       );
+  /// Not a refusal any more (ADR-075) — an offer.
+  ///
+  /// The dictionary is a machine join with holes in it, and the word a learner
+  /// most wants is often exactly the one that fell down one. So this says what
+  /// happens next rather than apologising for a limit.
   String get wordNotFoundBody => _(
-        'WordOS only adds words it can verify, with a meaning from a trusted source — that is what keeps your vocabulary reliable.',
-        'يضيف WordOS الكلمات التي يستطيع التحقق منها فقط، بمعنى من مصدر موثوق، وهذا ما يحافظ على دقة مفرداتك.',
+        'It is not in our dictionary — but you can still add it. Write what it '
+        'means and we will check the word and the meaning together.',
+        'غير موجودة في قاموسنا، لكن يمكنك إضافتها. اكتب معناها وسنتحقق من '
+        'الكلمة والمعنى معاً.',
       );
   String get wordAdded => _('Added to the learning pipeline', 'أُضيفت إلى مسار التعلّم');
   String get analyzingWord =>
@@ -595,6 +608,58 @@ class AppStrings {
       );
   String get deleteWordDone => _('Word deleted', 'تم حذف الكلمة');
 
+  // ── Daily reminders (ADR-076) ─────────────────────────────────────────────
+  //
+  // The words the phone says when the app is not open. The server decides
+  // *which* of these to use and what the number is; this file decides how it
+  // reads (ADR-035) — nothing here is ever sent from the server, which does not
+  // know which language this installation is in.
+
+  String get remindersSection => _('Reminders', 'التذكيرات');
+  String get dailyReminders => _('Daily reminders', 'تذكيرات يومية');
+
+  /// Says what the learner actually gets, times included. A switch labelled
+  /// "notifications" leaves them to find out by being interrupted.
+  String get dailyRemindersExplainer => _(
+        'A nudge in the morning and one in the evening, telling you how many '
+        'words are ready. Nothing else.',
+        'تنبيه في الصباح وآخر في المساء يخبرك بعدد الكلمات الجاهزة. لا شيء غير ذلك.',
+      );
+
+  /// Shown when the phone itself is refusing, which no switch here can undo.
+  String get remindersBlocked => _(
+        'Notifications are turned off for WordOS in your phone settings.',
+        'الإشعارات موقوفة لتطبيق WordOS من إعدادات هاتفك.',
+      );
+
+  String get reminderTitleMorning => _('Good morning', 'صباح الخير');
+  String get reminderTitleEvening => _('Good evening', 'مساء الخير');
+
+  /// Words are waiting. The number is the point — "you have words waiting" is
+  /// a nag, and "you have 4 words waiting" is a task with an end to it.
+  String reminderWordsDue(int count) => _(
+        count == 1
+            ? '1 word is ready to practise. Five minutes is enough.'
+            : '$count words are ready to practise. Five minutes is enough.',
+        count == 1
+            ? 'لديك كلمة واحدة جاهزة للتدريب. خمس دقائق تكفي.'
+            : 'لديك $count كلمة جاهزة للتدريب. خمس دقائق تكفي.',
+      );
+
+  /// Nothing due, and something learned. Deliberately not an apology for having
+  /// nothing to ask: a day with no words due is the spaced gap working.
+  String reminderNothingDue(int count) => _(
+        'Nothing is due yet — your words are resting. Add a new one today.',
+        'لا شيء مستحق اليوم، كلماتك ترتاح. أضف كلمة جديدة.',
+      );
+
+  /// Never started. A different sentence from "nothing is due", because "you
+  /// have 0 words ready" is true for both and useless to both.
+  String get reminderNoWords => _(
+        'Your vocabulary is empty. Add your first word — it takes a minute.',
+        'قائمتك فارغة. أضف أول كلمة، لن تأخذ منك دقيقة.',
+      );
+
   // ── Writing your own meaning (ADR-072) ────────────────────────────────────
   String get writeMeaningYourself =>
       _('Write the meaning yourself', 'اكتب المعنى بنفسك');
@@ -643,10 +708,31 @@ class AppStrings {
       );
 
   String get meaningNeedsRealWord => _(
-        'The meaning is yours to write, but the word itself has to be one the '
-        'dictionary knows.',
-        'المعنى لك أن تكتبه، لكن الكلمة نفسها لا بد أن تكون في القاموس.',
+        'The meaning is yours to write. We check the spelling and that it '
+        'really is what the word means.',
+        'المعنى لك أن تكتبه. نحن نتحقق من الإملاء ومن أنه فعلاً معنى الكلمة.',
       );
+
+  // ── A word the dictionary does not have (ADR-075) ─────────────────────────
+
+  /// The card offering to add a word the lookup found nothing for.
+  String addItAnyway(String word) => _(
+        'Add "$word" with your own meaning',
+        'أضف «$word» بمعنى من عندك',
+      );
+
+  /// Said above the checker's sentence when the *word* is what it doubts.
+  ///
+  /// A different heading from `meaningLooksWrong` on purpose: being told the
+  /// meaning is wrong when the problem is a typo in the English sends the
+  /// learner to rewrite the half that was right.
+  String get wordLooksWrong =>
+      _('Check the spelling', 'راجع إملاء الكلمة');
+
+  String didYouMeanWord(String word) => _('Did you mean "$word"?', 'هل تقصد «$word»؟');
+
+  /// Puts the checker's spelling in the field and looks it up again.
+  String get useThisSpelling => _('Use this spelling', 'استخدم هذا الإملاء');
 
   // Sessions
   String get readPassage => _('Read the passage', 'اقرأ النص');

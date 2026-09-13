@@ -8,6 +8,8 @@ import 'package:wordos/core/api/api_providers.dart';
 import 'package:wordos/app/wordos_app.dart';
 import 'package:wordos/features/auth/session_controller.dart';
 
+import 'package:wordos/core/notifications/reminder_providers.dart';
+
 import 'support/test_harness.dart';
 
 /// Getting in and out of an account.
@@ -81,6 +83,8 @@ void main() {
       // Not `testOverrides`: this test needs the *same* store across two
       // launches, which is the whole thing it is checking.
       tokenStoreProvider.overrideWith((ref) => tokens),
+      notificationSchedulerProvider
+          .overrideWithValue(FakeNotificationScheduler()),
     ];
 
     tester.view.physicalSize = const Size(1200, 2600);
@@ -123,6 +127,10 @@ void main() {
       ),
       appPreferencesProvider.overrideWithValue(prefs),
       tokenStoreProvider.overrideWith((ref) => FakeTokenStore()),
+      // The app schedules reminders on sign-in (ADR-076), and the real
+      // scheduler is a platform channel this binary does not have.
+      notificationSchedulerProvider
+          .overrideWithValue(FakeNotificationScheduler()),
     ]);
     addTearDown(container.dispose);
 

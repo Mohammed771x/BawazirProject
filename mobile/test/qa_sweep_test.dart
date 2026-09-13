@@ -7,6 +7,8 @@ import 'package:wordos/core/storage/preferences_providers.dart';
 import 'package:wordos/core/api/api_providers.dart';
 import 'package:wordos/features/session/session_widgets.dart';
 
+import 'package:wordos/core/notifications/reminder_providers.dart';
+
 import 'support/test_harness.dart';
 
 /// The final QA sweep (Part 3 §44–§56).
@@ -54,6 +56,10 @@ void main() {
             InMemoryAppPreferences(locale: locale, themeMode: theme),
           ),
           tokenStoreProvider.overrideWith((ref) => FakeTokenStore()),
+          // The app schedules reminders on sign-in (ADR-076), and the real
+          // scheduler is a platform channel this binary does not have.
+          notificationSchedulerProvider
+              .overrideWithValue(FakeNotificationScheduler()),
         ],
         child: const WordOsApp(),
       ),
@@ -160,6 +166,10 @@ void main() {
                 locale: const Locale('en'), themeMode: ThemeMode.dark),
           ),
           tokenStoreProvider.overrideWith((ref) => FakeTokenStore()),
+          // The app schedules reminders on sign-in (ADR-076), and the real
+          // scheduler is a platform channel this binary does not have.
+          notificationSchedulerProvider
+              .overrideWithValue(FakeNotificationScheduler()),
         ],
         child: const WordOsApp(),
       ),

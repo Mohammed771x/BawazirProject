@@ -108,6 +108,14 @@ sense), `meaning_source`, `definition_en`, `part_of_speech`, `cefr_level`, `stat
 
 `sense_id` joins to `lexicon_entries` only when `meaning_source` is `LEXICON`.
 
+`definition_en`, `part_of_speech` and `cefr_level` normally come from `lexicon_entries` — including
+for a learner-written meaning, because they decide which passages the word appears in and how
+Spelling clues it, and are not the learner's to invent. For a word the lexicon does not hold at all
+they come from the AI checker instead (ADR-075), filtered first: a part of speech outside the set
+this app can label is stored empty, and a band off the CEFR ladder falls back to `B1`. Those rows are
+identifiable — `meaning_source = LEARNER` with a `custom:` sense id — so a later audit can find every
+one of them.
+
 `meaning_check` records what the AI checker made of a learner-written meaning (ADR-074) — and, when
 it is `OVERRIDDEN`, that the learner saved it over the checker's objection. Null for the two sources
 that are not checked. Kept because "the model said no and the learner said yes" is what explains a

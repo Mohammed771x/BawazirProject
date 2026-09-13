@@ -209,6 +209,11 @@ public sealed class HttpAiContentService(
             part_of_speech = request.PartOfSpeech,
             meaning = request.Meaning,
             feedback_language = request.FeedbackLanguage,
+            // Turns on the second question — is this an English word at all
+            // (ADR-075). Sent explicitly rather than inferred from an empty
+            // definition list, which would also be true of a word this service
+            // does hold and has no English gloss for.
+            known_word = request.KnownWord,
         };
 
         var response =
@@ -221,7 +226,14 @@ public sealed class HttpAiContentService(
             response.Note,
             PromptVersion: response.PromptVersion,
             Model: response.Model,
-            Tokens: response.Tokens);
+            Tokens: response.Tokens,
+            // Absent for a word the lexicon already knew: nothing asked, so
+            // nothing answered, and "recognized" is the truth about it.
+            WordRecognized: response.WordRecognized ?? true,
+            CorrectedWord: response.CorrectedWord,
+            DefinitionEn: response.DefinitionEn,
+            PartOfSpeech: response.WordPartOfSpeech,
+            Level: response.CefrLevel);
     }
 
     public async Task<SpeakingObservation> SpeakingTurnAsync(
@@ -421,6 +433,12 @@ public sealed class HttpAiContentService(
         string Model,
         int Tokens);
 
+    /// <param name="WordPartOfSpeech">
+    /// Named apart from the wire field it binds to (<c>word_part_of_speech</c>)
+    /// only because <c>PartOfSpeech</c> would read, at the call site, like the
+    /// part of speech that was *sent* — which is the commonest sense's, and is a
+    /// different thing from the one the model is reporting back (ADR-075).
+    /// </param>
     private sealed record MeaningCheckDto(
         bool Matches,
         string? Corrected,
@@ -428,7 +446,14 @@ public sealed class HttpAiContentService(
         string Note,
         string PromptVersion,
         string Model,
-        int Tokens);
+        int Tokens,
+        // Nullable: a service that has not been deployed with ADR-075 yet omits
+        // these, and the word it was asked about was one the lexicon knew.
+        bool? WordRecognized = null,
+        string? CorrectedWord = null,
+        string? DefinitionEn = null,
+        string? WordPartOfSpeech = null,
+        string? CefrLevel = null);
 
     private sealed record SpeakingDto(
         string Reply,

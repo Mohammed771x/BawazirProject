@@ -4,6 +4,21 @@
 
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
 
+    <!-- Daily reminders (ADR-076). Local notifications only: there is no
+         Firebase here and no server push, so the phone is setting alarms for
+         itself.
+
+         POST_NOTIFICATIONS is asked for at runtime on Android 13 and up.
+         RECEIVE_BOOT_COMPLETED lets the pending reminders survive a restart —
+         without it a learner who reboots their phone silently stops being
+         reminded until they next open the app.
+
+         SCHEDULE_EXACT_ALARM is deliberately absent: it is a special permission
+         the learner must grant in system settings, and a practice reminder does
+         not care whether it arrives at 08:00 or 08:09. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
     <application
         android:label="WordOS"
         android:name="${applicationName}"
@@ -30,6 +45,25 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- What actually posts a scheduled reminder when its time comes, and
+             what puts the pending ones back after a reboot or an app update
+             (ADR-076). The plugin does not declare these itself: without them
+             the app schedules happily and nothing is ever shown, which is the
+             worst possible failure for a feature nobody is watching. -->
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

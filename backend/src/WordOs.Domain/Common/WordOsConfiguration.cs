@@ -68,6 +68,41 @@ public sealed record WordOsConfiguration
         return new DateTimeOffset(local.Date, offset).ToUniversalTime();
     }
 
+    /// <summary>Local hour the morning reminder fires at (ADR-076).</summary>
+    /// <remarks>
+    /// Two a day, morning and evening, because the thing being fought is
+    /// forgetting the app exists — and a single daily reminder that lands while
+    /// the learner is at school is a reminder that never happened.
+    ///
+    /// Wall-clock hours rather than instants: the device schedules these, and
+    /// what a learner means by "morning" is the time on their own phone. The
+    /// *counts* in them are still computed here, against
+    /// <see cref="ReportingUtcOffsetHours"/>, for the same reason that offset
+    /// exists at all.
+    /// </remarks>
+    public int MorningReminderHour { get; init; } = 8;
+
+    /// <summary>Local hour the evening reminder fires at (ADR-076).</summary>
+    public int EveningReminderHour { get; init; } = 20;
+
+    /// <summary>
+    /// How many days of reminders are handed to the device at a time.
+    /// </summary>
+    /// <remarks>
+    /// Each day gets its own reminder with its own count, rather than one
+    /// repeating notification saying the same number for ever: a word becomes
+    /// due on a known date, so "you have 4 words ready" can be true on Tuesday
+    /// and true again with a different number on Thursday — and the only way a
+    /// notification the device fires offline can say either is for the server
+    /// to have worked out both in advance.
+    ///
+    /// Bounded by what a phone will hold: iOS keeps 64 pending notifications and
+    /// silently drops the rest, and this is two per day. A learner who does not
+    /// open the app for longer than this stops being reminded, which is the
+    /// honest outcome — by then every count would be a guess.
+    /// </remarks>
+    public int ReminderHorizonDays { get; init; } = 7;
+
     /// <summary>Sessions of evidence needed before a level may move at all.</summary>
     public int MinEvaluationSessions { get; init; } = 14;
 

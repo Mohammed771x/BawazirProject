@@ -396,6 +396,7 @@ app.MapAuthEndpoints();
 app.MapOnboardingEndpoints();
 app.MapSettingsEndpoints();
 app.MapHubEndpoints();
+app.MapNotificationEndpoints();
 app.MapPlacementEndpoints();
 app.MapSessionEndpoints();
 app.MapWeeklyReviewEndpoints();

@@ -307,8 +307,20 @@ void main() {
       await tester.pumpAndSettle();
 
       await openSettings(tester);
-      await tester.scrollUntilVisible(find.text('Message the team'), 250);
-      await tester.tap(find.text('Message the team'));
+      // Dragged rather than `scrollUntilVisible`, for the reason spelled out in
+      // `account_access_test`: this list disposes what it scrolls past, so a
+      // settle after the card comes into view can dispose it again before the
+      // tap lands. `scrollUntilVisible` also stops the instant it is *found*,
+      // which on a full Settings screen can leave it behind the navigation bar
+      // — found, and not tappable.
+      final feedback = find.text('Message the team');
+      for (var attempt = 0;
+          attempt < 16 && feedback.evaluate().isEmpty;
+          attempt++) {
+        await tester.drag(find.byType(ListView).first, const Offset(0, -300));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(feedback);
       await tester.pumpAndSettle();
 
       await tester.enterText(

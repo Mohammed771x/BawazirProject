@@ -510,10 +510,9 @@ class MockEngine {
 
   /// Adds a word with a meaning the learner wrote themselves (ADR-072).
   ///
-  /// The meaning is theirs; the word is not. It is still resolved against the
-  /// dictionary, because the level, the part of speech and the English
-  /// definition drive content generation and Spelling clues, and none of them
-  /// can be invented for a string nobody recognises.
+  /// The meaning is theirs, and so — when the dictionary has never heard of it
+  /// — is the word (ADR-075). What the dictionary used to settle, the checker
+  /// settles instead: is this English, what kind of word is it, how hard is it.
   Word addWordWithMeaning(
     MockUser user, {
     required String text,
@@ -541,9 +540,18 @@ class MockEngine {
     }
 
     final facts = MockDictionary.define(word);
-    if (facts.senses.isEmpty) {
-      throw ApiException(
-        'WORD_NOT_FOUND', "'$word' is not in the dictionary.", statusCode: 404);
+
+    // The stand-in for the checker's *word* question (ADR-075). There is no
+    // model here to ask whether a string is English, and the one honest
+    // substitute is the shape of the string: letters, no digits, plausible
+    // length. It refuses `asdfghjkl` the way a grader would not, and accepts
+    // `flabbergast` the way the real checker does — which is enough to develop
+    // both branches against without pretending to knowledge it has not got.
+    if (facts.senses.isEmpty && !_looksLikeAWord(word)) {
+      throw WordRejectedException(
+        message: '"$word" لا تبدو كلمة إنجليزية. تحقّق من الإملاء.',
+        statusCode: 409,
+      );
     }
 
     // The stand-in for the meaning checker (ADR-074). It cannot judge Arabic —
@@ -555,7 +563,10 @@ class MockEngine {
     // rejected, and overridden. It is deliberately *not* a guess at Arabic
     // correctness, because a mock that pretended to judge language would teach
     // whoever develops against it that the checker is cleverer than it is.
-    if (!acceptAnyway) {
+    //
+    // A word the dictionary does not have is skipped: there is no list of
+    // meanings to compare against, so there is nothing to disagree with.
+    if (!acceptAnyway && facts.senses.isNotEmpty) {
       final known = facts.senses.map((s) => s.meaning.trim()).toList();
       if (!known.contains(written)) {
         throw MeaningRejectedException(
@@ -567,19 +578,50 @@ class MockEngine {
       }
     }
 
-    final base = facts.senses.first;
+    final base = facts.senses.firstOrNull;
     return _createWord(
       user,
-      text: base.text,
+      text: base?.text ?? word,
       meaning: written,
-      definitionEn: base.definitionEn,
-      partOfSpeech: base.partOfSpeech,
+      // Empty for an unknown word, which every reader already handles: the
+      // real service fills these from the checker, and a mock inventing an
+      // English definition would be inventing the one thing it cannot know.
+      definitionEn: base?.definitionEn ?? '',
+      partOfSpeech: base?.partOfSpeech ?? '',
       form: null,
-      level: base.suggestedLevel,
+      level: base?.suggestedLevel ?? CefrLevel.b1,
       // Recorded the same way the server records it: whether the learner took
       // the checker's word for it or their own.
       checkOverridden: acceptAnyway,
     );
+  }
+
+  /// Whether a string is shaped like an English word.
+  ///
+  /// Not a dictionary and not pretending to be one — the real service asks a
+  /// model. This exists so the mock has *some* line between `flabbergast` and
+  /// `asdfghjkl`, and it draws it where a keyboard mash actually differs from a
+  /// word: letters only, at least one vowel, and no long run of consonants.
+  ///
+  /// The consonant run is what does the work. `asdfghjkl` has a vowel — it
+  /// starts with one — so "has a vowel" alone lets the commonest mash of all
+  /// straight through, which is how this heuristic was first written and why
+  /// this sentence is here.
+  static bool _looksLikeAWord(String text) {
+    final trimmed = text.trim().toLowerCase();
+    if (trimmed.isEmpty || trimmed.length > 32) return false;
+    if (!RegExp(r"^[a-z][a-z'-]*$").hasMatch(trimmed)) return false;
+    if (!RegExp('[aeiouy]').hasMatch(trimmed)) return false;
+
+    // Six, because English reaches five: `strengths` ends in `ngths`. A mock
+    // that refuses a real word is worse than one that accepts a fake one, so
+    // the threshold sits above the longest run a real word produces.
+    if (RegExp('[^aeiouy-]{6,}').hasMatch(trimmed)) return false;
+
+    // The other shape of a fake word, and the one the consonant rule misses:
+    // `zzzznotaword` has vowels in all the right places. No English word
+    // triples a letter — `committee` doubles, nothing trebles.
+    return !RegExp(r'(.)\1\1').hasMatch(trimmed);
   }
 
   /// Adds a word with the meaning it carried **in this session's passage**
@@ -627,6 +669,68 @@ class MockEngine {
       form: null,
       level: base.suggestedLevel,
     );
+  }
+
+  /// The daily reminders this learner's phone should raise (ADR-076).
+  ///
+  /// Mirrors the server: one per time of day for the next week, each carrying
+  /// what will be true *at that moment* rather than what is true now. The
+  /// per-day count is the whole point — a word two days off its next skill is
+  /// not due on Tuesday and is due on Thursday, and a notification the phone
+  /// fires offline can only say either if it was worked out in advance.
+  ///
+  /// The hours are constants here and configuration on the server. This engine
+  /// is a disposable simulation deleted in Phase 7, and rule R3 is about the
+  /// real service's tunables, not about a stand-in for it.
+  List<DailyReminder> dailyReminders(MockUser user) {
+    const morningHour = 8;
+    const eveningHour = 20;
+    const horizonDays = 7;
+
+    final reminders = <DailyReminder>[];
+    final today = now.toLocal();
+
+    for (var day = 0; day < horizonDays; day++) {
+      final date = DateTime(today.year, today.month, today.day + day);
+
+      for (final (slot, hour) in [
+        (ReminderSlot.morning, morningHour),
+        (ReminderSlot.evening, eveningHour),
+      ]) {
+        final at = DateTime(date.year, date.month, date.day, hour);
+
+        // A phone handed a past time fires it at once or drops it. Neither is
+        // a reminder.
+        if (!at.isAfter(today)) continue;
+
+        final due = user.words
+            .where((w) =>
+                w.state == WordState.learning &&
+                !(w.skills[w.currentSkill]?.availableAt ?? at).isAfter(at))
+            .length;
+
+        reminders.add(DailyReminder(
+          slot: slot,
+          date: date,
+          hour: hour,
+          minute: 0,
+          // Never having started and having nothing due are different things
+          // to say to somebody, so they are different keys.
+          kind: user.words.isEmpty
+              ? ReminderKind.noWords
+              : due > 0
+                  ? ReminderKind.wordsDue
+                  : ReminderKind.nothingDue,
+          count: user.words.isEmpty
+              ? 0
+              : due > 0
+                  ? due
+                  : user.words.length,
+        ));
+      }
+    }
+
+    return reminders;
   }
 
   /// Removes a word from the learner's vocabulary (ADR-071).

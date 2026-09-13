@@ -7,6 +7,7 @@ export 'admin.dart';
 export 'enums.dart';
 export 'hub.dart';
 export 'placement.dart';
+export 'reminder.dart';
 export 'review.dart';
 export 'session.dart';
 export 'user.dart';

@@ -9,6 +9,7 @@ import '../../core/api/api_providers.dart';
 import '../../core/api/wordos_api.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
+import '../../core/notifications/reminder_providers.dart';
 import '../../core/storage/preferences_providers.dart';
 import '../../core/support/support_contact.dart';
 import '../../core/theme/app_tokens.dart';
@@ -80,6 +81,11 @@ class SettingsScreen extends ConsumerWidget {
           const SizedBox(height: AppSpacing.lg),
           SectionHeader(title: s.appearance),
           const _AppearanceCard(),
+          const SizedBox(height: AppSpacing.lg),
+          // The only thing the app does when it is not open (ADR-076), so the
+          // switch for it belongs where a learner looks to stop it.
+          SectionHeader(title: s.remindersSection),
+          const _RemindersCard(),
           const SizedBox(height: AppSpacing.lg),
           // How a learner reaches a person (ADR-053). Before this there was no
           // way at all — no address, no support screen — so someone who hit a
@@ -390,6 +396,107 @@ class _InterestsCardState extends ConsumerState<_InterestsCard> {
           enabled: !_saving,
           onChanged: _save,
         ),
+      ),
+    );
+  }
+}
+
+/// Turning the daily reminders on and off (ADR-076).
+///
+/// The switch is this device's, not the account's: a learner with the app on a
+/// tablet at home and a phone in their pocket has a real reason to want one and
+/// not the other, and the OS permission it sits on top of is per-device too.
+class _RemindersCard extends ConsumerStatefulWidget {
+  const _RemindersCard();
+
+  @override
+  ConsumerState<_RemindersCard> createState() => _RemindersCardState();
+}
+
+class _RemindersCardState extends ConsumerState<_RemindersCard> {
+  late bool _enabled = ref.read(appPreferencesProvider).remindersEnabled;
+
+  /// True once the phone has refused permission.
+  ///
+  /// Worth saying out loud: with the switch on and the OS saying no, a learner
+  /// who is not being reminded would otherwise be looking at a control that
+  /// claims to be working.
+  bool _blocked = false;
+
+  Future<void> _set(bool enabled) async {
+    setState(() {
+      _enabled = enabled;
+      if (!enabled) _blocked = false;
+    });
+
+    final controller = ref.read(reminderControllerProvider);
+    if (!enabled) {
+      await controller.disable();
+      return;
+    }
+
+    await controller.enable();
+
+    // Asked after the fact rather than before: `enable` is what prompts, and
+    // the answer is only interesting once it has.
+    final granted =
+        await ref.read(notificationSchedulerProvider).initialize();
+    if (mounted) setState(() => _blocked = !granted);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ref.watch(stringsProvider);
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // A Row and a Switch rather than a SwitchListTile: a ListTile paints
+          // its background on the nearest Material ancestor, and every card on
+          // this screen is a decorated box — which Flutter flags as an error,
+          // not a warning.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(s.dailyReminders, style: context.text.titleSmall),
+                    const SizedBox(height: AppSpacing.xxs),
+                    Text(
+                      s.dailyRemindersExplainer,
+                      style: context.text.bodySmall?.copyWith(
+                        color:
+                            context.colors.onSurface.withValues(alpha: 0.65),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Switch.adaptive(value: _enabled, onChanged: _set),
+            ],
+          ),
+          if (_enabled && _blocked) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.notifications_off_rounded,
+                    size: 18, color: context.palette.warning),
+                const SizedBox(width: AppSpacing.xs),
+                Expanded(
+                  child: Text(
+                    s.remindersBlocked,
+                    style: context.text.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
       ),
     );
   }

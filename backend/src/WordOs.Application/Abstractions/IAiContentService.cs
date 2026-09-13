@@ -268,7 +268,20 @@ public sealed record MeaningCheckRequest(
     /// The language the note to the learner is written in (ADR-035). The word
     /// and the meaning they typed are untouched by it.
     /// </summary>
-    string FeedbackLanguage = "ar");
+    string FeedbackLanguage = "ar",
+    /// <summary>
+    /// Whether the lexicon holds this word at all (ADR-075).
+    /// </summary>
+    /// <remarks>
+    /// False turns a second question on: <i>is this even an English word, and
+    /// is it spelled right?</i> — which the lexicon answered when it had the
+    /// word, and nobody answers when it does not. An empty
+    /// <see cref="Definitions"/> would imply it, but only by accident: a word
+    /// the lexicon knows and holds no English gloss for is a real case, and
+    /// inferring "unknown word" from it would ask the model to invent facts
+    /// about a word this service already has.
+    /// </remarks>
+    bool KnownWord = true);
 
 /// <summary>
 /// What the checker made of it. No <c>Allowed</c> field, deliberately: whether
@@ -286,6 +299,31 @@ public sealed record MeaningCheckRequest(
 /// <param name="Suggestions">
 /// Meanings that would be right, when theirs is not. Empty when it is.
 /// </param>
+/// <param name="WordRecognized">
+/// Whether the English word itself is real and spelled correctly (ADR-075).
+/// Always true when the lexicon had the word — it was asked only because
+/// nothing else could answer.
+/// </param>
+/// <param name="CorrectedWord">
+/// The English word with its spelling fixed, when that is what was wrong with
+/// it. Null when the word was fine, and null when it is not a word at all.
+/// </param>
+/// <param name="DefinitionEn">
+/// What the word means in English, for a word the lexicon does not hold. It is
+/// not decoration: it is what the passage generator is given and what Spelling
+/// clues from, so a word added this way needs one or it enters the pipeline
+/// half-built.
+/// </param>
+/// <param name="PartOfSpeech">
+/// The word's part of speech, likewise for a word the lexicon does not hold.
+/// Validated against the set this service uses before it is stored — the model
+/// reports, the backend decides (rule R2).
+/// </param>
+/// <param name="Level">
+/// The CEFR band the word belongs to, as a wire string. Same rule: read as a
+/// suggestion, clamped to a real band, and the level engine corrects it from
+/// actual performance anyway.
+/// </param>
 public sealed record MeaningCheck(
     bool Matches,
     string? Corrected,
@@ -293,7 +331,12 @@ public sealed record MeaningCheck(
     string Note,
     string PromptVersion = "",
     string Model = "",
-    int Tokens = 0);
+    int Tokens = 0,
+    bool WordRecognized = true,
+    string? CorrectedWord = null,
+    string? DefinitionEn = null,
+    string? PartOfSpeech = null,
+    string? Level = null);
 
 public sealed record SpeakingTranscriptTurn(bool FromAi, string Text);
 
