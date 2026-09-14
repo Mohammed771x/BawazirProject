@@ -118,6 +118,9 @@ builder.Services
     .ValidateOnStart();
 
 builder.Services.AddSingleton(TimeProvider.System);
+// Singleton because it remembers: a readiness check that woke the database on
+// every probe was costing the whole month's compute allowance (ADR-077).
+builder.Services.AddSingleton<ReadinessProbe>();
 // Bound from configuration rather than constructed with its defaults —
 // rule R3 says nothing tunable is hard-coded, and until now none of these
 // values could actually be changed without a rebuild. The record's own
@@ -369,13 +372,22 @@ app.UseRateLimiter();
 
 // Liveness does not touch the database; readiness does. Keeping them separate
 // means "the app is up" and "the app can serve" stay distinguishable.
+//
+// **This is the one to point a keep-alive at.** It is free: no connection, no
+// query, and so nothing that forbids a serverless database to suspend itself
+// (ADR-077).
 app.MapGet("/health/live", () => Results.Ok(new { status = "ok" }));
 
 app.MapGet("/health/ready", async (
-    WordOsDbContext db, AiCallGate gate, CancellationToken ct) =>
+    WordOsDbContext db, AiCallGate gate, ReadinessProbe readiness,
+    CancellationToken ct) =>
 {
-    var canConnect = await db.Database.CanConnectAsync(ct);
-    return canConnect
+    // Throttled, not skipped: the database is really asked, just not once per
+    // probe. `databaseCheckedSecondsAgo` is how stale the answer is allowed to
+    // be, and saying so is the price of the saving (ADR-077).
+    var result = await readiness.CheckAsync(db.Database.CanConnectAsync, ct);
+
+    return result.DatabaseReachable
         // How much headroom is left, so a load balancer or a person watching a
         // dashboard can see saturation coming instead of discovering it from
         // the learners (ADR-051).
@@ -383,6 +395,7 @@ app.MapGet("/health/ready", async (
         {
             status = "ok",
             database = "connected",
+            databaseCheckedSecondsAgo = result.CheckedSecondsAgo,
             aiSlotsFree = gate.Available,
         })
         // No exception detail: a probe must not disclose the host, the database

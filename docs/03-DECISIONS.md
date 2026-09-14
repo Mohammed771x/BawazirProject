@@ -3309,3 +3309,85 @@ plugin. Without them scheduling succeeds and nothing is ever shown. Likewise
 `UNUserNotificationCenter.current().delegate` in `AppDelegate.swift`: without it
 a notification arriving while the app is open is swallowed, which is exactly the
 case anyone testing the feature hits first.
+
+---
+
+## ADR-077 — The readiness probe is throttled, because it was the whole hosting bill
+
+**Date:** 2026-09-14 · **Status:** Accepted · **Corrects `docs/09-DEPLOYMENT.md` §3–§4**
+
+`/health/ready` opened a database connection on every request, by design: that
+is what distinguishes it from `/health/live`, and the deployment document told
+the operator to point a five-minute uptime monitor at it *specifically* because
+it touches the database — "so the same ping keeps Neon awake as well."
+
+Every part of that sentence is true. It was still the wrong thing to want.
+
+### What it actually cost
+
+Neon's free plan bills **compute-hours** — the time the database is awake — not
+queries, and suspends the compute after **5 minutes** idle. A probe every five
+minutes against a five-minute suspend arrives exactly when it was about to
+sleep. Every time. And two probes were doing it: cron-job.org on the interval
+above, and Render's own health check, which §3 had also pointed at
+`/health/ready`.
+
+Measured on the live instance, 1–14 September 2026:
+
+```
+0.25 CU (the plan's floor) × 324 hours = 81 compute-hours
+```
+
+Against an allowance of 100. **Eighty per cent of the month spent in thirteen
+days, with no learner traffic in it at all** — the database was awake 24 hours a
+day and idle for nearly all of them. At that rate the allowance runs out on the
+17th of each month, Neon suspends the compute until the next cycle, and the app
+stops for everybody.
+
+This is worth stating as a general shape, because it will recur: **on a
+serverless database, the probe that proves the database is alive is also the
+thing that forbids it to sleep.** A health check is not free the way it is on a
+server you rent by the month. It is the most frequent query the service makes,
+and it runs hardest exactly when nobody is using the app.
+
+### The fix, in two halves
+
+**The operator's half**, in `docs/09-DEPLOYMENT.md` §4: the keep-alive points at
+`/health/live` — no connection, no query, no `DbContext` — every 10 minutes.
+That is all it was ever for; Render sleeps at 15 minutes, Neon is not its
+business. Watching the database is a *second* monitor on `/health/ready` at 60
+minutes, about 15 compute-hours a month.
+
+**The service's half**, here: `/health/ready` asks the database at most once per
+`Capacity__ReadinessDatabaseCheckSeconds` and returns the cached verdict in
+between. Configuration, not a constant, because the right answer differs by host
+(rule R3) — one hour by default, `0` to ask every time, which is correct on a
+server you own.
+
+Documentation alone would not have been enough. The deployment guide already
+*had* a `/health/live` endpoint and recommended against it; the next operator,
+or the same one on a bad day, re-points a monitor and the bill comes back with
+no symptom until the month dies. The throttle makes the expensive configuration
+impossible to express rather than merely discouraged.
+
+### Two details that are decisions
+
+**Only successes are cached.** A failure is re-checked on the very next request.
+A database that is down accrues no compute time, so polling it costs nothing,
+and a database coming back must be visible immediately rather than up to an hour
+later.
+
+**The staleness is published, not hidden.** The response carries
+`databaseCheckedSecondsAgo`, so an operator reading `"database":"connected"`
+knows whether this request proved it or whether it is a 47-minute-old claim.
+A cache that silently answers for something it did not check is how a monitor
+becomes a comfort rather than a measurement.
+
+### What this gives up
+
+Up to an hour between a database failing and `/health/ready` saying so. That is
+real, and acceptable here: the learner-facing symptom of a dead database is
+immediate and loud anyway — every request 500s — and `/health/live` still tells
+the host to restart a process that has genuinely died. What is lost is *early*
+warning of a database failure that has not yet been noticed by anybody. What is
+bought is an app that is still running on the 25th.

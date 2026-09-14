@@ -35,6 +35,39 @@ public sealed class CapacityOptions
     /// <summary>How long any single statement may run.</summary>
     public int DatabaseCommandTimeoutSeconds { get; init; } = 30;
 
+    /// <summary>
+    /// How long a successful readiness check stands before the database is
+    /// asked again.
+    /// </summary>
+    /// <remarks>
+    /// This is a hosting bill, not a tuning knob for its own sake. A serverless
+    /// PostgreSQL — Neon, and every provider like it — charges for the time the
+    /// compute is <i>awake</i>, not for the queries run, and suspends itself
+    /// after a few minutes idle. <c>/health/ready</c> opens a real connection,
+    /// so anything probing it on a shorter interval than that suspend window
+    /// keeps the database awake around the clock and bills a fully idle
+    /// service at the full-time rate.
+    ///
+    /// Measured on the deployed instance: two independent probes — the host's
+    /// own health check and an uptime monitor, both pointed here every five
+    /// minutes against a five-minute suspend — held the database awake for
+    /// 24 hours a day and spent 80 of the month's 100 compute-hours in
+    /// thirteen days, with no learner traffic involved at all.
+    ///
+    /// An hour is the number that makes the probe cost a rounding error: one
+    /// wake per hour against a five-minute suspend is roughly 8% of the month
+    /// rather than 100% of it. What it gives up is honest and small — the
+    /// answer may be up to an hour old, so the response says how old.
+    ///
+    /// Only *successes* are held. A failure is re-checked on the next request,
+    /// because a database that is down is not accruing compute time and
+    /// recovery should be visible immediately.
+    ///
+    /// Zero restores the old behaviour: ask the database every single time.
+    /// Correct for a server you own, where uptime costs nothing.
+    /// </remarks>
+    public int ReadinessDatabaseCheckSeconds { get; init; } = 3600;
+
     /// <summary>Transient-failure retries — a blip, a failover, a restart.</summary>
     public int DatabaseRetries { get; init; } = 3;
 

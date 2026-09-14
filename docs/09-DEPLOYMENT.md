@@ -192,7 +192,12 @@ are split apart again.
    | Language / Runtime | **Docker** |
    | Dockerfile path | `./Dockerfile` |
    | Instance type | **Free** |
-   | Health check path | `/health/ready` |
+   | Health check path | `/health/live` |
+
+   `/health/live`, **not** `/health/ready`. Render probes this path on its own
+   schedule, for ever. `/health/ready` opens a database connection, and a
+   connection every few minutes is what stops Neon ever suspending itself —
+   the single most expensive line in this document (ADR-077, and §4 below).
 
    Render finds the `Dockerfile` at the repository root. There is nothing to
    build by hand.
@@ -236,38 +241,85 @@ Render's free plan stops a service after roughly **15 minutes** with no traffic,
 and the next request waits **30–60 seconds** while it starts. For a learner
 opening the app that is indistinguishable from it being broken.
 
-A monitor that requests a cheap endpoint every few minutes prevents it. The
-service already has the right endpoint for this:
+A monitor that requests a cheap endpoint every few minutes prevents it:
 
 ```
-https://wordos-api.onrender.com/health/ready
+https://wordos-api.onrender.com/health/live
 ```
 
-`/health/ready` rather than `/health/live`: it touches the database, so the same
-ping keeps Neon awake as well.
-
-Use **UptimeRobot**, **Better Stack**, or **cron-job.org** — all have free plans:
+Use **cron-job.org**, **UptimeRobot** or **Better Stack** — all have free plans:
 
 1. Add an **HTTP(s) monitor**.
 2. URL: the address above.
-3. Interval: **5 minutes**.
+3. Interval: **10 minutes**.
 4. Expect: **200**.
 
-That is the trick you already had in mind, and it works. Three honest caveats:
+### `/health/live`, and why this paragraph used to say the opposite
+
+An earlier version of this document recommended `/health/ready` at a
+**5-minute** interval, on the reasoning that it touches the database and so the
+one ping keeps Neon awake as well.
+
+That reasoning was right about the mechanism and wrong about wanting it.
+
+Neon's free plan bills **compute-hours** — the time the database is *awake* —
+not queries. It suspends itself after **5 minutes** idle. A probe every five
+minutes against a five-minute suspend arrives exactly when it was about to
+sleep, every time, for ever. And two probes were doing it: this monitor, and
+Render's own health check, which §3 also pointed at `/health/ready`.
+
+Measured on the live instance, 1–14 September 2026:
+
+```
+0.25 CU (the floor) × 324 hours awake = 81 compute-hours
+```
+
+**80 of the month's 100 compute-hours, with no learner traffic in them at all.**
+At that rate the allowance runs out around the 17th of every month, and Neon
+then suspends the compute until the next billing cycle — the app simply stops.
+
+`/health/live` returns without a connection, a query or a `DbContext`. It keeps
+**Render** awake, which is all this monitor was ever for, and leaves Neon free
+to sleep whenever no learner is using the app.
+
+### Watching the database as well
+
+Worth having — just not sixty times an hour. Add a **second** monitor:
+
+| | URL | Interval | Keeps awake |
+|---|---|---|---|
+| Keep-alive | `/health/live` | 10 min | Render only |
+| Database alarm | `/health/ready` | **60 min** | Neon, briefly |
+
+One wake an hour against a five-minute suspend is about **15 compute-hours a
+month** — 15% of the allowance, against 180% before.
+
+`/health/ready` is also throttled at the service itself (ADR-077): it asks the
+database at most once per `Capacity__ReadinessDatabaseCheckSeconds`, one hour by
+default, and returns the cached verdict in between. So a probe misconfigured
+back to 5 minutes can no longer produce this bill. Its answer carries
+`databaseCheckedSecondsAgo` so nobody mistakes a cached *ok* for a fresh one:
+
+```json
+{"status":"ok","database":"connected","databaseCheckedSecondsAgo":1847,"aiSlotsFree":24}
+```
+
+Set `Capacity__ReadinessDatabaseCheckSeconds=0` to ask every time. That is the
+right setting on a server you own, where uptime is already paid for.
+
+### Three honest caveats
 
 * **It costs instance-hours.** Render's free allowance is a fixed number of
   running hours per month per account. Kept awake continuously, one service uses
   about 720 of them. That fits — *one* service. It is the reason both processes
   share this container, and the reason not to add a second free service beside
   it.
-* **It is not free of failure.** The monitor also tells you when the service is
-  down, which is worth having anyway. Point it at `/health/ready` instead if you
-  would rather be alerted when the *database* is unreachable, not just the
-  process.
-* **Neon sleeps too.** Its free plan suspends a database after a few minutes
-  idle, and the first query afterwards pays a second or so to wake it. Pinging
-  `/health/ready` rather than `/health/live` keeps both awake, because that
-  endpoint asks the database whether it is there.
+* **Neon still sleeps, and should.** The first query after a suspend pays well
+  under a second to wake it. A learner does not notice that. A learner does
+  notice the app being down from the 17th.
+* **Check for stray branches.** In the Neon console, every branch has its own
+  compute endpoint burning its own hours. A forgotten test branch doubles this
+  bill silently. Keep `main` and delete the rest.
 
 ---
 
@@ -309,10 +361,13 @@ Not the server. In order:
 1. **Gemini's quota.** 100 learners × ~3 calls = ~300 calls a day. Check the
    limit on your key and divide by three: that is your real capacity, whatever
    the hosting says.
-2. **Render's instance-hours**, if a second always-on free service is added.
-3. **Neon's storage**, eventually — 187 MB now, growing by a few MB per hundred
+2. **Neon's compute-hours**, if anything probes `/health/ready` on a short
+   interval again. 100 a month is generous for a sleeping database and nothing
+   at all for a waking one (§4).
+3. **Render's instance-hours**, if a second always-on free service is added.
+4. **Neon's storage**, eventually — 187 MB now, growing by a few MB per hundred
    learners.
-4. **The container's 512 MB**, at roughly 232 MB in use. Not soon.
+5. **The container's 512 MB**, at roughly 232 MB in use. Not soon.
 
 `/health/ready` reports `aiSlotsFree`. If it sits at zero, the ceiling is the
 model's rate limit and no amount of hosting will move it (ADR-051).
