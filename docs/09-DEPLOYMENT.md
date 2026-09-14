@@ -111,14 +111,92 @@ Both from your Mac, once — with the **owner** string. Nothing else sets up
 ```bash
 cd backend
 export NEON_OWNER="Host=ep-….neon.tech;Database=wordos;Username=wordos_owner;Password=…;SSL Mode=Require;Trust Server Certificate=true"
-ConnectionStrings__WordOs="$NEON_OWNER" dotnet ef database update \
+ConnectionStrings__WordOsMigrations="$NEON_OWNER" dotnet ef database update \
   --project src/WordOs.Infrastructure --startup-project src/WordOs.Api
 ```
 
-You should see each migration named as it applies, ending in `Done.`
+> **`WordOsMigrations`, not `WordOs`.** This document said `WordOs` and was
+> wrong in a way that succeeds. `WordOsDbContextFactory` reads
+> `ConnectionStrings:WordOsMigrations` **first**, and on any machine that has
+> ever run the backend locally that key is already in user-secrets, pointing at
+> `wordos_dev`. The local secret wins, `dotnet ef` migrates the local database,
+> and prints `Done.` Production never gets the table, and the first symptom is
+> a `500` from an endpoint that had just deployed fine.
+>
+> `export NEON_OWNER=…` also lasts only as long as that terminal. A new window
+> makes `"$NEON_OWNER"` an empty string, and then the local secret wins again
+> for the same reason.
+
+The first line of the output now names what it is about to change:
+
+```
+Migrating ep-cool-name-123456.eu-central-1.aws.neon.tech/wordos as wordos_owner
+```
+
+**Read it.** Three of the four ways this goes wrong are visible in that one
+line (ADR-079):
+
+| It says | Meaning |
+|---|---|
+| `127.0.0.1/wordos_dev` | the connection string never reached the command — the local user-secret won, and what follows is about your laptop |
+| `…/neondb` | Neon's *default* database, not this one. It is empty, so the migration will replay `InitialSchema` and succeed, against nothing |
+| `as neondb_owner` | the cloud owner role does not own these tables — see below |
+
+Then each migration is named as it applies, ending in `Done.` **If a deployed
+database replays `InitialSchema`, it is the wrong database** — stop.
+
+### Three things the host and role must be
+
+**Drop `-pooler` from the hostname.** Neon's connect dialog hands out the pooled
+host by default; PgBouncer refuses the startup parameter the next step needs
+(`08P01: unsupported startup parameter in options: role`), and DDL belongs on a
+direct connection regardless.
+
+**Run as `wordos_migrator`, not `neondb_owner`.** It owns the tables, and a
+foreign key to `users` needs `REFERENCES` on `users`, which only its owner has —
+otherwise `42501: permission denied for table users`. If you do not have that
+role's password, `neondb_owner` holds `admin_option` over it and can borrow it
+for one command:
+
+```bash
+psql "$NEON_URL" -c "GRANT wordos_migrator TO neondb_owner WITH INHERIT TRUE, SET TRUE;"
+
+# …then add  Options=-c role=wordos_migrator  to the connection string and
+# run `dotnet ef database update`…
+
+# Hand it straight back. GRANTED BY is not optional: without it this revokes
+# the *original* grant and quietly widens what the next person inherits.
+psql "$NEON_URL" -c "REVOKE wordos_migrator FROM neondb_owner GRANTED BY neondb_owner;"
+```
+
+**Grant the new tables to `wordos_app`.** This one fails at *runtime*, not here,
+which is what makes it dangerous. `ALTER DEFAULT PRIVILEGES` above was run as
+`neondb_owner`, and default privileges apply only to the role that creates the
+object — so a table created by `wordos_migrator` reaches `wordos_app` with no
+privileges at all. The migration succeeds, the deploy succeeds, and the endpoint
+answers `500` the first time a learner touches it.
+
+```bash
+psql "$NEON_URL" -c "SET ROLE wordos_migrator; GRANT SELECT, INSERT, UPDATE, DELETE ON <new_table> TO wordos_app;"
+```
+
+Verify rather than assume — the ACL must match every other table:
+
+```bash
+psql "$NEON_URL" -tAc "select relacl from pg_class where relname='<new_table>';"
+# {wordos_migrator=arwdDxtm/wordos_migrator,wordos_app=arwd/wordos_migrator}
+```
+
+### Then check it with input that touches what you added
+
+A health check will not do it, and neither will any request that stops short of
+the new table. After adding `password_reset_codes`, a reset request for an
+address that *does not exist* returns `202` without ever reaching it — the same
+answer as success. Use a **registered** email, then look for the row.
 
 > **Every later release that adds a migration needs this command run again,
-> before you deploy.** The service cannot do it for itself, deliberately: it
+> before you deploy** — with `ConnectionStrings__WordOsMigrations`, and with the
+> first output line checked. The service cannot do it for itself, deliberately: it
 > connects as a role with no DDL rights, and giving it any would mean handing
 > the internet-facing process a credential that can drop every table (ADR-062).
 > Run the command, watch it succeed, then push.

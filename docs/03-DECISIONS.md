@@ -3495,3 +3495,144 @@ Delivery is now someone else's uptime. If Brevo is down, or the message lands in
 spam, the learner is locked out exactly as before — the screen says to check the
 spam folder for that reason. The Owner can still reset a password with SQL,
 which remains the backstop.
+
+---
+
+## ADR-079 — Migrating the deployed database: four ways it silently goes elsewhere
+
+**Date:** 2026-09-15 · **Status:** Accepted · **Corrects `docs/09-DEPLOYMENT.md` §1**
+
+Applying one migration to production took two hours and four separate failures.
+Not one of them was a hard problem; every one of them was a command that looked
+like it had worked, or an error that named the wrong cause. They are written
+down because the next migration meets all four again.
+
+### 1 · The documented command migrated the wrong machine, and said `Done.`
+
+The guide said:
+
+```bash
+ConnectionStrings__WordOs="$NEON_OWNER" dotnet ef database update …
+```
+
+`WordOsDbContextFactory` reads `ConnectionStrings:WordOsMigrations` **first**,
+falling back to `WordOs` only if it is absent. On any machine that has ever run
+the backend locally, `WordOsMigrations` is already in user-secrets — pointing at
+`wordos_dev`. So the documented variable was shadowed, `dotnet ef` migrated the
+laptop, and reported:
+
+> `No migrations were applied. The database is already up to date.`
+
+Which was true. Of the local database. Production never got the table, and the
+first symptom was a `500` from an endpoint that had just deployed cleanly.
+
+`export NEON_OWNER=…` compounds it: it lasts only as long as that terminal, so a
+new window makes the variable an empty string and the local secret wins again,
+for the same reason, with the same reassuring output.
+
+**Fix:** the guide now says `ConnectionStrings__WordOsMigrations`, and the
+factory prints what it is about to change before it changes it:
+
+```
+Migrating ep-….neon.tech/wordos as wordos_migrator
+```
+
+One line. It caught the next three failures on sight, which is the entire
+argument for it — a destructive-capable command should not be silent about its
+target.
+
+### 2 · Neon's default database is not the application's database
+
+The connection string Neon hands out names **`neondb`**. The deployment guide
+creates a database called **`wordos`**. Both exist, on the same branch:
+
+```
+wordos    → 119 MB   ← 46 users, 583 words, 234,359 lexicon rows
+neondb    →   8 MB   ← empty
+postgres  →   8 MB
+```
+
+Running the migration against `neondb` applied all twenty-three migrations from
+`InitialSchema` and reported success, because an empty database is a perfectly
+valid thing to migrate. The giveaway is in the output and nowhere else: **if a
+deployed database replays `InitialSchema`, it is the wrong database.**
+
+A probe then appeared to confirm the fix, and did not. `POST /auth/password/forgot`
+with an address that does not exist queries `users` and returns `202` without
+ever reaching `password_reset_codes` — so the missing table stayed invisible.
+**Verify a migration with input that exercises the thing it added**, which here
+means a registered email, not a made-up one.
+
+### 3 · The pooler refuses startup parameters
+
+`-pooler` in the hostname is PgBouncer. It rejects `options` in the startup
+packet outright:
+
+```
+08P01: unsupported startup parameter in options: role.
+Please use unpooled connection…
+```
+
+Migrations should use the **direct** endpoint anyway — drop `-pooler`. Neon's
+connect dialog hands out the pooled host by default, so this has to be done by
+hand every time.
+
+### 4 · The cloud owner role cannot alter the application's schema
+
+`neondb_owner` — the role Neon's connect dialog gives you — is not the owner of
+these tables. `wordos_migrator` is, and creating a foreign key to `users`
+requires `REFERENCES` on `users`, which only its owner holds:
+
+```
+42501: permission denied for table users
+```
+
+The way through needs no extra password, and is worth knowing because it will be
+needed again: `neondb_owner` holds **`admin_option`** on `wordos_migrator`
+(`pg_auth_members`), so it can grant itself the membership it lacks —
+
+```sql
+GRANT wordos_migrator TO neondb_owner WITH INHERIT TRUE, SET TRUE;
+-- … run the migration with Options=-c role=wordos_migrator …
+REVOKE wordos_migrator FROM neondb_owner GRANTED BY neondb_owner;
+```
+
+The `GRANTED BY` clause matters: without it the revoke removes the *original*
+grant instead of the temporary one, and quietly widens what the next person
+inherits. Restore the membership to exactly `admin|inherit|set = t|f|f`.
+
+This is not a privilege escalation so much as an unused one — anyone holding
+`neondb_owner` could already do it. But it should be taken for one command and
+handed back, not left open.
+
+### 5 · Every new table needs an explicit grant to `wordos_app`
+
+The consequence of §4, and the one that will bite hardest, because it fails at
+**runtime** rather than at migration time.
+
+`ALTER DEFAULT PRIVILEGES` in the deployment guide was run as `neondb_owner`, so
+the defaults are attached to that role. Tables are created by `wordos_migrator`.
+Default privileges apply only to the role that creates the object, so a new table
+gets **no grant to `wordos_app` at all** — the migration succeeds, the deploy
+succeeds, and the endpoint answers `500 permission denied` the first time a
+learner touches it.
+
+So, after every migration that adds a table:
+
+```sql
+SET ROLE wordos_migrator;
+GRANT SELECT, INSERT, UPDATE, DELETE ON <new_table> TO wordos_app;
+```
+
+Check it rather than assume it — the ACL should match every other table:
+
+```
+{wordos_migrator=arwdDxtm/wordos_migrator,wordos_app=arwd/wordos_migrator}
+```
+
+### What would have prevented all of this
+
+Naming the target. Four failures, and the single line added in §1 would have
+made three of them obvious within a second of running the command. The fourth
+— the silent absence of a grant — is why §5 is written as a checklist item
+rather than a caution: nothing announces it until a learner hits it.
