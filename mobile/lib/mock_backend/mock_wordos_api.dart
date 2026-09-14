@@ -63,6 +63,22 @@ class MockWordOsApi implements WordOsApi {
   Future<void> logout() => _delay(() => engine.logout(tokenReader()));
 
   @override
+  Future<void> requestPasswordReset(String email) =>
+      _delay(() => engine.requestPasswordReset(email));
+
+  @override
+  Future<void> resetPassword({
+    required String email,
+    required String code,
+    required String newPassword,
+  }) =>
+      _delay(() => engine.resetPassword(
+            email: email,
+            code: code,
+            newPassword: newPassword,
+          ));
+
+  @override
   Future<UserProfile> me() => _delay(() => engine.profile(_user));
 
   @override

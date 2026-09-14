@@ -162,6 +162,8 @@ openssl rand -base64 32   # AI_SERVICE_TOKEN
 | `GEMINI_API_KEY` | from Google AI Studio |
 | `AI_SERVICE_TOKEN` | the 32-byte value above — the AI service checks this |
 | `AiService__Token` | **the same value again** — the API sends it |
+| `Email__ApiKey` | your Brevo key — password reset email (ADR-078) |
+| `Email__FromAddress` | the sender address you **verified** in Brevo |
 
 **None of these belong in Git.** They are typed into Render and nowhere else.
 
@@ -176,6 +178,33 @@ every lesson arriving as fallback content.
 It matters even on loopback: it stops anything else in the container from
 spending your Gemini quota, and it is what protects you the day the two services
 are split apart again.
+
+---
+
+### Email, for forgotten passwords
+
+A learner who reinstalls the app and cannot remember their password has no way
+back in without this (ADR-078). Brevo sends the code; its free plan is 300
+messages a day, which is far more resets than a cohort will ever ask for.
+
+1. Sign up at **brevo.com**.
+2. **Senders, Domains & Dedicated IPs → Senders → Add a sender.** Use an
+   address you can read email at — an ordinary Gmail account is fine. Brevo
+   emails it a confirmation link; click it.
+
+   > This is the step that makes Brevo the right choice here: most
+   > transactional providers verify a whole **domain**, which means owning one.
+   > Brevo will verify a single address.
+
+3. **SMTP & API → API Keys → Generate a new API key.** Copy it once — it is
+   shown once.
+
+`Email__FromAddress` must be **exactly** the address you verified. An
+unverified sender is accepted by the API and then quietly not delivered, which
+looks identical to the feature not working.
+
+Leave both unset and nothing breaks at startup — but every reset request fails,
+and the log says why. Password reset is the only email WordOS sends.
 
 ---
 
@@ -214,6 +243,9 @@ are split apart again.
    | `AI_SERVICE_TOKEN` | your 32-byte value |
    | `AiService__Token` | **the same 32-byte value** |
    | `Capacity__DatabaseConnections` | `10` |
+   | `Email__ApiKey` | your Brevo key |
+   | `Email__FromAddress` | the address verified in Brevo |
+   | `Email__FromName` | `WordOS` |
 
    `Capacity__DatabaseConnections` is **10**, not the default 40: Neon's free
    plan allows far fewer connections than a server you own, and a pool that asks

@@ -183,6 +183,29 @@ public sealed record WordOsConfiguration
     /// </remarks>
     public int SessionBuildGraceSeconds { get; init; } = 120;
 
+    /// <summary>
+    /// How long a password-reset code stays usable (ADR-078).
+    /// </summary>
+    /// <remarks>
+    /// Short enough that a code read over someone's shoulder, or left in an
+    /// open mailbox, is worthless by the time it is tried. Long enough that a
+    /// learner can switch to their mail app, wait for delivery, and type six
+    /// digits without being punished for a slow phone.
+    /// </remarks>
+    public int PasswordResetCodeExpiryMinutes { get; init; } = 15;
+
+    /// <summary>
+    /// Wrong guesses allowed against one code before it is burned.
+    /// </summary>
+    /// <remarks>
+    /// The number that makes six digits safe. Rate limiting alone does not: a
+    /// permitted request budget, spent patiently, still walks a million-wide
+    /// space eventually. Five tries per code — and a new code invalidating the
+    /// old — caps the whole attack at five guesses per email actually
+    /// delivered to the learner's own inbox.
+    /// </remarks>
+    public int PasswordResetMaxAttempts { get; init; } = 5;
+
     public SkillType? NextSkillAfter(SkillType skill)
     {
         var index = SkillsOrder.ToList().IndexOf(skill);

@@ -16,6 +16,17 @@ public enum ActivityType
     PlacementCompleted,
 
     /// <summary>
+    /// The learner set a new password with an emailed code (ADR-078).
+    /// </summary>
+    /// <remarks>
+    /// Recorded because a reset is the one event worth being able to explain
+    /// after the fact: it ends every session on every device, so a learner
+    /// reporting "it signed me out" has an answer, and an unexpected one in
+    /// the log is the first sign of an account being taken.
+    /// </remarks>
+    PasswordReset,
+
+    /// <summary>
     /// The Owner brought this learner's schedule forward, to demonstrate or
     /// test the spaced gaps without waiting two days for each one.
     /// </summary>

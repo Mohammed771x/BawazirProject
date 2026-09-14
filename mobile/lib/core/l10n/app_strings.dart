@@ -54,6 +54,16 @@ class AppStrings {
             'That email already has an account.',
             'يوجد حساب بهذا البريد الإلكتروني بالفعل.',
           ),
+        // One sentence for every way a reset can fail — wrong, expired, spent,
+        // or too many guesses. The server refuses to distinguish them, so
+        // neither may this: a message that said "expired" rather than "wrong"
+        // would tell a stranger that the code they guessed once existed
+        // (ADR-078).
+        'INVALID_RESET_CODE' => _(
+            'That code is wrong or has expired. Request a new one.',
+            'الرمز غير صحيح أو انتهت صلاحيته. اطلب رمزًا جديدًا.',
+          ),
+        'WEAK_PASSWORD' => passwordRequired,
 
         // Adding words.
         'WORD_ALREADY_ADDED' => alreadyInYourWords,
@@ -375,6 +385,51 @@ class AppStrings {
 
   /// What the API will accept, so the form can refuse it first.
   static const int minPasswordLength = 8;
+
+  // ── Forgotten password (ADR-078) ─────────────────────────────────────────
+
+  String get forgotPassword =>
+      _('Forgot your password?', 'نسيت كلمة المرور؟');
+  String get resetPasswordTitle =>
+      _('Reset your password', 'إعادة تعيين كلمة المرور');
+  String get resetPasswordIntro => _(
+        'Enter your email and we will send you a six-digit code.',
+        'أدخل بريدك الإلكتروني وسنرسل لك رمزًا من ستة أرقام.',
+      );
+  String get sendCode => _('Send code', 'إرسال الرمز');
+
+  /// Deliberately conditional — "**if** that email is registered".
+  ///
+  /// The server answers a registered address and an unknown one identically so
+  /// that nobody can use this screen to discover who has an account, and this
+  /// sentence is the client half of that promise. "We sent you a code" would
+  /// give away the very thing the endpoint refuses to (ADR-078).
+  String get resetCodeSentIfRegistered => _(
+        'If that email is registered, a six-digit code is on its way. '
+            'Check your inbox — and your spam folder.',
+        'إن كان هذا البريد مسجَّلًا، فالرمز في طريقه إليك. '
+            'تحقّق من بريدك — ومن مجلد الرسائل غير المرغوب فيها.',
+      );
+  String get enterCodeTitle => _('Enter the code', 'أدخل الرمز');
+  String get resetCode => _('Six-digit code', 'الرمز المكوّن من ستة أرقام');
+  String get resetCodeRequired =>
+      _('Enter the six digits', 'أدخل الأرقام الستة');
+  String get newPassword => _('New password', 'كلمة المرور الجديدة');
+  String get confirmNewPassword =>
+      _('Confirm new password', 'تأكيد كلمة المرور الجديدة');
+  String get passwordsDoNotMatch =>
+      _('The two passwords do not match', 'كلمتا المرور غير متطابقتين');
+  String get setNewPassword => _('Set new password', 'تعيين كلمة المرور');
+  String get resendCode => _('Send another code', 'إرسال رمز آخر');
+
+  /// Says the sessions ended, because the learner will notice and should not
+  /// have to wonder why.
+  String get passwordChangedSignIn => _(
+        'Password changed. You have been signed out everywhere — '
+            'sign in with your new password.',
+        'تم تغيير كلمة المرور. تم تسجيل خروجك من كل الأجهزة — '
+            'سجّل الدخول بكلمة المرور الجديدة.',
+      );
   String get demoHint => _(
         'Demo account: demo@wordos.app / wordos123',
         'حساب تجريبي: demo@wordos.app / wordos123',

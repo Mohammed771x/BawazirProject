@@ -31,6 +31,9 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
 
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
+    /// <summary>One-time codes for a forgotten password (ADR-078).</summary>
+    public DbSet<PasswordResetCode> PasswordResetCodes => Set<PasswordResetCode>();
+
     public DbSet<SkillLevel> SkillLevels => Set<SkillLevel>();
 
     public DbSet<LevelChangeRecord> LevelChanges => Set<LevelChangeRecord>();
@@ -132,6 +135,20 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
             // and unique — two rows with the same hash would be ambiguous.
             e.HasIndex(x => x.TokenHash).IsUnique();
             e.HasIndex(x => new { x.UserId, x.FamilyId });
+            e.HasOne<User>().WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<PasswordResetCode>(e =>
+        {
+            e.ToTable("password_reset_codes");
+            e.HasKey(x => x.Id);
+            // Argon2id, not SHA-256 — roughly 100 characters, not 44.
+            e.Property(x => x.CodeHash).HasMaxLength(256).IsRequired();
+            // Both the redemption and the retirement of older codes find rows
+            // by user, newest first. Nothing ever looks a code up *by its
+            // hash*, which is what lets the hash be a slow one.
+            e.HasIndex(x => new { x.UserId, x.CreatedAt });
             e.HasOne<User>().WithMany()
                 .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });

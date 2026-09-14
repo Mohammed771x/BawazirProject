@@ -137,6 +137,101 @@ class MockEngine {
     return _authFor(user);
   }
 
+  // ── Forgotten password (ADR-078) ─────────────────────────────────────────
+  //
+  // A simulation of the server's rules, not a shortcut around them: the same
+  // expiry, the same attempt cap, the same "asking again retires the old
+  // code", and above all the same refusal to say whether an address exists.
+  // The UI must be built against behaviour it will actually meet in
+  // production (rule R1).
+
+  final Map<String, _MockResetCode> _resetCodes = {};
+
+  // Mirrors the server's WordOs:PasswordResetCodeExpiryMinutes and
+  // PasswordResetMaxAttempts. Constants here and configuration there is the
+  // right split: this file is a disposable simulation, and nothing tunes it.
+  static const int _resetCodeExpiryMinutes = 15;
+  static const int _resetCodeMaxAttempts = 5;
+
+  /// Always returns normally — a registered address and an unknown one are
+  /// indistinguishable from the caller's side, exactly as on the server.
+  void requestPasswordReset(String email) {
+    final user = _usersByEmail[email.trim().toLowerCase()];
+    if (user == null) return;
+
+    final code = _random.nextInt(1000000).toString().padLeft(6, '0');
+
+    // Replaces whatever was outstanding, so three taps do not mean fifteen
+    // guesses.
+    _resetCodes[user.id] = _MockResetCode(
+      code: code,
+      expiresAt: now.add(const Duration(minutes: _resetCodeExpiryMinutes)),
+    );
+
+    // The mock's stand-in for an inbox. The real backend emails this; here it
+    // goes to the developer's console, which is the only way to walk the flow
+    // without a provider account.
+    // ignore: avoid_print
+    print('[mock] password reset code for ${user.email}: $code');
+  }
+
+  /// The outstanding code for [email], or null.
+  ///
+  /// A development affordance of the mock, like the console line above and the
+  /// "skip 2 days" control: there is no such thing on the real backend, where
+  /// the code exists only in the learner's inbox. It is what lets a widget test
+  /// walk the flow the way a learner does.
+  String? outstandingResetCodeFor(String email) {
+    final user = _usersByEmail[email.trim().toLowerCase()];
+    if (user == null) return null;
+    final stored = _resetCodes[user.id];
+    return stored == null || stored.used ? null : stored.code;
+  }
+
+  void resetPassword({
+    required String email,
+    required String code,
+    required String newPassword,
+  }) {
+    if (newPassword.length < 8) {
+      throw const ApiException(
+          'WEAK_PASSWORD', 'Password must be at least 8 characters.',
+          statusCode: 400);
+    }
+
+    final user = _usersByEmail[email.trim().toLowerCase()];
+    final stored = user == null ? null : _resetCodes[user.id];
+    const maxAttempts = _resetCodeMaxAttempts;
+
+    // One answer for every way this can fail — wrong code, expired code,
+    // exhausted code, unknown address. Anything else would let the screen be
+    // used to discover who has an account.
+    const refusal = ApiException(
+      'INVALID_RESET_CODE',
+      'That code is wrong or has expired.',
+      statusCode: 400,
+    );
+
+    if (user == null || stored == null) throw refusal;
+
+    if (stored.used ||
+        stored.attempts >= maxAttempts ||
+        !stored.expiresAt.isAfter(now)) {
+      throw refusal;
+    }
+
+    if (stored.code != code) {
+      stored.attempts++;
+      throw refusal;
+    }
+
+    stored.used = true;
+    user.password = newPassword;
+
+    // Every existing session ends, as it does on the server.
+    _tokens.removeWhere((_, userId) => userId == user.id);
+  }
+
   AuthResponse _authFor(MockUser user) {
     final token = _newId('tok');
     _tokens[token] = user.id;
@@ -2404,6 +2499,16 @@ class _MockReview {
   int totalAttempts = 0;
 }
 
+/// One outstanding reset code, with the state that bounds it.
+class _MockResetCode {
+  _MockResetCode({required this.code, required this.expiresAt});
+
+  final String code;
+  final DateTime expiresAt;
+  int attempts = 0;
+  bool used = false;
+}
+
 /// Mock user record. Public so the API adapter can hold a resolved user.
 class MockUser {
   MockUser({
@@ -2435,7 +2540,9 @@ class MockUser {
 
   final String id;
   final String email;
-  final String password;
+
+  /// Not final: a password reset replaces it (ADR-078).
+  String password;
   final String displayName;
   final DateTime createdAt;
 

@@ -13,6 +13,7 @@ using WordOs.Domain.Levels;
 using WordOs.Domain.Placement;
 using WordOs.Domain.Users;
 using WordOs.Infrastructure.Ai;
+using WordOs.Infrastructure.Email;
 using WordOs.Infrastructure.Persistence;
 using WordOs.Infrastructure.Security;
 
@@ -175,6 +176,42 @@ builder.Services.AddScoped<IAiContentService>(provider =>
         new ResilientAiContentService(
             provider.GetRequiredService<HttpAiContentService>(),
             provider.GetRequiredService<ILogger<ResilientAiContentService>>())));
+
+// ── Email ────────────────────────────────────────────────────────────────────
+//
+// The only email WordOS sends is a password-reset code (ADR-078). Brevo when a
+// key is configured; otherwise a stand-in that logs in development and fails
+// loudly in production, because a missing key must not silently look like a
+// learner who never checked their inbox.
+builder.Services
+    .AddOptions<EmailOptions>()
+    .Bind(builder.Configuration.GetSection(EmailOptions.SectionName))
+    .ValidateDataAnnotations();
+
+var emailOptions = builder.Configuration.GetSection(EmailOptions.SectionName)
+    .Get<EmailOptions>() ?? new EmailOptions();
+
+if (emailOptions.IsConfigured)
+{
+    builder.Services.AddHttpClient<IEmailSender, BrevoEmailSender>(
+        (provider, client) =>
+        {
+            var configured = provider
+                .GetRequiredService<IOptions<EmailOptions>>().Value;
+            client.BaseAddress = new Uri(configured.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(configured.TimeoutSeconds);
+            client.DefaultRequestHeaders.Add("api-key", configured.ApiKey);
+            client.DefaultRequestHeaders.Add("accept", "application/json");
+        });
+}
+else
+{
+    var isDevelopment = builder.Environment.IsDevelopment();
+    builder.Services.AddSingleton<IEmailSender>(provider =>
+        new UnconfiguredEmailSender(
+            isDevelopment,
+            provider.GetRequiredService<ILogger<UnconfiguredEmailSender>>()));
+}
 
 // ── Authentication ───────────────────────────────────────────────────────────
 var jwtSection = builder.Configuration.GetSection(JwtOptions.SectionName);
@@ -406,6 +443,7 @@ app.MapGet("/health/ready", async (
 });
 
 app.MapAuthEndpoints();
+app.MapPasswordResetEndpoints();
 app.MapOnboardingEndpoints();
 app.MapSettingsEndpoints();
 app.MapHubEndpoints();

@@ -3391,3 +3391,107 @@ immediate and loud anyway — every request 500s — and `/health/live` still te
 the host to restart a process that has genuinely died. What is lost is *early*
 warning of a database failure that has not yet been noticed by anybody. What is
 bought is an app that is still running on the 25th.
+
+---
+
+## ADR-078 — A forgotten password is recovered with a six-digit code by email
+
+**Date:** 2026-09-15 · **Status:** Accepted
+
+There was no way back into an account. A learner who reinstalled the app and
+could not remember their password was simply locked out for good — and with a
+cohort of students installing a build for the first time, that is not an edge
+case, it is Tuesday.
+
+### Email, and the choice of provider
+
+The project had **no** way to send anything: no SMTP, no provider, no key. So
+this adds an external dependency, and which one is a real decision.
+
+SMS was rejected despite the phone numbers already being in the database
+(ADR-054). There is no free tier at any provider worth the name, delivery to
+Yemen is unreliable, and every failed attempt still costs.
+
+Brevo was chosen over Resend and the rest for one practical reason: it verifies
+a single **sender address** — an ordinary Gmail account — where most
+transactional providers verify a whole **domain**, which means owning one. Its
+free allowance is 300 messages a day against a cohort that will ask for a
+handful of resets a week.
+
+`IEmailSender` keeps that a detail. `BrevoEmailSender` is one HTTPS POST;
+swapping providers is a class, not a refactor.
+
+### A code, not a link
+
+A link means deep-link plumbing on two platforms, and it breaks the moment a
+learner opens their mail on a different device from the one holding the app —
+which, for a phone-only cohort reading Gmail in a browser, is common. Six digits
+typed into a screen work everywhere and need no platform configuration at all.
+
+### Six digits is a million, so three limits bound the guessing
+
+Not one, and not two. Each closes a hole the others leave open:
+
+| | |
+|---|---|
+| **15 minutes** | a code glimpsed over a shoulder is worthless by the time it is tried |
+| **5 attempts per code** | rate limiting alone does **not** do this — a permitted request budget, spent patiently, walks a million-wide space eventually. This caps the search at five |
+| **one live code at a time** | otherwise three taps of "send another" mean fifteen guesses, and the attempt cap stops meaning anything |
+
+Stored **Argon2id**-hashed, not SHA-256 like a refresh token. A million SHA-256s
+is an eye-blink, so a fast hash would mean a leaked database hands over every
+outstanding reset code. This is affordable only because of a design choice that
+looks incidental and is not: nothing ever looks a code up *by its hash*.
+Redemption finds the row by user id and verifies a single candidate — one
+verification per attempt, the same cost as a sign-in, under the same concurrency
+cap (ADR-051).
+
+### The part that shaped everything: it must not say who has an account
+
+`/forgot` answers `202` with the same body for a registered address, an
+unregistered one, **and a provider outage**. The third is the one that is easy
+to get wrong, and it is the sharpest: only a registered address causes a send at
+all, so if a failed send became a `500` while a successful one stayed `202`, an
+attacker could separate real accounts from fake ones by watching which requests
+error. That is why `IEmailSender.SendAsync` returns a bool that the endpoint
+ignores rather than throwing.
+
+`/reset` answers `400 INVALID_RESET_CODE` for every failure there is: wrong
+code, expired code, spent code, exhausted attempts, and an email that was never
+registered. A message saying "expired" rather than "wrong" would confirm to a
+stranger that the code they guessed had once existed. An unknown address still
+pays for a hash verification against a dummy, so the response time does not give
+it away either — the same defence login already uses.
+
+The client carries the other half of this promise: the screen says *"**If** that
+email is registered, a code is on its way."* An honest "we sent you a code"
+would undo the whole design.
+
+### Two things the reset deliberately does not do
+
+**It returns no tokens.** The learner signs in afterwards with the password they
+just chose. Handing back a session would make one intercepted email a complete
+account takeover, with nothing else in the way.
+
+**It does not leave other sessions alive.** Redeeming a code revokes every
+refresh token for that user. A reset exists to answer "someone else knows my
+password"; stopping future sign-ins while leaving the intruder's current session
+running answers it halfway. The learner is told this happened — being silently
+signed out on another device is alarming in a way the explanation fixes.
+
+### The development hole, closed deliberately
+
+With no key configured, `UnconfiguredEmailSender` writes the code to the log so
+the flow can be walked without a provider account. That is a live credential in
+a log, which §9 forbids — tolerable in a developer's own terminal, and *not*
+tolerable on Render, whose log is readable by anyone with dashboard access. So
+the same class refuses to log it outside Development and fails the request
+loudly instead. A missing key is a misconfiguration, and it should look like
+one rather than like a learner who never checked their inbox.
+
+### What this gives up
+
+Delivery is now someone else's uptime. If Brevo is down, or the message lands in
+spam, the learner is locked out exactly as before — the screen says to check the
+spam folder for that reason. The Owner can still reset a password with SQL,
+which remains the backstop.

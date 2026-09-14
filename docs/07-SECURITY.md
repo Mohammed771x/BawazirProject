@@ -64,6 +64,44 @@ token is not replayed on every subsequent request.
 `INVALID_CREDENTIALS` response for unknown email and wrong password. The mock
 already behaves this way.
 
+### Password reset (ADR-078)
+
+✅ A six-digit code, emailed. Six digits is a million possibilities, which is
+too few to leave unguarded, so **three** limits bound the guessing and all three
+are needed:
+
+| | |
+|---|---|
+| **15 minutes** | a code read over a shoulder, or left in an open mailbox, is worthless by the time it is tried |
+| **5 attempts** | caps the search at five, not a million. Rate limiting alone does not do this — a permitted budget, spent patiently, walks the whole space |
+| **one live code** | requesting another retires the previous one, so attempts cannot be reset by asking again |
+
+✅ Stored **Argon2id-hashed**, like a password and not like a refresh token's
+SHA-256: a million SHA-256s is an eye-blink, so a fast hash would mean a leaked
+database hands over every outstanding code. Affordable because nothing looks a
+code up *by its hash* — redemption finds the row by user and verifies one
+candidate, at the cost of one sign-in, under the same concurrency cap (ADR-051).
+
+✅ **Neither endpoint reveals whether an address is registered.** `/forgot`
+answers `202` identically for a known address, an unknown one, and a provider
+outage — the last one matters, because only a registered address causes a send
+at all, so a failure that surfaced would be the oracle. `/reset` answers
+`400 INVALID_RESET_CODE` for every failure: wrong, expired, spent, exhausted,
+and unknown email. An unknown address still pays for a hash verification, so
+the timing does not separate them either.
+
+✅ The reset returns **no tokens**. The learner signs in afterwards, so one
+intercepted email is not an account takeover.
+
+✅ Redeeming a code **revokes every refresh token** for that user — the reset
+exists to answer "someone else knows my password", and leaving their session
+alive would answer it halfway.
+
+⚠️ The code reaches a log in exactly one situation, and only one: local
+development with no provider key configured (`UnconfiguredEmailSender`). In any
+other environment a missing key fails the request loudly instead, because
+Render's log is readable by anyone with dashboard access (§9).
+
 ## 3. Authorization
 
 **Rule: every endpoint authorizes the caller, not the route.**

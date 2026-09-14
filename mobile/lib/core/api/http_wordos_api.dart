@@ -344,6 +344,24 @@ class HttpWordOsApi implements WordOsApi {
   }
 
   @override
+  Future<void> requestPasswordReset(String email) async {
+    await _post('/auth/password/forgot', {'email': email});
+  }
+
+  @override
+  Future<void> resetPassword({
+    required String email,
+    required String code,
+    required String newPassword,
+  }) async {
+    await _post('/auth/password/reset', {
+      'email': email,
+      'code': code,
+      'newPassword': newPassword,
+    });
+  }
+
+  @override
   Future<UserProfile> me() async => UserProfile.fromJson(await _get('/me'));
 
   @override

@@ -33,6 +33,24 @@ abstract class WordOsApi {
 
   Future<void> logout();
 
+  /// Asks the server to email a six-digit reset code (ADR-078).
+  ///
+  /// Returns normally whether or not the address is registered — the server
+  /// answers identically either way, on purpose, so that this endpoint cannot
+  /// be used to find out who has an account. The UI must therefore say
+  /// "if that email is registered…" and never "no such account".
+  Future<void> requestPasswordReset(String email);
+
+  /// Redeems the code and sets a new password.
+  ///
+  /// Deliberately returns no session: the learner signs in afterwards with the
+  /// password they just chose, so an intercepted code alone is not a way in.
+  Future<void> resetPassword({
+    required String email,
+    required String code,
+    required String newPassword,
+  });
+
   Future<UserProfile> me();
 
   // ── Onboarding ────────────────────────────────────────────────────────────

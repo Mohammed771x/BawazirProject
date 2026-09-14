@@ -38,6 +38,17 @@ public sealed class ApiFactory(string connectionString)
         builder.UseSetting("Jwt:Issuer", "wordos-test");
         builder.UseSetting("Jwt:Audience", "wordos-test");
 
+        // The authentication budget is 10 requests per 15 minutes in
+        // production, per IP — and every request in this suite comes from the
+        // same one. A single password-reset test spends eight of them on
+        // purpose (register, request a code, then exhaust the attempt cap), so
+        // the limiter would fail the test before the rule under test could.
+        //
+        // Raised, never removed: the limiter still runs in the pipeline, and
+        // that it actually refuses is pinned by the AI-budget test, which
+        // spends a policy this setting does not touch.
+        builder.UseSetting("RateLimits:AuthenticationPermits", "1000");
+
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<DbContextOptions<WordOsDbContext>>();
@@ -65,6 +76,11 @@ public sealed class ApiFactory(string connectionString)
             // Only the outermost layer is swapped: the stub is still wrapped in
             // the real resilience decorator, so a test that makes the stub fail
             // exercises the production fallback rather than a test-only one.
+            // The reset code exists only in the email, by design, so a test
+            // can reach it in exactly one place: here.
+            services.RemoveAll<IEmailSender>();
+            services.AddSingleton<IEmailSender>(Email);
+
             services.RemoveAll<IAiContentService>();
             services.AddSingleton(Ai);
             services.AddScoped<IAiContentService>(provider =>
@@ -89,6 +105,9 @@ public sealed class ApiFactory(string connectionString)
     /// <summary>The deterministic stand-in for Gemini.</summary>
     public StubAiContentService Ai { get; } = new();
 
+    /// <summary>Every email the API tried to send, in order.</summary>
+    public CapturingEmailSender Email { get; } = new();
+
     public static readonly string TestSigningKey =
         Convert.ToBase64String(
             System.Security.Cryptography.RandomNumberGenerator.GetBytes(48));
@@ -110,6 +129,54 @@ public sealed class FastTestPasswordHasher : IPasswordHasher
         System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
             System.Text.Encoding.UTF8.GetBytes(Hash(password)),
             System.Text.Encoding.UTF8.GetBytes(hash));
+}
+
+/// <summary>
+/// Holds sent messages instead of sending them.
+/// </summary>
+/// <remarks>
+/// <see cref="Fails"/> stands in for a provider outage — the case the forgot
+/// endpoint must answer identically to every other, or the difference becomes
+/// the account-enumeration oracle the whole design avoids (ADR-078).
+/// </remarks>
+public sealed class CapturingEmailSender : IEmailSender
+{
+    private readonly List<EmailMessage> _sent = [];
+
+    public IReadOnlyList<EmailMessage> Sent
+    {
+        get { lock (_sent) return _sent.ToList(); }
+    }
+
+    public EmailMessage? Last => Sent.LastOrDefault();
+
+    /// <summary>When true, every send is refused, as a down provider would.</summary>
+    public bool Fails { get; set; }
+
+    public void Clear() { lock (_sent) _sent.Clear(); }
+
+    /// <summary>
+    /// The six digits out of the last message, found the way a learner does —
+    /// by reading it.
+    /// </summary>
+    public string? LastCode
+    {
+        get
+        {
+            var body = Last?.TextBody;
+            if (body is null) return null;
+            var match = System.Text.RegularExpressions.Regex.Match(
+                body, @"\b\d{6}\b");
+            return match.Success ? match.Value : null;
+        }
+    }
+
+    public Task<bool> SendAsync(EmailMessage message, CancellationToken ct = default)
+    {
+        if (Fails) return Task.FromResult(false);
+        lock (_sent) _sent.Add(message);
+        return Task.FromResult(true);
+    }
 }
 
 internal static class ServiceCollectionExtensions

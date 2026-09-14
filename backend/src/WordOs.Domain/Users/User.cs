@@ -133,6 +133,16 @@ public class User
 
     public void RecordLogin(DateTimeOffset now) => LastLoginAt = now;
 
+    /// <summary>
+    /// Replaces the stored hash. The caller does the hashing — the domain never
+    /// sees a plaintext password (ADR-078).
+    /// </summary>
+    public void ChangePassword(string passwordHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
+        PasswordHash = passwordHash;
+    }
+
     public void AdvanceOnboarding(OnboardingStage stage) => OnboardingStage = stage;
 
     public void ReplaceInterests(IEnumerable<string> interests, DateTimeOffset now)

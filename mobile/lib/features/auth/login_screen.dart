@@ -122,7 +122,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 )
               : Text(s.signIn),
         ),
-        const SizedBox(height: AppSpacing.sm),
+        const SizedBox(height: AppSpacing.xs),
+        // Directly under the sign-in button, where a learner looks after being
+        // refused — not buried beside "Sign up", which is a different problem
+        // (ADR-078).
+        Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: TextButton(
+            onPressed: () {
+              ref.read(sessionProvider.notifier).clearError();
+              context.go(Routes.forgotPassword);
+            },
+            child: Text(s.forgotPassword),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
         Wrap(
           alignment: WrapAlignment.center,
           crossAxisAlignment: WrapCrossAlignment.center,

@@ -40,7 +40,44 @@ abstraction and the Phase-1 mock both implement exactly this; Phase 5 makes it r
 | POST | `/auth/login` | `{email, password}` → `AuthResponse` |
 | POST | `/auth/refresh` | `{refreshToken}` → `AuthResponse` (rotates the token) |
 | POST | `/auth/logout` | — → `204` |
+| POST | `/auth/password/forgot` | `{email}` → **always** `202 {message}` (ADR-078) |
+| POST | `/auth/password/reset` | `{email, code, newPassword}` → `200 {message}` |
 | GET | `/me` | — → `UserProfile` |
+
+### Forgotten password
+
+```jsonc
+// POST /auth/password/forgot
+{ "email": "learner@example.com" }
+
+// 202 — identical for a registered address, an unknown one, and an email
+// provider that is down. Anything that differed would turn this into a way to
+// ask "does this person have an account here".
+{ "message": "If that email is registered, a code is on its way." }
+```
+
+A six-digit code is emailed, valid for `PasswordResetCodeExpiryMinutes`
+(15). Requesting another retires the previous one.
+
+```jsonc
+// POST /auth/password/reset
+{ "email": "learner@example.com", "code": "048213",
+  "newPassword": "at-least-eight" }
+
+// 200 — and no tokens. The learner signs in afterwards with the password they
+// just chose, so an intercepted code alone is not a session.
+{ "message": "Password changed. Please sign in." }
+```
+
+Every failure is one answer, `400 INVALID_RESET_CODE`: wrong code, expired
+code, already-used code, too many wrong guesses, and an email that was never
+registered. Distinguishing them would say whether the account exists, or
+confirm that a guessed code once did. Five wrong guesses burn the code —
+which is what makes six digits defensible against a search space of a million.
+
+Redeeming a code **revokes every refresh token** for that user. A reset exists
+to answer "someone else knows my password", and leaving their session alive
+would answer it halfway.
 
 ```jsonc
 // AuthResponse

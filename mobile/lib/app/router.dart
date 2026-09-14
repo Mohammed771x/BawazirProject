@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/models/enums.dart';
 import '../core/storage/preferences_providers.dart';
+import '../features/auth/forgot_password_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/register_screen.dart';
 import '../features/auth/session_controller.dart';
@@ -30,6 +31,7 @@ class Routes {
   static const onboarding = '/onboarding';
   static const login = '/login';
   static const register = '/register';
+  static const forgotPassword = '/forgot-password';
   static const interests = '/interests';
   static const placement = '/placement';
   static const hub = '/hub';
@@ -72,7 +74,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         return path == Routes.splash ? null : Routes.splash;
       }
 
-      final isAuthRoute = path == Routes.login || path == Routes.register;
+      // Recovery counts as an auth route. Without it the guard below sends a
+      // signed-out learner straight back to /login — which is the screen they
+      // came from precisely because they cannot get past it (ADR-078).
+      final isAuthRoute = path == Routes.login ||
+          path == Routes.register ||
+          path == Routes.forgotPassword;
 
       if (!session.isSignedIn) {
         // A first-time learner is shown what WordOS is before being asked for
@@ -125,6 +132,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: Routes.login, builder: (_, _) => const LoginScreen()),
       GoRoute(path: Routes.register, builder: (_, _) => const RegisterScreen()),
+      GoRoute(
+        path: Routes.forgotPassword,
+        builder: (_, _) => const ForgotPasswordScreen(),
+      ),
       GoRoute(
         path: Routes.interests,
         builder: (_, _) => const InterestsScreen(),
