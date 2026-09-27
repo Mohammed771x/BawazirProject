@@ -235,6 +235,10 @@ class MeaningCheckResponse(BaseModel):
     definition_en: str | None = None
     word_part_of_speech: str | None = None
     cefr_level: str | None = None
+    # 1-based index into the request's `definitions`, for a word the lexicon
+    # holds (ADR-105). Validated here against the list's length; the backend
+    # validates it again, because it decides and this only reports (R2).
+    sense: int | None = None
 
 
 class TranscriptTurn(BaseModel):
@@ -857,16 +861,36 @@ def check_meaning(request: MeaningCheckRequest) -> MeaningCheckResponse:
         tokens=tokens,
         word_recognized=recognized,
         corrected_word=corrected_word,
-        # Left out for a word the lexicon has: it already holds better versions
-        # of all three, and sending the model's guess alongside them invites a
-        # caller to pick the wrong one.
+        # For a word the lexicon has, the definition is now asked too — of the
+        # meaning the learner wrote. The backend prefers the lexicon's own
+        # line for the sense named by `sense`, and falls back to this one only
+        # when no listed sense fits; the lexicon's *commonest* sense is never
+        # the answer for someone who wrote a different one (ADR-105).
         definition_en=_text_or_none(payload.get("definition_en"))
-        if not request.known_word else None,
+        if matches else None,
+        sense=_sense_or_none(payload.get("sense"), len(request.definitions))
+        if request.known_word and matches else None,
         word_part_of_speech=_text_or_none(payload.get("word_part_of_speech"))
         if not request.known_word else None,
         cefr_level=_text_or_none(payload.get("cefr_level"))
         if not request.known_word else None,
     )
+
+
+def _sense_or_none(value: object, count: int) -> int | None:
+    """A sense number the model gave, if it points at a real row.
+
+    Out of range, zero, a string, a float that is not whole — all dropped. A
+    wrong index would store another sense's definition beside the learner's
+    meaning, which is the exact bug this field exists to fix.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, int) and 1 <= value <= count:
+        return value
+    return None
 
 
 @app.post(

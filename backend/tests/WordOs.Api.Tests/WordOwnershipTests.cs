@@ -951,6 +951,137 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         Assert.Equal(0, events);
     }
 
+    // ── The definition belongs to the learner's sense (ADR-105) ───────────
+    //
+    // Reported by a student: they added `habit` with their own meaning, عادة,
+    // and a later skill taught it as رداء. It was not the model inventing
+    // anything. The word had been stored with the Arabic they wrote beside the
+    // English definition of the lexicon's *commonest* sense — "attire worn by
+    // a member of a religious order" — and every generator reads the
+    // definition. Found on production for eleven words, `sausage = نقانق`
+    // beside "a small airship" among them.
+
+    /// <summary>A word no other test seeds, letters only.</summary>
+    private static string FreshWord() =>
+        "hab" + new string(Guid.NewGuid().ToString("N")
+            .Where(char.IsAsciiLetter).Take(8).ToArray());
+
+    /// <summary>Two senses, the commonest being the one nobody means.</summary>
+    private async Task<(string Word, string RobeSense, string CustomSense)>
+        SeedHabitLikeAsync()
+    {
+        var word = FreshWord();
+        var robe = await SeedAsync(word, "n",
+            "a distinctive attire worn by a member of a religious order",
+            "ثوب رهباني", rank: 0);
+        var custom = await SeedAsync(word, "n", "an established custom",
+            "ديدن", rank: 1);
+        return (word, robe, custom);
+    }
+
+    [SkippableFact]
+    public async Task A_learners_own_meaning_is_stored_beside_the_sense_it_names()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _, _) = await SeedHabitLikeAsync();
+
+        // The checker says the learner meant the second listed sense.
+        Ai.KnownWordSense = 2;
+
+        var body = await AddAndReadAsync(new { text = word, customMeaning = "عادة" });
+
+        Assert.Equal("عادة", body.GetProperty("meaning").GetString());
+        Assert.Equal("an established custom",
+            body.GetProperty("definitionEn").GetString());
+
+        // The number means the same row on both sides: the checker was shown
+        // this sense second.
+        Assert.EndsWith("an established custom", Ai.LastCheckDefinitions[1]);
+    }
+
+    [SkippableFact]
+    public async Task The_commonest_senses_definition_is_never_stored_for_another_meaning()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _, _) = await SeedHabitLikeAsync();
+
+        // The checker accepted the meaning but named no sense and wrote no
+        // definition. The old answer here was the robe.
+        var body = await AddAndReadAsync(new { text = word, customMeaning = "عادة" });
+
+        Assert.DoesNotContain("attire",
+            body.GetProperty("definitionEn").GetString());
+    }
+
+    [SkippableFact]
+    public async Task When_no_listed_sense_fits_the_checkers_definition_is_stored()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _, _) = await SeedHabitLikeAsync();
+
+        Ai.KnownWordDefinition = "something a person does regularly";
+
+        var body = await AddAndReadAsync(new { text = word, customMeaning = "عادة" });
+
+        Assert.Equal("something a person does regularly",
+            body.GetProperty("definitionEn").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_sense_number_that_points_nowhere_is_not_trusted()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _, _) = await SeedHabitLikeAsync();
+
+        Ai.KnownWordSense = 7; // two senses were listed
+
+        var body = await AddAndReadAsync(new { text = word, customMeaning = "عادة" });
+
+        Assert.DoesNotContain("attire",
+            body.GetProperty("definitionEn").GetString());
+    }
+
+    [SkippableFact]
+    public async Task Arabic_that_is_a_senses_own_is_matched_without_asking()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _, _) = await SeedHabitLikeAsync();
+
+        // Typed rather than picked, and exactly the second sense's Arabic.
+        // The stub names no sense: this is decided here, not by the model.
+        var body = await AddAndReadAsync(new { text = word, customMeaning = "ديدن" });
+
+        Assert.Equal("an established custom",
+            body.GetProperty("definitionEn").GetString());
+    }
+
+    [SkippableFact]
+    public async Task Rewriting_a_meaning_in_ones_own_words_replaces_the_definition()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (_, robe, _) = await SeedHabitLikeAsync();
+
+        // Picked the robe from the list, as two production learners did.
+        var id = await AddAsync(new { senseId = robe });
+
+        Ai.KnownWordSense = 2;
+        var response = await ChangeAsync(id, new { meaning = "عادة" });
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        // Before ADR-105 the meaning changed and the robe definition stayed,
+        // so the word went on being taught as a robe.
+        Assert.Equal("عادة", body.GetProperty("meaning").GetString());
+        Assert.Equal("an established custom",
+            body.GetProperty("definitionEn").GetString());
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
     private Task<HttpResponseMessage> ChangeAsync(Guid wordId, object body) =>

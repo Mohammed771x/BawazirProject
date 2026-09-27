@@ -369,7 +369,11 @@ public sealed record MeaningCheck(
     string? CorrectedWord = null,
     string? DefinitionEn = null,
     string? PartOfSpeech = null,
-    string? Level = null);
+    string? Level = null,
+    // 1-based index into the request's Definitions: which listed sense the
+    // learner's Arabic names, for a word the lexicon holds. Reported, not
+    // trusted — the caller validates it against its own list (ADR-105).
+    int? Sense = null);
 
 public sealed record SpeakingTranscriptTurn(bool FromAi, string Text);
 

@@ -468,11 +468,68 @@ def test_a_known_word_is_never_questioned_as_a_word(client, auth, stub_gemini):
 
     assert body["matches"] is True
     assert body["word_recognized"] is True
-    # And the facts the backend already holds are not echoed back at it in a
-    # worse version, where a caller could pick the wrong one.
-    assert body["definition_en"] is None
+    # Part of speech and band stay the lexicon's: they belong to the word.
     assert body["word_part_of_speech"] is None
     assert body["cefr_level"] is None
+    # The definition does not — it belongs to a *sense*. Until ADR-105 it was
+    # withheld here as "the lexicon holds a better one", and the backend then
+    # stored the lexicon's *commonest* sense beside whatever the learner wrote:
+    # `habit = عادة` beside "attire worn by a member of a religious order".
+    assert body["definition_en"] == "invented"
+
+
+def test_a_known_word_reports_which_sense_the_learner_means(
+        client, auth, stub_gemini):
+    """`habit = عادة` is the second sense, not the first (ADR-105)."""
+    stub_gemini({
+        "matches": True,
+        "note": "المعنى صحيح.",
+        "sense": 2,
+        "definition_en": "a regular practice that is hard to give up",
+    })
+
+    body = client.post("/ai/meaning/check", headers=auth, json={
+        "word": "habit",
+        "definitions": [
+            "n: a distinctive attire worn by a member of a religious order",
+            "n: an established custom",
+        ],
+        "meaning": "عادة",
+    }).json()
+
+    assert body["sense"] == 2
+    assert body["definition_en"] == "a regular practice that is hard to give up"
+
+
+@pytest.mark.parametrize("given", [0, 3, -1, "2", True, 1.5])
+def test_a_sense_that_points_nowhere_is_dropped(
+        client, auth, stub_gemini, given):
+    """A wrong index would store another sense's definition — the very bug."""
+    stub_gemini({"matches": True, "note": "المعنى صحيح.", "sense": given})
+
+    body = client.post("/ai/meaning/check", headers=auth, json={
+        "word": "habit",
+        "definitions": ["n: attire", "n: an established custom"],
+        "meaning": "عادة",
+    }).json()
+
+    assert body["sense"] is None
+
+
+def test_a_rejected_meaning_names_no_sense_and_no_definition(
+        client, auth, stub_gemini):
+    """Nothing is stored from a refusal, so nothing is offered to store."""
+    stub_gemini({
+        "matches": False, "note": "لا.", "sense": 1,
+        "definition_en": "whatever",
+    })
+
+    body = client.post("/ai/meaning/check", headers=auth, json={
+        "word": "habit", "definitions": ["n: attire"], "meaning": "طاولة",
+    }).json()
+
+    assert body["sense"] is None
+    assert body["definition_en"] is None
 
 
 def test_an_unknown_word_comes_back_with_what_the_pipeline_needs(
@@ -580,6 +637,20 @@ def test_the_known_word_prompt_does_not_ask_it():
     assert "word_recognized" not in known
     # Every sense, not the commonest — the bug this whole feature tripped over.
     assert "a set of printed pages" in known
+
+
+def test_the_known_word_prompt_numbers_the_senses_and_asks_which():
+    """The number is the answer, so the list must carry numbers (ADR-105)."""
+    known = prompts.meaning_check_prompt(
+        word="habit",
+        definitions=["n: attire worn by a religious", "n: an established custom"],
+        part_of_speech="n", meaning="عادة")
+
+    assert "1. n: attire" in known
+    assert "2. n: an established custom" in known
+    assert "- sense:" in known
+    # And it is told the first is not the default — the whole failure.
+    assert "first sense is often not the one" in known
 
 
 # ── The English registers, end to end (ADR-088) ──────────────────────────────

@@ -1359,7 +1359,7 @@ longer exist{" — and a glossary of the new passage" if inline_glossary else ""
 {"The glossary is not optional and not a summary: the learner taps words in this text to see what they mean here, and a word missing from it falls through to a dictionary, which answers about every sense the word has ever had instead of this one." if inline_glossary else "The learner is waiting for this. Write the passage and nothing else."}"""
 
 
-MEANING_CHECK_PROMPT_VERSION = "meaning-check-v2"
+MEANING_CHECK_PROMPT_VERSION = "meaning-check-v3"
 
 MEANING_CHECK_SCHEMA = {
     "type": "object",
@@ -1392,6 +1392,14 @@ MEANING_CHECK_SCHEMA = {
         # Spelling clues from, and the band decides which passages the word can
         # appear in. A word added without them is half-built.
         "definition_en": {"type": "string"},
+        # Which of the listed senses the learner's Arabic names — 1-based, into
+        # the numbered list the prompt shows. Omitted when it names none of
+        # them. The backend uses it to store *that* sense's English
+        # definition: without it, a learner who wrote `habit = عادة` was stored
+        # beside the lexicon's first sense, "attire worn by a member of a
+        # religious order", and every generator downstream read "robe"
+        # (ADR-105).
+        "sense": {"type": "integer"},
         "word_part_of_speech": {"type": "string"},
         "cefr_level": {"type": "string"},
     },
@@ -1428,12 +1436,27 @@ def meaning_check_prompt(*, word: str, definitions: list[str],
     # one per sense told the model "book is a noun" while the list said book is
     # also a verb — and the model believed the headline. The list is the truth.
     if known_word:
-        senses = "\n".join(f"  - {d}" for d in definitions if d) or "  - (unknown)"
+        # Numbered, because the answer names one by number (`sense`). The
+        # numbering is over the list exactly as the backend sent it, blanks
+        # included, so the index means the same row on both sides.
+        senses = "\n".join(
+            f"  {i}. {d}" for i, d in enumerate(definitions, start=1) if d
+        ) or "  (unknown)"
         known = f"""The word: {word}
-Everything it can mean in English:
+Everything it can mean in English, numbered:
 {senses}"""
-        # Nothing to ask: the dictionary contains the word, so it is a word.
-        word_task = ""
+        # Nothing to ask about the word itself — the dictionary contains it.
+        # Only *which* of its meanings the learner wrote, which decides the
+        # English definition stored beside their Arabic (ADR-105).
+        word_task = f"""
+- sense: the number of the sense above that the learner's Arabic means. \
+Choose by meaning, not by position — the first sense is often not the one a \
+learner means. Omit it when their Arabic names none of the listed senses.
+
+- definition_en: a short English definition of "{word}" **in the meaning the \
+learner wrote**, one clause, no example sentence. Required when matches is \
+true. It describes their meaning, never merely the commonest one.
+"""
     else:
         known = f"""The word: {word}
 This word is NOT in our dictionary, so judge it from your own knowledge — \
@@ -1447,8 +1470,9 @@ another language, and for a string that is not a word.
 - corrected_word: when it is a misspelling of a real English word, the correct \
 spelling. Omit otherwise — never "correct" a word that was already right.
 
-- definition_en: a short English definition of "{word}", one clause, no \
-example sentence. Required when word_recognized is true.
+- definition_en: a short English definition of "{word}" in the meaning the \
+learner wrote, one clause, no example sentence. Required when word_recognized \
+is true.
 
 - word_part_of_speech: exactly one of noun, verb, adjective, adverb, \
 pronoun, preposition, conjunction, determiner, interjection, numeral. \

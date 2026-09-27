@@ -239,7 +239,8 @@ public sealed class HttpAiContentService(
             CorrectedWord: response.CorrectedWord,
             DefinitionEn: response.DefinitionEn,
             PartOfSpeech: response.WordPartOfSpeech,
-            Level: response.CefrLevel);
+            Level: response.CefrLevel,
+            Sense: response.Sense);
     }
 
     public async Task<SpeakingObservation> SpeakingTurnAsync(
@@ -467,7 +468,10 @@ public sealed class HttpAiContentService(
         string? CorrectedWord = null,
         string? DefinitionEn = null,
         string? WordPartOfSpeech = null,
-        string? CefrLevel = null);
+        string? CefrLevel = null,
+        // Absent from a service older than ADR-105; null then, and the caller
+        // falls back to the checker's definition.
+        int? Sense = null);
 
     private sealed record SpeakingDto(
         string Reply,

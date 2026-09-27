@@ -89,12 +89,25 @@ public sealed class StubAiContentService : IAiContentService
     /// <summary>The CEFR band the checker reports for an unknown word.</summary>
     public string UnknownWordLevel { get; set; } = "C1";
 
+    /// <summary>
+    /// Which listed sense the checker says the learner's meaning names, for a
+    /// word the lexicon holds (ADR-105). 1-based; null names none.
+    /// </summary>
+    public int? KnownWordSense { get; set; }
+
+    /// <summary>The checker's own definition of the learner's meaning.</summary>
+    public string? KnownWordDefinition { get; set; }
+
+    /// <summary>The sense list the checker was last shown, in order.</summary>
+    public IReadOnlyList<string> LastCheckDefinitions { get; private set; } = [];
+
     public Task<MeaningCheck> CheckMeaningAsync(
         MeaningCheckRequest request,
         CancellationToken ct = default)
     {
         MeaningChecks++;
         LastCheckKnownWord = request.KnownWord;
+        LastCheckDefinitions = request.Definitions;
 
         // `Fail` is the AI outage switch the whole double shares. The check has
         // no fallback (ADR-074), so it throws where the others degrade.
@@ -109,9 +122,12 @@ public sealed class StubAiContentService : IAiContentService
             // questioned, whatever this double is configured to say.
             WordRecognized: request.KnownWord || !RejectWords,
             CorrectedWord: request.KnownWord ? null : WordCorrection,
-            DefinitionEn: request.KnownWord ? null : "a stub definition",
+            DefinitionEn: RejectMeanings
+                ? null
+                : request.KnownWord ? KnownWordDefinition : "a stub definition",
             PartOfSpeech: request.KnownWord ? null : UnknownWordPartOfSpeech,
-            Level: request.KnownWord ? null : UnknownWordLevel));
+            Level: request.KnownWord ? null : UnknownWordLevel,
+            Sense: request.KnownWord && !RejectMeanings ? KnownWordSense : null));
     }
 
     public Task<GeneratedContent> GenerateContentAsync(

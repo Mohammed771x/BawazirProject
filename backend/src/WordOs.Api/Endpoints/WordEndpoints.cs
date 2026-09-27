@@ -504,6 +504,13 @@ public static class WordEndpoints
             // the checker is asked instead.
             var facts = await ResolveLexiconAsync(text, db, ct);
 
+            // Kept as rows, not only as the strings the checker reads: the
+            // checker answers with a *number* into this list, and the row it
+            // names is where the stored definition comes from (ADR-105).
+            var senses = facts is null
+                ? new List<SenseRow>()
+                : await SensesOfAsync(facts.Text, db, ct);
+
             // The one place in this service where a model is asked about
             // something the learner typed *before* it is stored (ADR-074).
             // Everything downstream marks answers against this string, so a
@@ -519,7 +526,7 @@ public static class WordEndpoints
                         // that is the signal: the checker answers from its own
                         // knowledge instead of from a list this service does
                         // not have.
-                        facts is null ? [] : await SensesOfAsync(facts.Text, db, ct),
+                        Describe(senses),
                         facts?.PartOfSpeech ?? string.Empty,
                         custom,
                         LearnerLanguage.From(http.Request),
@@ -610,8 +617,19 @@ public static class WordEndpoints
             // filtered: the model reports and this decides (rule R2), so a part
             // of speech outside the set this app can label and a band outside
             // the ladder are dropped rather than stored.
-            definitionEn = facts?.DefinitionEn ?? verdict.DefinitionEn ?? string.Empty;
-            partOfSpeech = facts?.PartOfSpeech ?? KnownPartOfSpeech(verdict.PartOfSpeech);
+            // The definition is the exception to "the lexicon's facts win": it
+            // belongs to a *sense*, and `facts` is only the commonest one.
+            // Taking it here stored `habit = عادة` beside "attire worn by a
+            // member of a religious order", and `sausage = نقانق` beside "a small
+            // airship" — and every generator downstream read the definition,
+            // not the Arabic (ADR-105).
+            var sense = SenseForLearnerMeaning(custom, senses, verdict);
+            definitionEn = facts is null
+                ? verdict.DefinitionEn ?? string.Empty
+                : sense?.DefinitionEn ?? verdict.DefinitionEn ?? string.Empty;
+            partOfSpeech = sense?.PartOfSpeech
+                ?? facts?.PartOfSpeech
+                ?? KnownPartOfSpeech(verdict.PartOfSpeech);
             level = facts?.CefrLevel ?? CefrLevelExtensions.TryFromWire(
                 verdict.Level?.Trim().ToUpperInvariant());
             source = MeaningSource.Learner;
@@ -832,7 +850,7 @@ public static class WordEndpoints
     /// because the model is told the word has that part of speech at all —
     /// which is the thing it cannot guess and the thing it was missing.</para>
     /// </remarks>
-    private static async Task<List<string>> SensesOfAsync(
+    private static async Task<List<SenseRow>> SensesOfAsync(
         string text,
         WordOsDbContext db,
         CancellationToken ct)
@@ -845,7 +863,8 @@ public static class WordEndpoints
                         && l.DefinitionEn != "")
             .OrderBy(l => l.FrequencyRank)
             .ThenBy(l => l.SenseId)
-            .Select(l => new { l.PartOfSpeech, l.DefinitionEn })
+            .Select(l => new SenseRow(
+                l.PartOfSpeech, l.DefinitionEn, l.MeaningArNormalized))
             // Bounded before grouping: a word with a long tail should not pull
             // its whole entry into memory to throw most of it away.
             .Take(40)
@@ -854,10 +873,61 @@ public static class WordEndpoints
         return rows
             .GroupBy(r => r.PartOfSpeech)
             .SelectMany(g => g.Take(3))
-            .Select(r => $"{r.PartOfSpeech}: {r.DefinitionEn}")
-            .Distinct()
+            .DistinctBy(r => (r.PartOfSpeech, r.DefinitionEn))
             .Take(10)
             .ToList();
+    }
+
+    /// <summary>One sense as the meaning checker is shown it.</summary>
+    private sealed record SenseRow(
+        string PartOfSpeech, string DefinitionEn, string MeaningArNormalized);
+
+    /// <summary>
+    /// The list the checker reads. Its order is the order of <paramref
+    /// name="senses"/>, which is what lets the checker's answer — a number —
+    /// name a row here.
+    /// </summary>
+    private static List<string> Describe(IReadOnlyList<SenseRow> senses) =>
+        senses.Select(r => $"{r.PartOfSpeech}: {r.DefinitionEn}").ToList();
+
+    /// <summary>
+    /// The lexicon sense a learner's own Arabic names, if any (ADR-105).
+    /// </summary>
+    /// <remarks>
+    /// In order of trust:
+    /// <list type="number">
+    /// <item>The learner's Arabic <i>is</i> a sense's Arabic. Decided here,
+    /// without asking anyone.</item>
+    /// <item>The checker names one — by number, validated against this list,
+    /// because the model reports and this service decides (rule R2).</item>
+    /// <item>The word has exactly one sense and the checker accepted the
+    /// meaning. There is nothing to confuse it with — the commonest-sense bug
+    /// needs a second sense to happen.</item>
+    /// </list>
+    /// Null when neither holds. The caller then uses the checker's own
+    /// definition of the learner's meaning, and never the commonest sense's:
+    /// a wrong definition is worse than none, because every generator reads
+    /// it and nobody shows it to the learner to catch.
+    /// </remarks>
+    private static SenseRow? SenseForLearnerMeaning(
+        string meaning,
+        IReadOnlyList<SenseRow> senses,
+        MeaningCheck verdict)
+    {
+        if (senses.Count == 0) return null;
+
+        var normalized = ArabicText.Normalize(meaning);
+        var exact = senses.FirstOrDefault(r =>
+            r.MeaningArNormalized.Length > 0
+            && r.MeaningArNormalized == normalized);
+        if (exact is not null) return exact;
+
+        if (!verdict.Matches) return null;
+
+        if (verdict.Sense is int n && n >= 1 && n <= senses.Count)
+            return senses[n - 1];
+
+        return senses.Count == 1 ? senses[0] : null;
     }
 
     /// <summary>
@@ -1034,13 +1104,15 @@ public static class WordEndpoints
         }
 
         // ── The dictionary has never seen this wording ──────────────────────
+        var senses = await SensesOfAsync(word.Text, db, ct);
+
         MeaningCheck verdict;
         try
         {
             verdict = await ai.CheckMeaningAsync(
                 new MeaningCheckRequest(
                     word.Text,
-                    await SensesOfAsync(word.Text, db, ct),
+                    Describe(senses),
                     word.PartOfSpeech,
                     meaning,
                     LearnerLanguage.From(http.Request),
@@ -1074,13 +1146,25 @@ public static class WordEndpoints
                 statusCode: StatusCodes.Status409Conflict);
         }
 
+        // The old definition described the old meaning. Left in place, a word
+        // rewritten from ثوب رهباني to عادة went on being taught as a robe
+        // (ADR-105). Replaced with the definition of what the learner now
+        // says — or emptied, which the generators handle, rather than kept
+        // wrong. Emptied only for a word the lexicon holds: one it does not
+        // has only the definition it was added with.
+        var sense = SenseForLearnerMeaning(meaning, senses, verdict);
+        var definition = sense?.DefinitionEn ?? verdict.DefinitionEn;
+        if (definition is null && senses.Count > 0) definition = string.Empty;
+
         word.ChangeMeaning(
             meaning,
             MeaningSource.Learner,
             verdict.Matches
                 ? MeaningCheckResult.Approved
                 : MeaningCheckResult.Overridden,
-            now);
+            now,
+            definitionEn: definition,
+            partOfSpeech: sense?.PartOfSpeech);
 
         await db.SaveChangesAsync(ct);
         return Results.Ok(ToResponse(word, config));

@@ -5145,3 +5145,54 @@ symptom: `"my name is Ahmed"` came back as `"Ahmed"`, and three sentences
 separated by pauses came back as only the last. Not reproducible on a
 simulator — neither simulator has a working recogniser — so the device check is
 the release APK on an Android phone.
+
+---
+
+## ADR-105 — A learner's own meaning is stored beside its own definition
+
+**Date:** 2026-09-28 · **Status:** Accepted
+
+Reported by a student: they added `habit`, wrote the meaning themselves —
+عادة — and a later skill taught it as رداء.
+
+It was not the model. The word had been stored with the learner's Arabic
+beside the English definition of the lexicon's **commonest sense**: "a
+distinctive attire worn by a member of a religious order". The add path took
+`facts.DefinitionEn` — `facts` being the top-ranked row for the word — on the
+reasoning that the lexicon's facts beat a model's. That holds for the part of
+speech and the band, which belong to the word. It does not hold for the
+definition, which belongs to a *sense*, and the learner had just said which
+sense they meant. Every generator reads the definition, so every skill after
+Reading taught the robe. Editing the meaning (ADR-101) had the same fault the
+other way round: new Arabic, old definition.
+
+On production: 32 of 36 learner-written words carried the commonest sense's
+definition, and at least twelve were a different sense — `sausage = نقانق`
+beside "a small nonrigid airship", `sell = يبيع` beside "persuade somebody",
+`bowl = صحن` beside "the act of rolling". The old edition's invented sense
+order is what made the commonest sense so often the wrong one (ADR-096).
+
+**The fix.** The meaning checker already sees every listed sense; it now also
+reports *which* — a 1-based `sense` into the list it was shown — and a
+one-clause definition of the learner's meaning. It reports; this service
+decides (rule R2):
+
+1. the learner's Arabic is a sense's own Arabic → that sense, decided here;
+2. the checker names a sense, validated against the list → that sense;
+3. the word has exactly one sense and the meaning was accepted → that sense;
+4. otherwise the checker's definition of the learner's meaning;
+5. never the commonest sense's definition for a different meaning. Empty is
+   better than wrong: the generators handle a missing definition, and nobody
+   shows a wrong one to the learner to catch.
+
+Verified against Gemini on the old edition: `habit = عادة` → "an established
+custom", `sausage = نقانق` → "highly seasoned minced meat stuffed in casings",
+`sell = يبيع` → "exchange or deliver for money". Two imperfect: `quarter = ربع`
+got the verb sense ("divide into quarters"), and `nuts = مكسرات` got none —
+the old edition has no food sense for `nuts`. Neither is wrong the way the robe
+was.
+
+Six API tests, all six confirmed failing against the previous code; nine in the
+AI service. The twelve production words were repaired from the lexicon's own
+rows — never typed — after a rolled-back dry run showed exactly the twelve
+changes.
