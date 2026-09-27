@@ -3,11 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wordos/app/wordos_app.dart';
 import 'package:wordos/core/api/api_providers.dart';
+import 'package:wordos/core/api/server_revision.dart';
 import 'package:wordos/core/notifications/notification_scheduler.dart';
 import 'package:wordos/core/notifications/reminder_providers.dart';
 import 'package:wordos/core/storage/app_preferences.dart';
 import 'package:wordos/core/storage/preferences_providers.dart';
 import 'package:wordos/core/storage/token_store.dart';
+import 'package:wordos/mock_backend/mock_wordos_api.dart';
 
 /// In-memory token store — widget tests must not touch the platform keystore.
 class FakeTokenStore extends TokenStore {
@@ -90,26 +92,52 @@ class FakeNotificationScheduler implements NotificationScheduler {
 /// so the choice is made here rather than left to how the runner was invoked.
 List<Override> testOverrides({
   Locale locale = const Locale('en'),
+  ThemeMode themeMode = ThemeMode.system,
   NotificationScheduler? scheduler,
+  double latencyScale = 0,
 }) =>
     [
       appEnvironmentProvider.overrideWithValue(
         const AppEnvironment(useMockBackend: true, baseUrl: ''),
       ),
-      appPreferencesProvider
-          .overrideWithValue(InMemoryAppPreferences(locale: locale)),
+      appPreferencesProvider.overrideWithValue(
+          InMemoryAppPreferences(locale: locale, themeMode: themeMode)),
       tokenStoreProvider.overrideWith((ref) => FakeTokenStore()),
       // Pinned for every test, not only the ones about notifications: the app
       // schedules reminders on sign-in, so without this every signed-in test
       // would reach a platform channel that is not there.
       notificationSchedulerProvider
           .overrideWithValue(scheduler ?? FakeNotificationScheduler()),
+      // The mock's artificial latency exists so loading states are visible
+      // while developing. In a test it is a timer with nothing to say — and
+      // since every write now refetches whatever is on screen (ADR-094), one
+      // started during the last frame outlives the widget tree and fails the
+      // test with "pending timers" rather than with anything about the app.
+      //
+      // Several tests already did this by hand; doing it here is what the
+      // `latencyScale` parameter was added for.
+      //
+      // A test *about* slowness asks for it back — see `stress_navigation`,
+      // whose whole subject is a learner tapping a tile six times while a
+      // session loads. Zeroing it there would delete the race it exists to
+      // catch, and the test would go on passing while catching nothing.
+      wordOsApiProvider.overrideWith((ref) {
+        final tokens = ref.watch(tokenStoreProvider);
+        return MockWordOsApi(
+          tokenReader: () => tokens.token,
+          latencyScale: latencyScale,
+          onChanged: () =>
+              ref.read(serverRevisionProvider.notifier).bump(),
+        );
+      }),
     ];
 
 /// Pumps the real app with test-safe dependencies.
 Future<void> bootApp(
   WidgetTester tester, {
   Locale locale = const Locale('en'),
+  ThemeMode themeMode = ThemeMode.system,
+  double latencyScale = 0,
   Size? surfaceSize,
   /// Extra overrides, for a test that needs to watch what a service was asked
   /// to do — a fake voice engine, say.
@@ -125,7 +153,12 @@ Future<void> bootApp(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        ...testOverrides(locale: locale, scheduler: scheduler),
+        ...testOverrides(
+          locale: locale,
+          themeMode: themeMode,
+          scheduler: scheduler,
+          latencyScale: latencyScale,
+        ),
         ...overrides,
       ],
       child: const WordOsApp(),
@@ -138,8 +171,12 @@ Future<void> bootAndSignIn(
   WidgetTester tester, {
   Size surfaceSize = const Size(1200, 2600),
   NotificationScheduler? scheduler,
+  double latencyScale = 0,
 }) async {
-  await bootApp(tester, surfaceSize: surfaceSize, scheduler: scheduler);
+  await bootApp(tester,
+      surfaceSize: surfaceSize,
+      scheduler: scheduler,
+      latencyScale: latencyScale);
   await tester.pumpAndSettle();
   await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
   await tester.pumpAndSettle();

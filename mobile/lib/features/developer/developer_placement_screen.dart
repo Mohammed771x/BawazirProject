@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../core/api/api_providers.dart';
-import '../../core/api/wordos_api.dart';
+import '../../core/api/server_revision.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
@@ -12,7 +12,10 @@ import '../../core/widgets/app_widgets.dart';
 
 final adminPlacementProvider =
     FutureProvider.autoDispose.family<PlacementEvidence, String>(
-  (ref, userId) => ref.watch(wordOsApiProvider).adminPlacementEvidence(userId),
+  (ref, userId) {
+    refetchWhenServerChanges(ref);
+    return ref.watch(wordOsApiProvider).adminPlacementEvidence(userId);
+  },
 );
 
 /// The placement test behind a learner's starting levels (Part 3).
@@ -38,10 +41,9 @@ class DeveloperPlacementScreen extends ConsumerWidget {
       appBar: AppBar(title: Text(s.devPlacementEvidence)),
       body: evidence.when(
         loading: () => BusyView(message: s.loading),
-        error: (e, _) => ErrorView(
-          message: s.apiError(
-              ApiException.from(e).code, ApiException.from(e).message),
-          retryLabel: s.retry,
+        error: (e, _) => ErrorView.from(
+          e,
+          s,
           onRetry: () => ref.invalidate(adminPlacementProvider(userId)),
         ),
         data: (data) => _Evidence(evidence: data),

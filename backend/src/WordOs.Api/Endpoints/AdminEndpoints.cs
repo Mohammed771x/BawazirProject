@@ -645,6 +645,7 @@ public static class AdminEndpoints
         Guid wordId,
         ClaimsPrincipal principal,
         WordOsDbContext db,
+        WordOsConfiguration config,
         CancellationToken ct)
     {
         if (RequireOwner(principal) is { } denied) return denied;
@@ -686,7 +687,8 @@ public static class AdminEndpoints
             },
             learner = owner,
             skills = word.Skills
-                .OrderBy(sk => sk.Skill)
+                // Pipeline order, not the enum's (ADR-092).
+                .OrderBy(sk => config.PipelinePosition(sk.Skill))
                 .Select(sk => new
                 {
                     skill = sk.Skill.ToWire(),
@@ -730,6 +732,7 @@ public static class AdminEndpoints
         Guid id,
         ClaimsPrincipal principal,
         WordOsDbContext db,
+        WordOsConfiguration config,
         CancellationToken ct)
     {
         if (RequireOwner(principal) is { } denied) return denied;
@@ -775,7 +778,7 @@ public static class AdminEndpoints
             {
                 levels = current
                     .Where(l => l.Skill != SkillType.Spelling)
-                    .OrderBy(l => l.Skill)
+                    .OrderBy(l => config.PipelinePosition(l.Skill))
                     .Select(l => new
                     {
                         skill = l.Skill.ToWire(),

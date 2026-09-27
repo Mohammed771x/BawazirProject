@@ -114,6 +114,9 @@ public sealed class HttpAiContentService(
                 form = w.Form,
                 may_pluralise = w.MayPluralise,
             }),
+            // Which register the options are written in (ADR-088). The
+            // generator writes them, so it has to know before it starts.
+            option_style = request.OptionStyle.ToWire(),
         };
 
         var response = await PostAsync<ContentDto>("/ai/content", payload, ct);
@@ -141,6 +144,7 @@ public sealed class HttpAiContentService(
                 may_pluralise = w.MayPluralise,
             }),
             comprehension_count = request.ComprehensionCount,
+            option_style = request.OptionStyle.ToWire(),
         };
 
         var response = await PostAsync<ContentDto>(
@@ -157,7 +161,9 @@ public sealed class HttpAiContentService(
                 .Select(q => new GeneratedQuestion(q.Prompt, q.Correct, q.Distractors))
                 .ToList(),
             Contexts: response.Contexts
-                .Select(c => new GeneratedWordContext(c.Word, c.Before, c.Sentence, c.After))
+                .Select(c => new GeneratedWordContext(
+                    c.Word, c.Before, c.Sentence, c.After, c.WrongMeaningsAr,
+                    c.MeaningHereEn, c.WrongMeaningsEn))
                 .ToList(),
             PromptVersion: response.PromptVersion,
             Model: response.Model,
@@ -419,7 +425,15 @@ public sealed class HttpAiContentService(
         string Prompt, string Correct, List<string> Distractors);
 
     private sealed record ContextDto(
-        string Word, string? Before, string Sentence, string? After);
+        string Word, string? Before, string Sentence, string? After,
+        // Absent on a service that predates ADR-084; null is read as "build
+        // them the old way" rather than as an error.
+        List<string>? WrongMeaningsAr = null,
+        // The English registers (ADR-088), absent for the same reason and read
+        // the same way. `MeaningHereEn` is the only answer the generator ever
+        // writes, and only at the B1–B2 band.
+        string? MeaningHereEn = null,
+        List<string>? WrongMeaningsEn = null);
 
     private sealed record WritingDto(
         bool UsedWord,

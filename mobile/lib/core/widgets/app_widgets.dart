@@ -1,5 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../api/wordos_api.dart';
+import '../l10n/app_strings.dart';
 import '../theme/app_tokens.dart';
 
 /// Reusable presentation building blocks shared by every feature.
@@ -192,29 +196,142 @@ class EmptyState extends StatelessWidget {
   }
 }
 
-class ErrorView extends StatelessWidget {
+class ErrorView extends StatefulWidget {
   const ErrorView({
     super.key,
     required this.message,
     required this.retryLabel,
     this.onRetry,
+    this.healsItself = false,
   });
+
+  /// The usual way to build one: from the failure itself.
+  ///
+  /// It picks the sentence — a learner with no signal is told they have no
+  /// signal, not "something went wrong" — and it turns on the self-healing for
+  /// exactly the failures that can heal (`ApiException.isRetryable`). A word
+  /// that does not exist will refuse identically for ever and is not retried.
+  factory ErrorView.from(
+    Object error,
+    AppStrings strings, {
+    Key? key,
+    VoidCallback? onRetry,
+  }) {
+    final failure = ApiException.from(error);
+
+    return ErrorView(
+      key: key,
+      message: failure.code == 'UNEXPECTED'
+          ? strings.somethingWentWrong
+          : strings.apiError(failure.code, failure.message),
+      retryLabel: strings.retry,
+      onRetry: onRetry,
+      healsItself: failure.isRetryable,
+    );
+  }
 
   final String message;
   final String retryLabel;
   final VoidCallback? onRetry;
 
+  /// Whether this screen retries on its own while it is on display.
+  ///
+  /// The learner should not have to press anything when the connection comes
+  /// back. They are holding a phone that reconnects silently, and a screen
+  /// that keeps saying "no connection" over a working network is the app being
+  /// wrong about the world (ADR-093).
+  final bool healsItself;
+
+  @override
+  State<ErrorView> createState() => _ErrorViewState();
+}
+
+class _ErrorViewState extends State<ErrorView> with WidgetsBindingObserver {
+  Timer? _timer;
+
+  /// How long to wait before trying again, doubling to a ceiling.
+  ///
+  /// It starts short because most of these clear in seconds — a tunnel, a lift,
+  /// a server waking up — and backs off because the one case that does not
+  /// clear must not become a request every two seconds for as long as the
+  /// screen is open.
+  static const Duration _first = Duration(seconds: 2);
+  static const Duration _ceiling = Duration(seconds: 20);
+  Duration _wait = _first;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.healsItself || widget.onRetry == null) return;
+
+    WidgetsBinding.instance.addObserver(this);
+    _schedule();
+  }
+
+  @override
+  void didUpdateWidget(ErrorView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // A different failure is a fresh start: the backoff earned by the last one
+    // should not make the next one wait twenty seconds for its first attempt.
+    if (widget.message != oldWidget.message) {
+      _wait = _first;
+      _schedule();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Coming back to the app is the single strongest signal that something may
+    // have changed — and it is the moment the learner is looking at the screen,
+    // so it is the moment a stale error is most worth clearing.
+    if (state == AppLifecycleState.resumed) {
+      _wait = _first;
+      _retry();
+    }
+  }
+
+  void _schedule() {
+    _timer?.cancel();
+    _timer = Timer(_wait, _retry);
+  }
+
+  void _retry() {
+    if (!mounted) return;
+
+    // Doubling *before* the attempt, so a failure that repeats immediately
+    // still backs off rather than retrying at the same rate for ever.
+    _wait = _wait * 2 > _ceiling ? _ceiling : _wait * 2;
+
+    widget.onRetry?.call();
+
+    // Rescheduled unconditionally: this widget is rebuilt out of existence the
+    // moment the data arrives, so "still here" is the same fact as "it has not
+    // worked yet".
+    _schedule();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     return EmptyState(
       icon: Icons.error_outline_rounded,
-      title: message,
-      action: onRetry == null
+      title: widget.message,
+      // The button stays, even while this retries on its own. A learner who
+      // wants to do something about it should be able to, and waiting for a
+      // timer they cannot see is its own kind of stuck.
+      action: widget.onRetry == null
           ? null
           : OutlinedButton.icon(
-              onPressed: onRetry,
+              onPressed: widget.onRetry,
               icon: const Icon(Icons.refresh_rounded),
-              label: Text(retryLabel),
+              label: Text(widget.retryLabel),
             ),
     );
   }
@@ -287,7 +404,12 @@ class OptionTile extends StatelessWidget {
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
+                  // An option is English on a comprehension question and
+                  // Arabic on a word question, and this widget renders both —
+                  // so the direction follows the text rather than the
+                  // interface. Inheriting Arabic put the full stop of an
+                  // English option at the front of it.
+                  child: AutoDirectionText(
                     label,
                     style: context.text.bodyLarge?.copyWith(
                       color: foreground,
@@ -306,21 +428,89 @@ class OptionTile extends StatelessWidget {
 }
 
 class StepProgressBar extends StatelessWidget {
-  const StepProgressBar({super.key, required this.value});
+  const StepProgressBar({
+    super.key,
+    required this.value,
+    this.animate = false,
+    this.height = 8,
+  });
 
   final double value;
 
+  /// Whether the bar slides to a new value instead of jumping to it.
+  ///
+  /// Off by default, because most callers redraw a bar that has not moved and
+  /// an animation on every rebuild is a bar that never sits still. On where the
+  /// movement is the point — the weekly challenge, where the bar is the only
+  /// progress the learner is shown (ADR-091).
+  final bool animate;
+
+  final double height;
+
   @override
   Widget build(BuildContext context) {
+    final target = value.clamp(0.0, 1.0);
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(999),
-      child: LinearProgressIndicator(
-        value: value.clamp(0.0, 1.0),
-        minHeight: 8,
-        backgroundColor: context.palette.subtleSurface,
-      ),
+      child: animate
+          ? TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: target),
+              // Long enough to be seen as movement rather than a redraw, short
+              // enough that the next question is not waiting on it.
+              duration: const Duration(milliseconds: 650),
+              curve: Curves.easeOutCubic,
+              builder: (context, shown, _) => LinearProgressIndicator(
+                value: shown,
+                minHeight: height,
+                backgroundColor: context.palette.subtleSurface,
+              ),
+            )
+          : LinearProgressIndicator(
+              value: target,
+              minHeight: height,
+              backgroundColor: context.palette.subtleSurface,
+            ),
     );
   }
+}
+
+/// How full the weekly challenge's bar looks after [done] of [total] words.
+///
+/// **Deliberately not `done / total`.** A sitting of fifty words is fifty
+/// questions, and a linear bar answers the first one by moving two per cent —
+/// which reads as *nothing happened*. The learner most likely to quit is the
+/// one who has answered three questions and cannot see that they have, and that
+/// is the moment this curve is for (ADR-091).
+///
+/// So the first few move fast and the rest settle down: the opening stretch of
+/// the bar is spent on the opening handful of words, and the remainder is
+/// shared out evenly across everything after them. It is a presentation curve
+/// and nothing else — the score, the queue and the result are counted honestly
+/// and are not touched by it.
+///
+/// It never overstates the end. At `done == total` it is exactly 1, so the bar
+/// arrives full at the same moment the challenge does; the flattery is all in
+/// the middle, where it costs nothing and buys the thing it is for.
+double challengeProgress(int done, int total) {
+  if (total <= 0 || done <= 0) return 0;
+  if (done >= total) return 1;
+
+  /// The opening words that move the bar quickly.
+  const fastWords = 5;
+
+  /// How much of the bar they are given between them.
+  const fastShare = 0.35;
+
+  // A short challenge is all "opening", so the curve would be the whole bar.
+  // Below this it stays linear rather than sprinting to nearly full on the
+  // second answer, which would be the same lie in the other direction.
+  if (total <= fastWords + 1) return done / total;
+
+  if (done <= fastWords) return fastShare * (done / fastWords);
+
+  final after = (done - fastWords) / (total - fastWords);
+  return fastShare + (1 - fastShare) * after;
 }
 
 /// English content, laid out left-to-right whatever the interface language.
@@ -332,17 +522,121 @@ class StepProgressBar extends StatelessWidget {
 /// Wrap English *content*: passages, words, example sentences. Not interface
 /// copy, which should follow the interface.
 class EnglishText extends StatelessWidget {
-  const EnglishText(this.data, {super.key, this.style, this.textAlign});
+  const EnglishText(
+    this.data, {
+    super.key,
+    this.style,
+    this.textAlign,
+    this.maxLines,
+    this.overflow,
+  });
 
   final String data;
   final TextStyle? style;
   final TextAlign? textAlign;
 
+  /// Both default to null, which is `Text`'s own behaviour — prose wraps and is
+  /// never clipped. They exist for the places where the English sits inside a
+  /// fixed box, such as a button label, where a long word would otherwise
+  /// overflow rather than wrap.
+  final int? maxLines;
+  final TextOverflow? overflow;
+
+  /// The edge the surrounding interface starts from — right in Arabic, left in
+  /// English — as an absolute alignment.
+  ///
+  /// For English that sits *inside* interface layout rather than standing on
+  /// its own: a dictionary definition under an Arabic meaning, in a card whose
+  /// every other line hangs from the right. Left-aligning that one line would
+  /// tear it away from the meaning it explains. So the line keeps the card's
+  /// edge, and only its *direction* is English — which is the part that moves
+  /// the punctuation. Absolute rather than `start`, because inside this widget
+  /// `start` would mean the English side.
+  static TextAlign interfaceStart(BuildContext context) =>
+      Directionality.of(context) == TextDirection.rtl
+          ? TextAlign.right
+          : TextAlign.left;
+
   @override
   Widget build(BuildContext context) => Directionality(
         textDirection: TextDirection.ltr,
-        child: Text(data, style: style, textAlign: textAlign ?? TextAlign.left),
+        child: Text(
+          data,
+          style: style,
+          textAlign: textAlign ?? TextAlign.left,
+          maxLines: maxLines,
+          overflow: overflow,
+        ),
       );
+}
+
+/// Text whose direction follows **the text**, not the interface.
+///
+/// For content that may be either language and is not known which at the call
+/// site: a comprehension question and its options are English, a word question
+/// asks in English about Arabic meanings, and the same widget renders both.
+///
+/// Inheriting the Arabic interface's direction is not merely untidy for
+/// English — it moves the punctuation. `What does "fan" mean here?` renders as
+/// `?What does "fan" mean here`, with the question mark leading the sentence,
+/// because a trailing neutral character in an RTL paragraph belongs to the
+/// paragraph rather than to the words. The sentence stays legible and reads as
+/// though the app were broken.
+///
+/// [EnglishText] is still the right widget wherever the content is known to be
+/// English — the passage, a target word — because it states that fact rather
+/// than inferring it.
+class AutoDirectionText extends StatelessWidget {
+  const AutoDirectionText(
+    this.data, {
+    super.key,
+    this.style,
+    this.textAlign,
+  });
+
+  final String data;
+  final TextStyle? style;
+  final TextAlign? textAlign;
+
+  /// The direction of the first strongly-directional character, or null when
+  /// there is none — digits and punctuation alone say nothing about language,
+  /// and guessing from them would be worse than following the interface.
+  static TextDirection? directionOf(String text) {
+    for (final rune in text.runes) {
+      // Arabic, Arabic Supplement/Extended, Presentation Forms, and Hebrew.
+      if ((rune >= 0x0590 && rune <= 0x08FF) ||
+          (rune >= 0xFB1D && rune <= 0xFDFF) ||
+          (rune >= 0xFE70 && rune <= 0xFEFF)) {
+        return TextDirection.rtl;
+      }
+      if ((rune >= 0x0041 && rune <= 0x005A) ||
+          (rune >= 0x0061 && rune <= 0x007A) ||
+          (rune >= 0x00C0 && rune <= 0x024F)) {
+        return TextDirection.ltr;
+      }
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final direction = directionOf(data);
+    if (direction == null) {
+      return Text(data, style: style, textAlign: textAlign);
+    }
+
+    return Directionality(
+      textDirection: direction,
+      child: Text(
+        data,
+        style: style,
+        textAlign: textAlign ??
+            (direction == TextDirection.rtl
+                ? TextAlign.right
+                : TextAlign.left),
+      ),
+    );
+  }
 }
 
 class LevelBadge extends StatelessWidget {

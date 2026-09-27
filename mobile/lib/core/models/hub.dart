@@ -78,12 +78,26 @@ class WeeklyReviewStatus {
     required this.wordCount,
     required this.periodStart,
     required this.nextAvailableAt,
+    this.wordsWaitingAfterThis = 0,
   });
 
   final bool available;
+
+  /// How many words this sitting will ask about — capped by the server.
   final int wordCount;
+
   final DateTime? periodStart;
+
+  /// When the challenge opens, for a learner who has nothing ripe yet.
+  ///
+  /// A word is not reviewable the day it is added (ADR-089), so a learner's
+  /// first week has no challenge in it. This is the date to name instead of
+  /// leaving the card saying only that it is unavailable.
   final DateTime? nextAvailableAt;
+
+  /// Ripe words behind the cap, so the card can say that finishing this
+  /// sitting is not the end of it (ADR-089).
+  final int wordsWaitingAfterThis;
 
   factory WeeklyReviewStatus.fromJson(Map<String, dynamic> json) =>
       WeeklyReviewStatus(
@@ -93,6 +107,8 @@ class WeeklyReviewStatus {
             DateTime.tryParse(json['periodStart'] as String? ?? '')?.toUtc(),
         nextAvailableAt:
             DateTime.tryParse(json['nextAvailableAt'] as String? ?? '')?.toUtc(),
+        wordsWaitingAfterThis:
+            (json['wordsWaitingAfterThis'] as num?)?.toInt() ?? 0,
       );
 
   Map<String, dynamic> toJson() => {
@@ -100,6 +116,7 @@ class WeeklyReviewStatus {
         'wordCount': wordCount,
         'periodStart': periodStart?.toIso8601String(),
         'nextAvailableAt': nextAvailableAt?.toIso8601String(),
+        'wordsWaitingAfterThis': wordsWaitingAfterThis,
       };
 }
 

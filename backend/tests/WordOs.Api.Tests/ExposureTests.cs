@@ -92,16 +92,17 @@ public class ExposureTests(PostgresFixture db) : IAsyncLifetime
     {
         var wordId = await AddWordAsync(text, meaning);
 
-        // Reading → Listening → Speaking → Writing → Spelling, two days apart.
+        // Reading → Listening → Speaking → Spelling → Writing, two days apart
+        // (ADR-087).
         await FinishQuestionSessionAsync("reading");
         Clock.SkipDays(2);
         await FinishQuestionSessionAsync("listening");
         Clock.SkipDays(2);
         await FinishSpeakingAsync();
         Clock.SkipDays(2);
-        await FinishWritingAsync();
-        Clock.SkipDays(2);
         await FinishQuestionSessionAsync("spelling");
+        Clock.SkipDays(2);
+        await FinishWritingAsync();
 
         await using var context = db.CreateContext();
         var word = await context.Words.FirstAsync(w => w.Id == wordId);
@@ -353,6 +354,9 @@ public class ExposureTests(PostgresFixture db) : IAsyncLifetime
         Skip.IfNot(db.IsAvailable, db.SkipReason);
         await SignInAsync();
         var wordId = await AddWordAsync("research", "بحث علمي");
+
+        // A word is not reviewable the day it is added (ADR-089).
+        Clock.SkipDays(new WordOsConfiguration().WeeklyReviewMaturityDays);
 
         var start = await Client.PostAsync("/api/weekly-review/start", null);
         start.EnsureSuccessStatusCode();

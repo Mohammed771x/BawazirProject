@@ -5,6 +5,8 @@ import 'package:wordos/mock_backend/engine/mock_content.dart';
 import 'package:wordos/mock_backend/engine/mock_dictionary.dart';
 import 'package:wordos/mock_backend/engine/mock_engine.dart';
 
+import 'support/pipeline.dart';
+
 /// The learning loop: a wrong answer is **recorded and repeated**, never
 /// discarded (demo review §29–31, §47–48, §56). Written as a specification for
 /// the C# backend.
@@ -42,13 +44,20 @@ void main() {
       value = item.type == SessionItemType.spellingTask
           ? 'zzzz'
           : item.options.firstWhere(
-              (o) => o != (known[itemId] ?? word?.meaning),
+              (o) =>
+                  o !=
+                  (known[itemId] ??
+                      engine.correctAnswerFor(user, session.id, itemId) ??
+                      word?.meaning),
               orElse: () => '__no__',
             );
     } else if (item.type == SessionItemType.spellingTask) {
       value = word!.text;
     } else if (item.type == SessionItemType.targetWord) {
-      value = word!.meaning;
+      // The answer key rather than the Arabic meaning: above A2+ the correct
+      // option is an English definition (ADR-088).
+      value = engine.correctAnswerFor(user, session.id, itemId) ??
+          word!.meaning;
     } else {
       value = known[itemId] ?? item.options.first;
     }
@@ -119,6 +128,179 @@ void main() {
           reason: 'the previous sentence gives the context to infer from');
       expect(target.context!.after, isNotNull);
       expect(target.audioText, isNull, reason: 'reading is not spoken');
+    });
+  });
+
+  // ── What the four options may be (ADR-084) ──────────────────────────────
+  //
+  // One rule: a learner must have to know the word. They did not have to — a
+  // word's wrong answers were the *other target words' meanings*, so the
+  // questions of a session shared one set of answers between them. Answer the
+  // first correctly and that meaning is spent; by the last there is one
+  // unused option left, choosable without reading the question.
+  //
+  // Written here as the specification the C# backend implements
+  // (`SessionOptionsTests.cs`), and pinned against the mock so the demo cannot
+  // show the leak either.
+  group('the options on a word question', () {
+    for (final skill in [SkillType.reading, SkillType.listening]) {
+      test('never include another word\'s answer — ${skill.wire}', () {
+        for (final key in ['research', 'evidence', 'schedule', 'improve']) {
+          engine.addWord(user, candidate(key));
+        }
+        if (skill == SkillType.listening) {
+          _advanceTo(engine, user, SkillType.listening);
+        }
+
+        final session = engine.startSession(user, skill);
+        final targets = session.items
+            .where((i) => i.type == SessionItemType.targetWord)
+            .toList();
+        expect(targets.length, greaterThan(1),
+            reason: 'elimination needs more than one question to be possible');
+
+        // Every question's *answer*, in whatever register the learner's band
+        // answers in (ADR-088). The leak this group exists to catch is options
+        // being reused as answers, and that is a leak in any language.
+        String answerTo(SessionItem i) =>
+            engine.correctAnswerFor(user, session.id, i.id)!;
+
+        final answers = {for (final i in targets) answerTo(i)};
+
+        for (final item in targets) {
+          final wrong =
+              item.options.where((o) => o != answerTo(item)).toList();
+
+          expect(wrong.length, 3);
+          for (final option in wrong) {
+            expect(answers, isNot(contains(option)),
+                reason: 'a wrong option that is another word\'s answer is one '
+                    'the learner can strike off after answering that word');
+          }
+        }
+      });
+    }
+
+    test('answering one question removes no option from the next', () {
+      for (final key in ['research', 'evidence', 'schedule', 'improve']) {
+        engine.addWord(user, candidate(key));
+      }
+
+      final session = engine.startSession(user, SkillType.reading);
+      final targets = session.items
+          .where((i) => i.type == SessionItemType.targetWord)
+          .toList();
+
+      // Walk it the way a learner does, striking off every meaning already
+      // shown to be an answer.
+      final known = <String>{};
+      for (final item in targets) {
+        final remaining =
+            item.options.where((o) => !known.contains(o)).toList();
+
+        expect(remaining.length, 4,
+            reason: 'every question must still be a choice of four');
+        known.add(engine.correctAnswerFor(user, session.id, item.id)!);
+      }
+    });
+
+    // ── The register the options are written in (ADR-088) ────────────────
+    //
+    // One question, three bands. An A2 learner choosing between four English
+    // definitions is being tested on the definitions rather than on the word;
+    // a C1 learner choosing between four Arabic words is being asked to
+    // translate, which is easier than the word is.
+
+    bool hasArabic(String text) =>
+        text.runes.any((r) => r >= 0x0600 && r <= 0x06FF);
+
+    List<SessionItem> targetsAt(CefrLevel level) {
+      engine.updateSkillLevel(user, SkillType.reading, level);
+      final session = engine.startSession(user, SkillType.reading);
+      final targets = session.items
+          .where((i) => i.type == SessionItemType.targetWord)
+          .toList();
+      engine.abandonSession(user, session.id);
+      return targets;
+    }
+
+    test('the easier bands answer in Arabic', () {
+      for (final key in ['research', 'evidence', 'schedule']) {
+        engine.addWord(user, candidate(key));
+      }
+
+      for (final level in [
+        CefrLevel.a1,
+        CefrLevel.a1Plus,
+        CefrLevel.a2,
+        CefrLevel.a2Plus,
+      ]) {
+        for (final item in targetsAt(level)) {
+          expect(item.options.every(hasArabic), isTrue,
+              reason: '$level should answer in Arabic');
+        }
+      }
+    });
+
+    test('from B1 up the options are English, and all four of them are', () {
+      for (final key in ['research', 'evidence', 'schedule']) {
+        engine.addWord(user, candidate(key));
+      }
+
+      for (final level in [
+        CefrLevel.b1,
+        CefrLevel.b1Plus,
+        CefrLevel.b2,
+        CefrLevel.b2Plus,
+        CefrLevel.c1,
+        CefrLevel.c2,
+      ]) {
+        for (final item in targetsAt(level)) {
+          // All four, not merely the correct one. A single Arabic line among
+          // three English ones marks itself out by script alone, and the
+          // question can then be passed without knowing the word.
+          expect(item.options.any(hasArabic), isFalse,
+              reason: '$level should answer in English');
+          expect(item.options.length, 4);
+        }
+      }
+    });
+
+    test('the writing task is set in English only from B1 up', () {
+      // The server's decision, not the app's (rule R1). The client is handed a
+      // language and renders it; what is pinned here is the rule that chooses.
+      engine.addWord(user, candidate('research'));
+      advanceToSkill(engine, user, SkillType.writing);
+
+      for (final (level, expected) in [
+        (CefrLevel.a1, null),
+        (CefrLevel.a2Plus, null),
+        (CefrLevel.b1, 'EN'),
+        (CefrLevel.c2, 'EN'),
+      ]) {
+        engine.updateSkillLevel(user, SkillType.writing, level);
+        final session = engine.startSession(user, SkillType.writing);
+        expect(session.instructionLanguage, expected,
+            reason: 'at $level the instruction should be '
+                '${expected ?? "the learner's own language"}');
+        engine.abandonSession(user, session.id);
+      }
+    });
+
+    test('each question has four distinct options including the answer', () {
+      for (final key in ['research', 'evidence', 'schedule']) {
+        engine.addWord(user, candidate(key));
+      }
+
+      final session = engine.startSession(user, SkillType.reading);
+
+      for (final item in session.items
+          .where((i) => i.type == SessionItemType.targetWord)) {
+        expect(item.options.length, 4);
+        expect(item.options.toSet().length, 4);
+        expect(item.options,
+            contains(engine.correctAnswerFor(user, session.id, item.id)));
+      }
     });
   });
 
@@ -563,7 +745,13 @@ void _advanceTo(MockEngine engine, MockUser user, SkillType skill) {
                 .progress;
           case SessionItemType.targetWord:
             progress = engine
-                .submitAnswer(user, session.id, item.id, word!.meaning)
+                .submitAnswer(
+                  user,
+                  session.id,
+                  item.id,
+                  engine.correctAnswerFor(user, session.id, item.id) ??
+                      word!.meaning,
+                )
                 .progress;
           default:
             progress = engine

@@ -16,7 +16,7 @@ lifecycle, a state, five independent skill states, schedules, priority and histo
 ```
 Add Word → Select Meaning → AI Analysis (CEFR level)
         → LEARNING PIPELINE
-            Reading → (gap) → Listening → (gap) → Speaking → (gap) → Writing → (gap) → Spelling
+            Reading → (gap) → Listening → (gap) → Speaking → (gap) → Spelling → (gap) → Writing
         → MATURE → ACTIVE VOCABULARY (exposure-priority AI reuse)
         → ARCHIVE (never deleted, only on System-Validated level growth)
 ```
@@ -95,7 +95,7 @@ See [`01-PHASES.md`](01-PHASES.md) for the phase breakdown and acceptance criter
 | `weekly_review_period_days` | 7 | configurable |
 | `archive_level_gap_steps` | 4 | configurable (ADR-013) |
 | `archive_min_exposure` | 3 | configurable (ADR-013) |
-| `skills_order` | Reading → Listening → Speaking → Writing → Spelling | configurable (see ADR-001) |
+| `skills_order` | Reading → Listening → Speaking → Spelling → Writing | configurable (ADR-001, reordered by ADR-087) |
 | CEFR ladder | A1, A1+, A2, A2+, B1, B1+, B2, B2+, C1, C1+, C2 | fixed for MVP |
 
 ## 6. Explicitly out of MVP scope

@@ -19,7 +19,7 @@ meaning they intend*, and that exact sense is then validated across five skills 
 spaced gap between each:
 
 ```
-Reading ─2d→ Listening ─2d→ Speaking ─2d→ Writing ─2d→ Spelling
+Reading ─2d→ Listening ─2d→ Speaking ─2d→ Spelling ─2d→ Writing
         → MATURE → ACTIVE (reused in generated content, least-exposed first)
         → ARCHIVE (never deleted; only when the learner outgrows it)
 ```
@@ -90,15 +90,25 @@ by the API; hiding a menu item is not access control.
 1. **Product tour** — three slides, shown once per installation.
 2. **Interests** — a preset grid plus free-text entry. They steer what generated
    passages are *about*, never how hard they are.
-3. **Placement test** — adaptive, and the only thing that sets the starting levels.
+3. **Placement test** — eight questions, adaptive, and the only thing that sets the
+   starting levels.
 
 ### Placement (full detail in [`06-PLACEMENT-ALGORITHM.md`](06-PLACEMENT-ALGORITHM.md))
 
+* **Eight questions** — three Reading, three Listening, one Speaking, one Writing
+  (ADR-098). Spelling is not part of it: its four items only ever chose between letter
+  tiles and free typing, which the first real spelling session settles anyway.
 * **Rasch (1PL) with EAP ability estimation** over an item bank whose difficulties are
   expert-assigned on the CEFR ladder (`StepLogits = 0.5`, `PriorMean = -0.25`).
-* **It opens easy and never runs uphill.** The first item is the easiest available and
-  the ladder reaches at most one band above the current estimate, so a struggling
-  learner is never walked upward until they fail (ADR-027).
+* **It opens easy and never runs uphill.** The first item is the easiest available, the
+  ladder reaches at most one band above the current estimate, and it never offers a
+  question harder than one just missed — so a struggling learner is never walked upward
+  until they fail (ADR-027, ADR-098).
+* **The two one-question skills are asked last** and are pitched at what Reading and
+  Listening already showed, because one answer opened at the floor would place every
+  learner at the floor. Their band is estimated against a prior re-centred on that
+  evidence and their confidence from their own single answer, so both rows are shown as
+  provisional (ADR-098).
 * **Reading and Listening are key-matched** — no AI is involved in scoring them.
   **Speaking and Writing are evaluated by the AI**, because there is no fixed answer to
   match; a productive skill cannot be placed until the learner has actually produced
@@ -235,6 +245,12 @@ plural is a separate vocabulary item they have not been taught. Active words reu
 the passage follow the same rule. Then five comprehension questions, then one question per target
 word about *that use of it*, not the dictionary entry.
 
+**The four options are written at the learner's level** (ADR-088). Up to A2+ they are
+Arabic meanings; from B1 to B2 they are plain-English definitions written for that
+sentence; at B2+ and above they are dictionary definitions. One register per question,
+never mixed — a single line in the other script would identify itself. The same applies
+to Listening, and to a passage re-told at another level: the options move with the text.
+
 Every word of the passage is tappable and answers instantly with the meaning it carries
 **in that sentence** plus its part of speech, because the generator glosses its own
 passage as it writes it (ADR-029) — and a **re-told** passage is glossed exactly the
@@ -248,6 +264,17 @@ instruction: the target words must appear the way a fluent writer would really u
 and a passage on the wrong subject is preferred to one that bends a word to fit a topic.
 The interests are never named back at the learner.
 
+**A word question's four options are written for that word, from its own sentence**
+(ADR-084). The wrong ones used to be the *other target words' meanings*, so the questions
+of a session shared one set of answers: each one answered correctly removed an option
+from every question still to come, and the last word could be answered without reading
+it. The generator now writes three wrong meanings per word against the sentence it lives
+in, matched to the correct meaning's register so the answer cannot be spotted by style
+alone; the old pool survives only as a top-up when the generator returns nothing usable,
+because a question with two options is worse than one with a weak distractor. This
+applies to Reading and Listening. The Speaking warm-up keeps the old scheme deliberately
+— it measures nothing.
+
 Reading answers in **two steps**: tapping an option chooses it and sends nothing, and
 **Check** is what submits — a mis-tap therefore costs nothing, and the choice can be
 changed until it is checked. The verdict arrives with Check, and **Next** replaces it.
@@ -258,11 +285,59 @@ mid-question, and its options stay single-tap.
 
 ### Listening
 
-The same generated material, heard and not seen. The clip plays on its own; the same
-control stops it. Passage length scales with level and is shorter than Reading's. In
-the result area the recording comes back as a play/stop/slow control, ordered
+The same generated material, heard and not seen. Passage length scales with level and
+is shorter than Reading's.
+
+**The clip waits to be started.** The screen names the clip first — an exam prints a
+title above its listening section for the same reason — and the learner presses play
+when they are ready.
+
+**The icon states what the next tap does** — pause while it plays, the ordinary play
+triangle once paused, replay only at the true end — and **the line beneath it states
+where things stand**: *Playing*, *Paused*, *Finished* (ADR-080, ADR-082).
+
+**The position is the word.** The engine reports each word as it begins, so the bar
+crosses the track a word at a time, pausing keeps the word it reached, and continuing
+re-enters the sentence there rather than at its beginning. The audio stays whole: only
+the *first* sentence of a resumed run is entered part-way, and a resumed offset is
+snapped back to a word start, because speaking word by word would give the same
+precision and turn the clip into dictation (ADR-082).
+
+**A clock replaces the sentence count.** Elapsed and total, both **estimated** — a
+text-to-speech voice has no file and no duration to report — and both read off the same
+playhead, so they cannot disagree with the bar. The speaking rate behind them is measured
+as the clip runs and smoothed, so the total settles rather than lurches. The track's
+unplayed part is drawn strongly enough to show where the clip ends.
+
+The sentence a word question is about sits beside it as **the same player in a smaller
+card**: it waits to be asked, pauses and continues at the word, carries its own clock and
+track, goes back to the start, and switches speed in place. One engine drives both
+(`ClipPlayback`), so they cannot drift apart again.
+
+**A word can be heard at both speeds everywhere it can be heard at all** — the word list,
+a word's detail page, the weekly review, the tap-a-word lookup sheet, the Speaking warm-up
+and the placement test (ADR-083).
+
+On every question **about a target word** — not the comprehension questions, which have
+no word of their own — the word can also be heard **on its own, at both speeds**.
+
+**And in Listening it is heard and never seen** (ADR-085). The question does not name it
+— it arrives as a key and is asked as *"What does the word you just heard mean here?"* —
+the control that plays it is labelled *Play audio* rather than with the word, and no
+tooltip carries the spelling either. The whole task is that the learner works from sound
+and context; printing the word turns the exercise into reading with audio attached. The
+spelling appears only once the item has been answered, in the explanation and on the
+result screen, where the measurement is over. Reading is unchanged: there the word is
+already on screen, underlined in its sentences, and naming it is how the learner knows
+which word is being asked about. Listening
+is the one skill where the word never arrives in isolation, and a learner who did not
+catch it is otherwise being tested on hearing rather than on meaning. The sentence
+around it is not repeated: that sentence is the test (ADR-081).
+
+In the result area the recording comes back as a play/stop/slow control, ordered
 answers → audio → transcript, and never autoplays while the learner reads their score.
-A device with no speech engine falls back to the transcript and says so.
+A device with no speech engine falls back to the transcript and says so — from the
+moment the learner asks for audio, which is now the first moment the app knows.
 
 ### Speaking
 
@@ -341,8 +416,15 @@ recognition, so a "mispronunciation" is indistinguishable from a recogniser erro
 
 ### Writing
 
+The **last** skill in the pipeline (ADR-087). It is the only one that asks the learner
+to produce the written word unaided, so it comes after Spelling: by the time a sentence
+is asked for, the spelling is no longer in question, and what Writing measures is use.
+
 One sentence per word, alternating between a plain instruction and one that asks for a
-sentence about the learner's own life. The AI reports observations — was the word used,
+sentence about the learner's own life. **From B1 up the instruction is given in
+English** (ADR-088) — a learner about to write English has already started in it —
+while the buttons and headings around it stay in the interface language. Below B1 the
+instruction is scaffolding and stays in the learner's own language. The AI reports observations — was the word used,
 with the intended meaning, in a grammatically appropriate position, understandably —
 and **the domain decides**: a small grammar slip never fails correct usage (§32).
 
@@ -356,9 +438,11 @@ C1, and the card says "Your sentence at B2" rather than anything resembling a re
 ### Spelling
 
 The word is written from a clue, exactly as the learner added it — Spelling never
-varies the form, because here the spelling *is* the question (ADR-047). Letter tiles
-below B2, free typing above. The
-tile pool holds decoys, so finishing the pool is not the same as spelling the word — and
+varies the form, because here the spelling *is* the question (ADR-047). It is assembled
+from **letter tiles at every level**, never typed: a phone keyboard autocorrects,
+predicts and completes, so a text field measures the keyboard rather than the learner
+(ADR-100). An advanced learner is stretched by the hint ladder below, which cannot be
+autocompleted. The tile pool holds decoys, so finishing the pool is not the same as spelling the word — and
 it holds a **space** tile for a two-word entry like *alarm clock*, which otherwise could
 not be spelled at all. Spelling is judged on the letters, not the spacing: `alarmclock`
 and `alarm clock` both count (ADR-042).
@@ -403,12 +487,36 @@ the word, its history and its events remain, and the Owner can still read them.
 
 ## 8. Weekly Review
 
-Every seven days: a sample of the words studied in the period, answered by selection
-with auto-advance — the learner chooses and it moves on, with a pause long enough to
+The challenge asks about words the learner met **a week ago or longer**, answered by
+selection with auto-advance — they choose and it moves on, with a pause long enough to
 see the answer.
 
+**A word ripens before it is asked about** (ADR-089). Seven days after it was added, not
+before: a word tested the evening it arrived is still in mind, and answering it correctly
+demonstrates nothing about retention — which is the only thing this measures. So a
+learner's first week has no challenge in it, and the hub card waits in plain sight with
+the day on it rather than disappearing.
+
+A word **leaves** the pool once the learner has recalled it — right on the first
+attempt — and not merely by being asked (ADR-099). Being asked used to be enough, which
+meant the one word somebody had just proved they did not remember was the one word the
+challenge never mentioned again. A word that was missed ripens again a week after the
+challenge that missed it, and comes back. A word rescued on the retry counts as missed:
+that is already the standard the weekly score is computed to. Words that were never
+asked **carry over**: somebody who skipped last week finds last week's words beside
+this week's, because the words worth asking about are exactly the ones belonging to the
+week they were too busy. One sitting is capped at **fifty**; the rest stay ripe, the card
+says how many are behind this group, and the next day's reminder offers them again.
+
+**Progress is a bar and not a position** (ADR-091). "3 of 50" is honest and
+discouraging — it tells somebody who has just started that they have forty-seven to go,
+at the moment they are deciding whether to continue. The bar is front-loaded: the first
+five words are worth its opening third, and it still arrives exactly full at the last
+question, because the one lie a learner catches instantly is a bar that finishes early.
+
 **It changes nothing.** No word passes or fails, no level moves, no schedule shifts. It
-exists to measure retention *after* the pipeline has done its work (R9).
+exists to measure retention *after* the pipeline has done its work (R9) — and the curve
+above bends the width of a rectangle, never the score.
 
 ---
 
@@ -430,6 +538,20 @@ This exists because a list can hold `go`, `went`, `gone` and `going` at once (AD
 and `book` the noun beside `book` the verb (ADR-046) — four rows and two rows that the
 spelling alone cannot tell apart.
 
+### Changing what a word means (ADR-101)
+
+From the word's own screen, at any point in its journey. **The meaning may change; the
+word may not** — and nothing about the journey moves with it: same state, same skill,
+same schedule, same attempts. A learner who decides `create` is better written `يصنع`
+than `أنشأ` keeps every day of progress on it.
+
+The limit is enforced by the dictionary, because the dictionary is the only thing that
+can *name* the word a meaning belongs to. Typing `يحجز` on `create` is not an error
+message — it is "that is what `book` means; shall I swap them?", and accepting removes
+`create` and starts `book` from Reading, having been tested on nothing. A wording the
+dictionary has never seen goes to the checker instead, whose softer objection the learner
+may overrule exactly as they may when writing a meaning on the way in (ADR-074).
+
 ---
 
 ## 10. Settings
@@ -444,9 +566,9 @@ spelling alone cannot tell apart.
 | Daily reminders on/off | the device | ADR-076 — the alarms are this phone's, and so is the OS permission |
 | Sign out | — | in the toolbar, one tap, with a confirmation |
 
-### Daily reminders (ADR-076)
+### Daily reminders (ADR-076, ADR-090)
 
-Two a day, morning and evening, telling the learner how many words are ready. They are
+Two a day, morning and evening. They are
 **local notifications** — no Firebase, no push, no device token — so the phone fires them
 offline with the app closed.
 
@@ -457,12 +579,28 @@ spaced gap is "nothing due yet" on Tuesday and "1 word is ready" on Thursday, an
 are settled before either is scheduled. The phone translates them into the learner's
 language and hands them to the OS; it counts nothing (rule R1).
 
-Three messages, because they are three situations: words are due, words are resting, and
-nothing has been added yet — "you have 0 words ready" is the wrong thing to say to the
-last two. Times are the learner's own wall clock. The plan is refetched on every app open
-and resume, and each refresh replaces what is pending rather than adding to it. Signing
-out cancels everything: a pending "you have 4 words ready" for an account nobody is
-signed into is a notification about somebody else's vocabulary.
+**Twenty lines, not three** (ADR-090). A notification is the whole decision about whether
+the app is opened today, and the same sentence twice a day for a fortnight stops being
+read — before it stops being noticed, which is worse. Each line is gated on a fact the
+server holds: a streak only goes to somebody who has one, a level that rose only to
+somebody whose level rose, a welcome back only to somebody who has been away. None of
+them scolds, none of them names the backlog, and most of them carry no number at all.
+
+**A line may only rest on a fact that will still be true when it fires.** These are
+scheduled up to a week ahead and cannot be corrected, so anything that looks backwards —
+a streak, yesterday, a recent promotion — is restricted to *today's* slots, and the days
+beyond are filled from what the schedule itself projects. A learner told they are on a
+five-day streak on their third day away has learned that the app does not know them.
+
+Two messages are never rotated away, because their whole value is the moment they arrive:
+the day the weekly challenge opens, and the evening a run of days is about to end. The
+challenge is announced twice at most — when it opens, and the next day if more than one
+sitting is waiting — never daily.
+
+Times are the learner's own wall clock. The plan is refetched on every app open and
+resume, and each refresh replaces what is pending rather than adding to it. Signing out
+cancels everything: a pending "you have 4 words ready" for an account nobody is signed
+into is a notification about somebody else's vocabulary.
 
 ### Which language the app uses (ADR-035)
 

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../core/api/api_providers.dart';
+import '../../core/api/server_revision.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
@@ -10,12 +11,12 @@ import '../../core/widgets/speaker_button.dart';
 import '../../core/theme/skill_visuals.dart';
 import '../../core/api/wordos_api.dart';
 import '../../core/widgets/app_widgets.dart';
-import 'vocabulary_screen.dart';
 
-final wordDetailProvider =
-    FutureProvider.autoDispose.family<WordDetail, String>((ref, id) {
-  return ref.watch(wordOsApiProvider).wordDetail(id);
-});
+final wordDetailProvider = FutureProvider.autoDispose
+    .family<WordDetail, String>((ref, id) {
+      refetchWhenServerChanges(ref);
+      return ref.watch(wordOsApiProvider).wordDetail(id);
+    });
 
 /// The word's full journey: five skill states with their schedules, plus the
 /// event history that the MVP needs for algorithm validation.
@@ -37,6 +38,236 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
   String get wordId => widget.wordId;
 
   bool _deleting = false;
+  bool _savingMeaning = false;
+
+  /// The meaning field, owned by this screen rather than by the dialog.
+  ///
+  /// A controller created for a dialog and disposed when it returns is disposed
+  /// while the dialog is still animating away, and the next frame reads a dead
+  /// controller and takes the app down — the same crash ADR-036 fixed in the
+  /// dashboard's custom-range dialog. Living here, it is disposed once, with
+  /// the screen.
+  final TextEditingController _meaningField = TextEditingController();
+
+  @override
+  void dispose() {
+    _meaningField.dispose();
+    super.dispose();
+  }
+
+  /// Rewrites the Arabic meaning of this word (ADR-101).
+  ///
+  /// Three answers are possible and each is a different conversation. Accepted
+  /// is a snackbar. A wording the dictionary knows belongs to *another* English
+  /// word is an offer to swap, which is not a refusal — the learner was on a
+  /// different word and the useful thing is to say which. A wording nothing
+  /// recognises is the checker's softer objection, which they may overrule
+  /// (ADR-074).
+  Future<void> _editMeaning(Word word) async {
+    final s = ref.read(stringsProvider);
+
+    final typed = await _askForMeaning(word, initial: word.meaning);
+    if (typed == null || !mounted) return;
+
+    await _saveMeaning(word, typed, s);
+  }
+
+  Future<void> _saveMeaning(
+    Word word,
+    String meaning,
+    AppStrings s, {
+    bool acceptAnyway = false,
+  }) async {
+    setState(() => _savingMeaning = true);
+    try {
+      await ref
+          .read(wordOsApiProvider)
+          .changeWordMeaning(
+            wordId: wordId,
+            meaning: meaning,
+            acceptAnyway: acceptAnyway,
+          );
+
+      if (!mounted) return;
+      setState(() => _savingMeaning = false);
+      ref.invalidate(wordDetailProvider(wordId));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(s.meaningUpdated)));
+    } on MeaningIsAnotherWordException catch (e) {
+      if (!mounted) return;
+      setState(() => _savingMeaning = false);
+      await _offerSwap(word, meaning, e, s);
+    } on MeaningRejectedException catch (e) {
+      if (!mounted) return;
+      setState(() => _savingMeaning = false);
+
+      // The checker could not name another owner for it, so this is the
+      // objection the learner is allowed to overrule.
+      final keep = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(s.meaningLooksWrong),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(e.message, textDirection: TextDirection.rtl),
+              if (e.suggestions.isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.sm),
+                Text(s.meaningSuggestions, style: context.text.labelMedium),
+                const SizedBox(height: AppSpacing.xxs),
+                Text(
+                  e.suggestions.join('، '),
+                  textDirection: TextDirection.rtl,
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text(s.cancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(s.keepMyMeaning),
+            ),
+          ],
+        ),
+      );
+
+      if (keep == true && mounted) {
+        await _saveMeaning(word, meaning, s, acceptAnyway: true);
+      }
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
+      if (!mounted) return;
+      setState(() => _savingMeaning = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(s.apiError(e.code, e.message))));
+    }
+  }
+
+  /// "That is `book`, not `create` — shall I swap them?"
+  ///
+  /// Accepting is destructive in a way deleting a word is: this word goes, and
+  /// the new one starts at Reading having been tested on nothing. Both halves
+  /// are said before the button is offered.
+  Future<void> _offerSwap(
+    Word word,
+    String meaning,
+    MeaningIsAnotherWordException rejection,
+    AppStrings s,
+  ) async {
+    final other = rejection.candidates.firstOrNull;
+    if (other == null || other.senseId == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(rejection.message)));
+      return;
+    }
+
+    final swap = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(s.meaningIsAnotherWordTitle),
+        content: Text(
+          s.meaningIsAnotherWordBody(meaning, other.text, word.text),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(s.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(s.swapForWord(other.text)),
+          ),
+        ],
+      ),
+    );
+
+    if (swap != true || !mounted) return;
+
+    setState(() => _savingMeaning = true);
+    try {
+      await ref
+          .read(wordOsApiProvider)
+          .replaceWord(
+            wordId: wordId,
+            meaning: meaning,
+            senseId: other.senseId!,
+          );
+
+      if (!mounted) return;
+      // This word no longer exists, so this screen has nothing to show. The
+      // list behind it is where the replacement is.
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(s.wordSwapped(other.text))));
+      Navigator.of(context).maybePop();
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
+      if (!mounted) return;
+      setState(() => _savingMeaning = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(s.apiError(e.code, e.message))));
+    }
+  }
+
+  /// The field itself, pre-filled with what the word means today.
+  Future<String?> _askForMeaning(Word word, {required String initial}) {
+    final s = ref.read(stringsProvider);
+    final controller = _meaningField..text = initial;
+
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(s.changeMeaningTitle),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              s.changeMeaningNote(word.text),
+              style: context.text.bodySmall?.copyWith(
+                color: context.colors.onSurface.withValues(alpha: 0.7),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              textDirection: TextDirection.rtl,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (value) =>
+                  Navigator.of(dialogContext).pop(value.trim()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(s.cancel),
+          ),
+          // Rebuilt as they type rather than with a setState per keystroke,
+          // for the same reason the session footer is (ADR-095).
+          ValueListenableBuilder(
+            valueListenable: controller,
+            builder: (_, value, _) => FilledButton(
+              onPressed: value.text.trim().isEmpty
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(value.text.trim()),
+              child: Text(s.save),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// Asks, then deletes, then leaves.
   ///
@@ -74,20 +305,17 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
       await ref.read(wordOsApiProvider).deleteWord(wordId);
       if (!mounted) return;
 
-      // The list is stale the moment this succeeds, and it is the screen the
-      // learner is about to be standing on.
-      ref.invalidate(wordsProvider);
-
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(s.deleteWordDone)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(s.deleteWordDone)));
       Navigator.of(context).maybePop();
     } catch (rawError) {
       final e = ApiException.from(rawError);
       if (!mounted) return;
       setState(() => _deleting = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(s.apiError(e.code, e.message))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(s.apiError(e.code, e.message))));
     }
   }
 
@@ -107,16 +335,15 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
               tooltip: s.deleteWord,
               icon: const Icon(Icons.delete_outline_rounded),
               color: context.palette.danger,
-              onPressed:
-                  _deleting ? null : () => _confirmDelete(data.word),
+              onPressed: _deleting ? null : () => _confirmDelete(data.word),
             ),
         ],
       ),
       body: detail.when(
         loading: () => BusyView(message: s.loading),
-        error: (e, _) => ErrorView(
-          message: s.somethingWentWrong,
-          retryLabel: s.retry,
+        error: (e, _) => ErrorView.from(
+          e,
+          s,
           onRetry: () => ref.invalidate(wordDetailProvider(wordId)),
         ),
         data: (data) {
@@ -132,10 +359,12 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
                     Row(
                       children: [
                         Expanded(
-                          child: Text(word.text,
-                              style: context.text.headlineSmall),
+                          child: Text(
+                            word.text,
+                            style: context.text.headlineSmall,
+                          ),
                         ),
-                        SpeakerButton(
+                        WordSpeakerButtons(
                           id: 'word-detail:${word.id}',
                           text: word.text,
                           size: 24,
@@ -167,19 +396,53 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
                     ),
                     const SizedBox(height: AppSpacing.xxs),
 
-                    Text(
-                      word.meaning,
-                      textDirection: TextDirection.rtl,
-                      style: context.text.titleMedium
-                          ?.copyWith(color: context.colors.primary),
+                    // The meaning, and the way to change it (ADR-101). Beside
+                    // the meaning rather than in the app bar: it is the one
+                    // thing on this screen the learner owns outright, and the
+                    // control belongs next to the thing it edits.
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            word.meaning,
+                            textDirection: TextDirection.rtl,
+                            style: context.text.titleMedium?.copyWith(
+                              color: context.colors.primary,
+                            ),
+                          ),
+                        ),
+                        if (_savingMeaning)
+                          const Padding(
+                            padding: EdgeInsets.all(AppSpacing.xs),
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.2,
+                              ),
+                            ),
+                          )
+                        else
+                          IconButton(
+                            tooltip: s.editMeaning,
+                            icon: const Icon(Icons.edit_outlined, size: 20),
+                            onPressed: _deleting
+                                ? null
+                                : () => _editMeaning(word),
+                          ),
+                      ],
                     ),
                     if (word.definitionEn.isNotEmpty) ...[
                       const SizedBox(height: AppSpacing.xs),
-                      Text(
+                      // English, laid out left-to-right so the full stop
+                      // stays at the end (see add_word_screen).
+                      EnglishText(
                         word.definitionEn,
+                        textAlign: EnglishText.interfaceStart(context),
                         style: context.text.bodySmall?.copyWith(
-                          color:
-                              context.colors.onSurface.withValues(alpha: 0.6),
+                          color: context.colors.onSurface.withValues(
+                            alpha: 0.6,
+                          ),
                         ),
                       ),
                     ],
@@ -196,8 +459,9 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
                         StatusPill(
                           label:
                               '${s.addedOn} ${dateFormat.format(word.addedAt.toLocal())}',
-                          color:
-                              context.colors.onSurface.withValues(alpha: 0.55),
+                          color: context.colors.onSurface.withValues(
+                            alpha: 0.55,
+                          ),
                         ),
                         if (word.state == WordState.active) ...[
                           const SizedBox(width: AppSpacing.xs),
@@ -306,6 +570,7 @@ class _EventRow extends ConsumerWidget {
       // Reachable only in the Owner's journey view: a learner's own detail
       // screen closes the moment they delete the word (ADR-071).
       WordEventType.deleted => s.stateLabel(WordState.deleted),
+      WordEventType.meaningChanged => s.wordEventLabel(event.type),
     };
   }
 

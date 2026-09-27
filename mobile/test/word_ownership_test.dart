@@ -55,6 +55,143 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  // ── Rewriting a meaning (ADR-101) ──────────────────────────────────────
+
+  /// Adds `book = كتاب` and returns it — a word with a second sense in the
+  /// dictionary, which is what "another wording of the same word" needs.
+  Future<(MockWordOsApi, Word)> apiWithBook() async {
+    final api = await signedInApi();
+    final candidates = await api.lookupWord('book');
+    final sense = candidates.firstWhere((c) => c.meaning == 'كتاب');
+    return (api, await api.addWord(sense));
+  }
+
+  test('another wording of the same word is simply accepted', () async {
+    final (api, book) = await apiWithBook();
+
+    final changed = await api.changeWordMeaning(
+      wordId: book.id,
+      meaning: 'يحجز',
+    );
+
+    expect(changed.text, 'book');
+    expect(changed.meaning, 'يحجز');
+    // The English definition follows the meaning: leaving the old one behind
+    // would describe the meaning the learner has just rejected.
+    expect(changed.definitionEn, contains('arrange'));
+  });
+
+  test('changing the meaning costs the learner nothing', () async {
+    final (api, book) = await apiWithBook();
+
+    final before = await api.wordDetail(book.id);
+    await api.changeWordMeaning(wordId: book.id, meaning: 'يحجز');
+    final after = await api.wordDetail(book.id);
+
+    // Same word, same queue, same position — the whole promise the feature
+    // makes. A word that must start again does so by being replaced.
+    expect(after.word.state, before.word.state);
+    expect(after.word.currentSkill, before.word.currentSkill);
+    expect(after.word.addedAt, before.word.addedAt);
+    for (final skill in SkillType.values) {
+      expect(
+        after.word.skillState(skill).status,
+        before.word.skillState(skill).status,
+        reason: '$skill moved',
+      );
+      expect(
+        after.word.skillState(skill).attempts,
+        before.word.skillState(skill).attempts,
+        reason: '$skill attempts moved',
+      );
+    }
+  });
+
+  test('a meaning that belongs to another word is refused by name', () async {
+    final (api, book) = await apiWithBook();
+
+    // `يُحقّق` is `achieve`. The learner is not wrong — they are on a
+    // different word, and the useful answer names it.
+    await expectLater(
+      api.changeWordMeaning(wordId: book.id, meaning: 'يُحقّق'),
+      throwsA(
+        isA<MeaningIsAnotherWordException>().having(
+          (e) => e.candidates.first.text,
+          'the word it does belong to',
+          'achieve',
+        ),
+      ),
+    );
+
+    final unchanged = await api.wordDetail(book.id);
+    expect(unchanged.word.meaning, 'كتاب');
+  });
+
+  test('insisting cannot turn one word into another', () async {
+    final (api, book) = await apiWithBook();
+
+    // The override exists for a checker that could not recognise a wording
+    // (ADR-074). It has no business here: the dictionary knows whose meaning
+    // this is.
+    await expectLater(
+      api.changeWordMeaning(
+        wordId: book.id,
+        meaning: 'يُحقّق',
+        acceptAnyway: true,
+      ),
+      throwsA(isA<MeaningIsAnotherWordException>()),
+    );
+  });
+
+  test('swapping for the other word starts that one from nothing', () async {
+    final (api, book) = await apiWithBook();
+
+    final rejection = await api
+        .changeWordMeaning(wordId: book.id, meaning: 'يُحقّق')
+        .then<MeaningIsAnotherWordException?>((_) => null)
+        .catchError((Object e) => e as MeaningIsAnotherWordException);
+
+    final replacement = await api.replaceWord(
+      wordId: book.id,
+      meaning: 'يُحقّق',
+      senseId: rejection!.candidates.first.senseId!,
+    );
+
+    expect(replacement.text, 'achieve');
+    expect(replacement.currentSkill, SkillType.reading);
+    expect(
+      replacement.skills.every(
+        (skill) => skill.attempts == 0
+            && skill.status != SkillStatus.passed,
+      ),
+      isTrue,
+      reason: 'a different word has been tested on nothing',
+    );
+
+    // One of them, never both: the learner agreed to a swap.
+    final list = await api.words();
+    expect(list.items.map((w) => w.id), isNot(contains(book.id)));
+    expect(list.items.map((w) => w.text), contains('achieve'));
+  });
+
+  testWidgets('the meaning is edited from the word\'s own screen',
+      (tester) async {
+    await openMyWords(tester);
+
+    await tester.tap(find.byType(WordTile).first);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.edit_outlined));
+    await tester.pumpAndSettle();
+
+    // The rule is said before the field, not discovered by being refused.
+    expect(find.text('What does this word mean?'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('What does this word mean?'), findsNothing);
+  });
+
   // ── Deleting (ADR-071) ─────────────────────────────────────────────────
 
   /// How many words the list says the learner has.

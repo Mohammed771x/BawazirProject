@@ -85,21 +85,37 @@ void main() {
     // was closed — the phone has no pipeline to count against.
     final (container, scheduler, _) = await signedIn();
     final reminders = await container.read(wordOsApiProvider).dailyReminders();
-    final due = reminders.firstWhere(
-      (r) => r.kind == ReminderKind.wordsDue,
-      orElse: () => reminders.first,
-    );
 
     await container.read(reminderControllerProvider).refresh();
 
-    if (due.kind == ReminderKind.wordsDue) {
+    // Most lines carry no number at all now (ADR-090) — a reminder that states
+    // the count every time becomes a digit the learner reads instead of a
+    // sentence. Where one *does* carry a number, it is the server's.
+    const carriesANumber = {
+      ReminderMessage.wordsDueCount,
+      ReminderMessage.wordsDueAlmostActive,
+      ReminderMessage.nothingDueActiveCount,
+      ReminderMessage.wordsDueStreak,
+      ReminderMessage.wordsDueStreakAtRisk,
+    };
+
+    var checked = 0;
+    for (final reminder in reminders) {
+      if (!carriesANumber.contains(reminder.message)) continue;
+      if (reminder.count <= 1) continue; // "one word" is spelled, not shown
+
+      checked++;
       expect(
-        scheduler.scheduled.any((n) => n.body.contains('${due.count}')),
+        scheduler.scheduled.any((n) => n.body.contains('${reminder.count}')),
         isTrue,
         reason: 'the number in the notification is the server\'s, not a '
             'number this app worked out',
       );
     }
+
+    expect(checked, greaterThan(0),
+        reason: 'a week of reminders should include at least one that counts '
+            'something — otherwise this test asserts nothing');
   });
 
   test('morning and evening are told apart', () async {
@@ -240,6 +256,7 @@ void main() {
       'minute': 0,
       'kind': 'WORDS_DUE',
       'count': 4,
+      'message': 'WORDS_DUE_STREAK',
     };
 
     final reminder = DailyReminder.fromJson(json);
@@ -247,8 +264,72 @@ void main() {
     expect(reminder.slot, ReminderSlot.evening);
     expect(reminder.kind, ReminderKind.wordsDue);
     expect(reminder.count, 4);
+    expect(reminder.message, ReminderMessage.wordsDueStreak);
     expect(reminder.localTime, DateTime(2026, 9, 17, 20));
     expect(reminder.toJson(), json);
+  });
+
+  test('a reminder from a server that has never heard of the catalogue', () {
+    // The fallback that lets this ship. `message` is the newer field, and a
+    // build talking to an older server — or a newer server naming a line this
+    // build has never met — must still say something true rather than nothing.
+    for (final value in [null, 'SOMETHING_NEWER']) {
+      final reminder = DailyReminder.fromJson({
+        'slot': 'MORNING',
+        'date': '2026-09-17',
+        'hour': 8,
+        'minute': 0,
+        'kind': 'WORDS_DUE',
+        'count': 4,
+        'message': ?value,
+      });
+
+      expect(reminder.message, isNull);
+
+      const strings = AppStrings(Locale('en'));
+      expect(
+        strings.reminderBody(reminder.message, reminder.kind, reminder.count),
+        strings.reminderWordsDue(4),
+        reason: 'it falls back on the kind, which is always true',
+      );
+    }
+  });
+
+  test('every line in the catalogue says something, in both languages', () {
+    // Twenty messages, two languages. A key that fell through the switch would
+    // render as an empty notification — which is not a bug anybody reports,
+    // because the learner simply sees nothing arrive.
+    for (final locale in [const Locale('en'), const Locale('ar')]) {
+      final strings = AppStrings(locale);
+
+      for (final message in ReminderMessage.values) {
+        for (final count in [0, 1, 4]) {
+          final body =
+              strings.reminderBody(message, ReminderKind.wordsDue, count);
+
+          expect(body.trim(), isNotEmpty,
+              reason: '$message says nothing at count=$count in $locale');
+          expect(body, isNot(contains(r'$')),
+              reason: '$message has an unsubstituted placeholder in it');
+        }
+      }
+    }
+  });
+
+  test('the challenge lines never carry a number', () {
+    // By instruction: how many words ripened this week is the product's
+    // bookkeeping, and a count would make a quiet week look like a failure.
+    for (final locale in [const Locale('en'), const Locale('ar')]) {
+      final strings = AppStrings(locale);
+
+      for (final message in [
+        ReminderMessage.reviewReady,
+        ReminderMessage.reviewMoreWaiting,
+      ]) {
+        final body = strings.reminderBody(message, ReminderKind.wordsDue, 63);
+        expect(body, isNot(contains('63')));
+      }
+    }
   });
 
   test('an unknown kind is read as the harmless one', () {

@@ -218,19 +218,20 @@ public class PlacementApiTests(PostgresFixture db) : IAsyncLifetime
     // ── A full run ───────────────────────────────────────────────────────────
 
     [SkippableFact]
-    public async Task A_full_run_asks_between_12_and_22_questions_and_places_the_learner()
+    public async Task A_full_run_asks_eight_questions_and_places_the_learner()
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);
         var userId = await SignInAsync();
 
         var (result, asked) = await PlayAsync(_ => true);
 
-        Assert.InRange(asked, 12, 22);
+        // Three Reading, three Listening, one Speaking, one Writing (ADR-098).
+        Assert.Equal(8, asked);
 
         var levels = result.GetProperty("levels").EnumerateArray().ToList();
 
-        // Four, not five: Spelling is measured but is not a primary skill the
-        // learner is shown (§13, §21).
+        // Four. Spelling is not among them and is no longer asked about at all
+        // (§13, §21, ADR-098).
         Assert.Equal(4, levels.Count);
         Assert.DoesNotContain(levels,
             l => l.GetProperty("skill").GetString() == "SPELLING");
@@ -324,28 +325,31 @@ public class PlacementApiTests(PostgresFixture db) : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Spelling_is_measured_but_never_levelled()
+    public async Task Spelling_is_no_longer_asked_about_but_still_starts_a_learner_off()
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);
         var userId = await SignInAsync();
 
         var (result, _) = await PlayAsync(_ => true);
 
-        // Measured, stored, and used — but never presented as a fifth level.
+        // Never presented as a fifth level, and since ADR-098 not measured
+        // either — the four questions only ever chose between letter tiles and
+        // free typing, which the first real spelling session settles.
         Assert.DoesNotContain(result.GetProperty("levels").EnumerateArray(),
             l => l.GetProperty("skill").GetString() == "SPELLING");
 
         var diagnostic = result.GetProperty("spelling");
-        Assert.True(diagnostic.GetProperty("itemsAnswered").GetInt32() > 0);
-        Assert.Equal("FREE_TYPING", diagnostic.GetProperty("supportMode").GetString());
+        Assert.Equal(0, diagnostic.GetProperty("itemsAnswered").GetInt32());
+        Assert.Equal("LETTER_TILES", diagnostic.GetProperty("supportMode").GetString());
 
-        // And it stays null in the database, not a sentinel A1.
+        // The row is still written. A null support mode downstream reads as
+        // "not placed yet", which this learner is not.
         await using var context = db.CreateContext();
         var level = await context.SkillLevels.SingleAsync(
             l => l.UserId == userId && l.Skill == SkillType.Spelling);
 
         Assert.Null(level.SystemAssessedLevel);
-        Assert.Equal(SpellingInputMode.FreeTyping, level.SpellingSupportMode);
+        Assert.Equal(SpellingInputMode.LetterTiles, level.SpellingSupportMode);
     }
 
     [SkippableFact]
@@ -398,7 +402,9 @@ public class PlacementApiTests(PostgresFixture db) : IAsyncLifetime
         var changes = await context.LevelChanges
             .Where(c => c.UserId == userId).ToListAsync();
 
-        Assert.Equal(5, changes.Count);
+        // Four, not five: Spelling no longer takes part in the test, so there
+        // is no placement to record for it (ADR-098).
+        Assert.Equal(4, changes.Count);
         Assert.All(changes,
             c => Assert.Equal(LevelChangeType.Placement, c.ChangeType));
     }

@@ -299,8 +299,11 @@ class PublicConfig {
       SkillType.reading,
       SkillType.listening,
       SkillType.speaking,
-      SkillType.writing,
+      // Spelling before Writing (ADR-087): Writing is the one skill that asks
+      // for the written word unaided, so it comes after the spelling of it is
+      // no longer in question.
       SkillType.spelling,
+      SkillType.writing,
     ],
     weeklyReviewPeriodDays: 7,
   );

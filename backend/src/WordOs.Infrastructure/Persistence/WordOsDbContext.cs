@@ -22,9 +22,22 @@ namespace WordOs.Infrastructure.Persistence;
 /// Everything goes through parameterised queries; there is no raw SQL built
 /// from user input anywhere in this project.
 /// </remarks>
-public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
+public class WordOsDbContext(
+    DbContextOptions<WordOsDbContext> options,
+    WordOsConfiguration? configuration = null)
     : DbContext(options)
 {
+    /// <summary>
+    /// Which dictionary a **search** reads (ADR-096).
+    /// </summary>
+    /// <remarks>
+    /// Optional so that design-time tooling and the tests, which build a
+    /// context from options alone, keep working; they get the first edition,
+    /// which is the same answer the service gives until the setting is moved.
+    /// </remarks>
+    private string ActiveEdition =>
+        configuration?.LexiconEdition ?? LexiconEditions.OewnAwn;
+
     public DbSet<User> Users => Set<User>();
 
     public DbSet<UserInterest> UserInterests => Set<UserInterest>();
@@ -51,6 +64,29 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
     public DbSet<WordEvent> WordEvents => Set<WordEvent>();
 
     public DbSet<LexiconEntry> LexiconEntries => Set<LexiconEntry>();
+
+    /// <summary>
+    /// The dictionary a learner searches — the active edition only.
+    /// </summary>
+    /// <remarks>
+    /// Two editions share the table (ADR-096), and which query wants which is
+    /// not a detail to be remembered at each call site, so the distinction has
+    /// a name:
+    ///
+    /// <list type="bullet">
+    /// <item><see cref="ActiveLexicon"/> — <b>discovery</b>. Looking a word up,
+    /// searching by its Arabic meaning, defining a word tapped in a passage.
+    /// These decide what a learner may add, so they must read one dictionary
+    /// and not two.</item>
+    /// <item><see cref="LexiconEntries"/> — <b>resolution</b>. Reading the row
+    /// behind a word a learner already owns, by its sense id or lemma. These
+    /// are deliberately edition-blind: a word added last month must still
+    /// resolve after the setting moves, or switching dictionary would quietly
+    /// break vocabularies that were built under the other one.</item>
+    /// </list>
+    /// </remarks>
+    public IQueryable<LexiconEntry> ActiveLexicon =>
+        LexiconEntries.Where(l => l.Edition == ActiveEdition);
 
     public DbSet<PlacementSession> PlacementSessions => Set<PlacementSession>();
 
@@ -464,6 +500,15 @@ public class WordOsDbContext(DbContextOptions<WordOsDbContext> options)
             e.Property(x => x.MeaningArNormalized).HasMaxLength(512).IsRequired();
             e.Property(x => x.CefrLevel).HasConversion<string?>().HasMaxLength(8);
             e.Property(x => x.SourceFlags).HasMaxLength(128);
+
+            // Two dictionaries share this table (ADR-096). Every read filters
+            // on the active edition, so the column is part of every index that
+            // serves a lookup — without it the second edition doubles the rows
+            // each prefix scan walks.
+            e.Property(x => x.Edition).HasMaxLength(32).IsRequired()
+                .HasDefaultValue(LexiconEditions.OewnAwn);
+            e.HasIndex(x => new { x.Edition, x.TextNormalized })
+                .HasDatabaseName("IX_lexicon_Edition_TextNormalized");
 
             // Prefix autocomplete: `bo` → `book`. text_pattern_ops makes
             // LIKE 'bo%' an index scan rather than a sequential scan.

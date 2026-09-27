@@ -67,13 +67,20 @@ void main() {
               .submitAnswer(user, session.id, item.id, item.options.first)
               .progress;
         case SessionItemType.targetWord:
-          final wrong = item.options.firstWhere((o) => o != word!.meaning);
+          // From the engine, not from the word: above A2+ the correct option is
+          // an English definition rather than the Arabic meaning (ADR-088), and
+          // a harness that assumed otherwise would report a broken pipeline
+          // when what it had was a stale assumption.
+          final right =
+              engine.correctAnswerFor(user, session.id, item.id) ??
+                  word!.meaning;
+          final wrong = item.options.firstWhere((o) => o != right);
           progress = engine
               .submitAnswer(
                 user,
                 session.id,
                 item.id,
-                shouldFail ? wrong : word!.meaning,
+                shouldFail ? wrong : right,
               )
               .progress;
         case SessionItemType.spellingTask:
@@ -196,6 +203,50 @@ void main() {
     expect(engine.hub(user).vocabulary.active, 1);
   });
 
+  test('spelling comes before writing, and writing is last', () {
+    // ADR-087. Writing is the only skill that asks the learner to produce the
+    // written word unaided, so asking for it before Spelling has been
+    // demonstrated marks two things at once — and the one the learner is
+    // failing is not the one being measured.
+    expect(MockEngine.configuration.skillsOrder, const [
+      SkillType.reading,
+      SkillType.listening,
+      SkillType.speaking,
+      SkillType.spelling,
+      SkillType.writing,
+    ]);
+  });
+
+  test('a word that is already in flight does not skip the skill it has left',
+      () {
+    // The order is configuration and it has changed once. A word standing on
+    // the *old* last skill when that happens must not mature on passing it —
+    // it still owes the skill the new order put at the end. The mock advances
+    // by "what has this word not passed", never by position (ADR-087).
+    final added = engine.addWord(user, candidate('research'));
+
+    for (final skill in [
+      SkillType.reading,
+      SkillType.listening,
+      SkillType.speaking,
+      SkillType.spelling,
+    ]) {
+      playSession(skill);
+      engine.advanceClock(const Duration(days: interval));
+    }
+
+    // Standing on the last skill of the order with one still to go.
+    expect(reload(added.id).currentSkill, SkillType.writing);
+
+    playSession(SkillType.writing);
+    final word = reload(added.id);
+
+    expect(word.state, WordState.active,
+        reason: 'nothing is left owing, so it matures');
+    expect(word.skills.every((s) => s.status == SkillStatus.passed), isTrue,
+        reason: 'and no skill was walked past on the way');
+  });
+
   test('a session never exceeds the per-skill daily target', () {
     // Eight *distinct* words: the same word with the same meaning cannot be
     // added twice (see vocabulary_test.dart).
@@ -237,6 +288,18 @@ void main() {
     final a = engine.addWord(user, candidate('research'));
     engine.addWord(user, candidate('reliable'));
     playSession(SkillType.reading);
+
+    // A word is not reviewable the day it is added (ADR-089): the challenge
+    // asks what the learner retained, and a word tested the same evening is
+    // still in mind.
+    engine.advanceClock(
+      const Duration(days: MockEngine.reviewMaturityDays),
+    );
+
+    // Snapshotted *after* the clock moves, so what this test compares is the
+    // review's effect and not the week's. Listening becomes available in that
+    // week whatever anybody does, and attributing that to the review would
+    // make this fail for the one reason it is not looking for.
     final before = reload(a.id);
 
     final review = engine.startWeeklyReview(user);

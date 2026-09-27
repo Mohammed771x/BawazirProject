@@ -445,6 +445,17 @@ class _FakeTts implements SpeechProvider {
   @override
   set onComplete(VoidCallback? callback) => _onComplete = callback;
 
+  /// Word-by-word progress, which a fake voice reports only when a test asks
+  /// it to — see [speakWord] where one does.
+  @override
+  set onWordBoundary(void Function(int start)? callback) =>
+      _onWordBoundary = callback;
+
+  void Function(int start)? _onWordBoundary;
+
+  /// Pretends the engine reached a word at [offset] in the current utterance.
+  void speakWord(int offset) => _onWordBoundary?.call(offset);
+
   @override
   Future<void> initialise() async {}
 

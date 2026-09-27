@@ -33,6 +33,18 @@ OCTANOVE_URL="https://raw.githubusercontent.com/openlanguageprofiles/olp-en-cefr
 AWN_REF="main"
 AWN_URL="https://raw.githubusercontent.com/Salah-Sal/arabic-wordnet-v4/${AWN_REF}/output/awn4.xml.gz"
 
+# ── The second edition (ADR-096) ─────────────────────────────────────────────
+# Wiktionary in both languages: the English export carries the senses, their
+# definitions, examples and the Arabic gloss filed under each one; the Arabic
+# export carries the verb paradigms, which is where `يبيع` comes from.
+WIKT_EN_URL="https://kaikki.org/dictionary/English/kaikki.org-dictionary-English.jsonl"
+WIKT_AR_URL="https://kaikki.org/dictionary/Arabic/kaikki.org-dictionary-Arabic.jsonl"
+
+# Measured word frequency, which the first edition had none of — the reason its
+# ranking was invented and `go` led with "pass from physical life".
+FREQ_REF="master"
+FREQ_URL="https://raw.githubusercontent.com/hermitdave/FrequencyWords/${FREQ_REF}/content/2018/en/en_50k.txt"
+
 log() { printf '  %s\n' "$*"; }
 
 fetch() {
@@ -46,12 +58,55 @@ fetch() {
   mv "$out.part" "$out"
 }
 
+# Resumable, for the files measured in gigabytes.
+#
+# Plain `--max-time` is the wrong tool for these: when the machine's network
+# changes under a transfer — a cable plugged in, Wi-Fi handed over — curl sits
+# on a socket that will never deliver another byte, and from the outside that is
+# indistinguishable from a slow server. It waited out the whole timeout once.
+#
+# `--speed-limit/--speed-time` turns a stall into an error in 30 seconds, `-C -`
+# resumes from the byte already on disk, and the loop repeats until the file is
+# whole. Nothing already downloaded is thrown away.
+fetch_big() {
+  local url="$1" out="$2" label="$3"
+  if [[ -f "$out" && $FORCE -eq 0 ]]; then
+    log "cached   $(basename "$out")"
+    return
+  fi
+
+  local attempt=0
+  while true; do
+    attempt=$((attempt + 1))
+    local have=0
+    [[ -f "$out.part" ]] && have=$(stat -f%z "$out.part" 2>/dev/null || echo 0)
+    log "download $label  attempt $attempt, have $((have / 1048576)) MB"
+
+    if curl -sSL -C - \
+            --speed-limit 20000 --speed-time 30 \
+            --connect-timeout 20 --max-time 7200 \
+            "$url" -o "$out.part"; then
+      mv "$out.part" "$out"
+      log "done     $label  $(( $(stat -f%z "$out") / 1048576 )) MB"
+      return
+    fi
+
+    log "stalled  $label — resuming in 5s"
+    sleep 5
+  done
+}
+
 echo "Downloading lexicon sources into $DATA_DIR"
 
 fetch "$CEFRJ_URL"    "$DATA_DIR/cefrj.csv"
 fetch "$OCTANOVE_URL" "$DATA_DIR/octanove-c1c2.csv"
 fetch "$OEWN_URL"     "$DATA_DIR/oewn.zip"
 fetch "$AWN_URL"      "$DATA_DIR/awn4.xml.gz"
+fetch "$FREQ_URL"     "$DATA_DIR/freq-en-50k.txt"
+
+# 3.5 GB between them, so they resume rather than restart.
+fetch_big "$WIKT_AR_URL" "$DATA_DIR/wiktionary-ar.jsonl" "wiktionary-ar.jsonl"
+fetch_big "$WIKT_EN_URL" "$DATA_DIR/wiktionary-en.jsonl" "wiktionary-en.jsonl"
 
 # ── Unpack ───────────────────────────────────────────────────────────────────
 # The JSON release is split across ~73 files: entries-<letter>.json map words to
@@ -113,6 +168,35 @@ cat > "$DATA_DIR/MANIFEST.json" <<JSON
       "sha256": "$(sha "$DATA_DIR/awn4.xml")",
       "licence": "CC BY (derived from Open English WordNet)",
       "note": "Portions machine-translated upstream; approved as a lexical source. Recorded per row in SourceFlags so it stays auditable (ADR-012)."
+    },
+    {
+      "id": "wiktionary-en",
+      "name": "English Wiktionary (wiktextract / kaikki.org)",
+      "version": "$(date -u +%Y-%m)",
+      "url": "${WIKT_EN_URL}",
+      "file": "wiktionary-en.jsonl",
+      "sha256": "$(sha "$DATA_DIR/wiktionary-en.jsonl")",
+      "licence": "CC BY-SA 4.0 (Wiktionary). Attribution required; see ADR-096.",
+      "note": "Not pinned to a version — kaikki publishes one current export. The SHA-256 is what makes a build reproducible here."
+    },
+    {
+      "id": "wiktionary-ar",
+      "name": "Arabic Wiktionary (wiktextract / kaikki.org)",
+      "version": "$(date -u +%Y-%m)",
+      "url": "${WIKT_AR_URL}",
+      "file": "wiktionary-ar.jsonl",
+      "sha256": "$(sha "$DATA_DIR/wiktionary-ar.jsonl")",
+      "licence": "CC BY-SA 4.0 (Wiktionary). Attribution required; see ADR-096.",
+      "note": "Supplies the verb paradigm: non-past, verbal noun, participle."
+    },
+    {
+      "id": "frequency",
+      "name": "FrequencyWords (OpenSubtitles 2018, English top 50k)",
+      "version": "2018",
+      "url": "${FREQ_URL}",
+      "file": "freq-en-50k.txt",
+      "sha256": "$(sha "$DATA_DIR/freq-en-50k.txt")",
+      "licence": "MIT"
     }
   ]
 }

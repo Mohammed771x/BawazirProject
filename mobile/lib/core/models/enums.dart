@@ -194,7 +194,10 @@ enum SpellingClueKind {
 enum SessionPromptKey {
   writeTheWord('WRITE_THE_WORD'),
   writeASentence('WRITE_A_SENTENCE'),
-  writeASentenceAboutYourself('WRITE_A_SENTENCE_ABOUT_YOURSELF');
+  writeASentenceAboutYourself('WRITE_A_SENTENCE_ABOUT_YOURSELF'),
+
+  /// Listening's word question, which may not name the word (ADR-085).
+  listeningWordMeaning('LISTENING_WORD_MEANING');
 
   const SessionPromptKey(this.wire);
 
@@ -275,7 +278,11 @@ enum WordEventType {
 
   /// The learner removed the word (ADR-071). Seen in the Owner's journey view,
   /// where it is usually the last thing that happened to a word.
-  deleted('DELETED');
+  deleted('DELETED'),
+
+  /// The learner rewrote the Arabic meaning, keeping the same English word and
+  /// the same journey (ADR-101).
+  meaningChanged('MEANING_CHANGED');
 
   const WordEventType(this.wire);
 

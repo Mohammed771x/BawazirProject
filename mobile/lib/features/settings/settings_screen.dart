@@ -16,7 +16,6 @@ import '../../core/theme/app_tokens.dart';
 import '../../core/theme/skill_visuals.dart';
 import '../../core/widgets/app_widgets.dart';
 import '../auth/session_controller.dart';
-import '../hub/hub_screen.dart';
 import '../onboarding/interests_editor.dart';
 import '../onboarding/interests_screen.dart';
 
@@ -211,7 +210,6 @@ class _SkillLevelCardState extends ConsumerState<_SkillLevelCard> {
             level: level,
           );
       await ref.read(sessionProvider.notifier).refresh();
-      ref.invalidate(hubProvider);
     } catch (rawError) {
       final e = ApiException.from(rawError);
       if (mounted) {
@@ -297,7 +295,6 @@ class _DailyTargetCardState extends ConsumerState<_DailyTargetCard> {
             target: _value.round(),
           );
       await ref.read(sessionProvider.notifier).refresh();
-      ref.invalidate(hubProvider);
     } catch (rawError) {
       final e = ApiException.from(rawError);
       if (mounted) {

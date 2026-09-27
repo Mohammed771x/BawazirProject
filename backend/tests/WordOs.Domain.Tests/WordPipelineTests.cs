@@ -147,16 +147,82 @@ public class WordPipelineTests
     }
 
     [Fact]
-    public void Skill_order_follows_configuration_Speaking_then_Writing()
+    public void Skill_order_follows_configuration_Spelling_then_Writing()
     {
-        // ADR-001, confirmed by the product owner on 2026-08-15.
+        // ADR-001, confirmed 2026-08-15; Writing moved behind Spelling by the
+        // product owner on 2026-09-17 (ADR-087). Writing is last because it is
+        // the one skill that asks for the written word unaided, and marking
+        // that before Spelling has been demonstrated marks two things at once.
         Assert.Equal(
             new[]
             {
                 SkillType.Reading, SkillType.Listening, SkillType.Speaking,
-                SkillType.Writing, SkillType.Spelling,
+                SkillType.Spelling, SkillType.Writing,
             },
             Config.SkillsOrder);
+    }
+
+    [Fact]
+    public void A_word_in_flight_when_the_order_changes_still_owes_every_skill()
+    {
+        // The migration hazard, pinned. This word was added under the old order
+        // and had reached Writing — the old last skill — when the order
+        // changed. Advancing by position would look up "what comes after
+        // Writing", find nothing, and mature it: a word that never spelled.
+        var old = Config with
+        {
+            SkillsOrder =
+            [
+                SkillType.Reading, SkillType.Listening, SkillType.Speaking,
+                SkillType.Writing, SkillType.Spelling,
+            ],
+        };
+
+        var word = Word.Add(
+            Guid.NewGuid(), "sense-1", "plough", "محراث", "a farm tool",
+            "noun", CefrLevel.B1, old, T0);
+
+        var at = T0;
+        foreach (var skill in new[]
+                 {
+                     SkillType.Reading, SkillType.Listening, SkillType.Speaking,
+                 })
+        {
+            word.ApplySessionResult(skill, true, old, at);
+            at = at.AddDays(old.SkillIntervalDays);
+        }
+
+        Assert.Equal(SkillType.Writing, word.CurrentSkill);
+
+        // The order changes underneath it, and it passes the skill it was
+        // already standing on.
+        var outcome = word.ApplySessionResult(SkillType.Writing, true, Config, at);
+
+        Assert.False(outcome.BecameActive);
+        Assert.Equal(SkillType.Spelling, outcome.NextSkill);
+        Assert.Equal(WordState.Learning, word.State);
+        Assert.Equal(
+            SkillStatus.Pending,
+            word.SkillState(SkillType.Spelling).Status);
+    }
+
+    [Fact]
+    public void A_word_that_has_passed_every_skill_matures_whatever_the_order()
+    {
+        var word = AddWord();
+        var at = T0;
+
+        // Deliberately not in pipeline order: what matures a word is owing
+        // nothing, not arriving at a particular index.
+        foreach (var skill in Config.SkillsOrder)
+        {
+            word.ApplySessionResult(word.CurrentSkill!.Value, true, Config, at);
+            at = at.AddDays(Config.SkillIntervalDays);
+            _ = skill;
+        }
+
+        Assert.Equal(WordState.Active, word.State);
+        Assert.All(word.Skills, s => Assert.Equal(SkillStatus.Passed, s.Status));
     }
 
     [Fact]

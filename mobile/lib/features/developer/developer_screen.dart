@@ -9,7 +9,7 @@ import 'package:intl/intl.dart';
 
 import '../../app/router.dart';
 import '../../core/api/api_providers.dart';
-import '../../core/api/wordos_api.dart';
+import '../../core/api/server_revision.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
@@ -29,17 +29,21 @@ final adminWindowProvider = StateProvider<int?>((ref) => null);
 /// What the Owner has typed into the learner search.
 final adminSearchProvider = StateProvider<String>((ref) => '');
 
-final adminOverviewProvider = FutureProvider.autoDispose<AdminOverview>(
-  (ref) => ref
+final adminOverviewProvider = FutureProvider.autoDispose<AdminOverview>((ref) {
+  refetchWhenServerChanges(ref);
+  return ref
       .watch(wordOsApiProvider)
-      .adminOverview(days: ref.watch(adminWindowProvider)),
-);
+      .adminOverview(days: ref.watch(adminWindowProvider));
+});
 
 final adminUsersProvider = FutureProvider.autoDispose<AdminUserPage>(
-  (ref) => ref.watch(wordOsApiProvider).adminUsers(
-        query: ref.watch(adminSearchProvider),
-        days: ref.watch(adminWindowProvider),
-      ),
+  (ref) {
+    refetchWhenServerChanges(ref);
+    return ref.watch(wordOsApiProvider).adminUsers(
+          query: ref.watch(adminSearchProvider),
+          days: ref.watch(adminWindowProvider),
+        );
+  },
 );
 
 /// What learners have written to the Owner (ADR-053).
@@ -47,7 +51,10 @@ final adminUsersProvider = FutureProvider.autoDispose<AdminUserPage>(
 /// Unfiltered: unread first, newest first, which is the order the screen exists
 /// to show. A filter would hide the thing the tab is for.
 final adminFeedbackProvider = FutureProvider.autoDispose<FeedbackPage>(
-  (ref) => ref.watch(wordOsApiProvider).adminFeedback(),
+  (ref) {
+    refetchWhenServerChanges(ref);
+    return ref.watch(wordOsApiProvider).adminFeedback();
+  },
 );
 
 /// The Owner area: **not** part of the learner's Settings and not reachable by
@@ -254,10 +261,9 @@ class _OverviewTab extends ConsumerWidget {
 
     return overview.when(
       loading: () => BusyView(message: s.loading),
-      error: (e, _) => ErrorView(
-        message: s.apiError(
-              ApiException.from(e).code, ApiException.from(e).message),
-        retryLabel: s.retry,
+      error: (e, _) => ErrorView.from(
+        e,
+        s,
         onRetry: () => ref.invalidate(adminOverviewProvider),
       ),
       data: (data) => ListView(
@@ -485,10 +491,9 @@ class _UsersTabState extends ConsumerState<_UsersTab> {
   Widget _list(AppStrings s, AsyncValue<AdminUserPage> users) {
     return users.when(
       loading: () => BusyView(message: s.loading),
-      error: (e, _) => ErrorView(
-        message: s.apiError(
-              ApiException.from(e).code, ApiException.from(e).message),
-        retryLabel: s.retry,
+      error: (e, _) => ErrorView.from(
+        e,
+        s,
         onRetry: () => ref.invalidate(adminUsersProvider),
       ),
       data: (page) {
@@ -692,10 +697,9 @@ class _FeedbackTab extends ConsumerWidget {
 
     return feedback.when(
       loading: () => BusyView(message: s.loading),
-      error: (e, _) => ErrorView(
-        message: s.apiError(
-              ApiException.from(e).code, ApiException.from(e).message),
-        retryLabel: s.retry,
+      error: (e, _) => ErrorView.from(
+        e,
+        s,
         onRetry: () => ref.invalidate(adminFeedbackProvider),
       ),
       data: (page) {

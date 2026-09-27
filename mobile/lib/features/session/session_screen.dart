@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_providers.dart';
 import '../../core/api/wordos_api.dart';
-import '../../core/audio/speech_provider.dart';
 import '../../core/audio/speech_recognition_service.dart';
 import '../../core/audio/speech_service.dart';
 import '../../core/l10n/app_strings.dart';
@@ -15,7 +14,7 @@ import '../../core/theme/skill_visuals.dart';
 import '../../core/widgets/app_widgets.dart';
 import '../../core/widgets/speaker_button.dart';
 import '../auth/session_controller.dart';
-import '../hub/hub_screen.dart';
+import 'clip_playback.dart';
 import 'session_widgets.dart';
 import 'word_lookup_sheet.dart';
 
@@ -86,6 +85,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   WritingEvaluation? _lastWriting;
   SessionProgress? _progress;
   String? _selectedOption;
+
   /// How many rungs of the spelling hint ladder the learner has asked for.
   /// Zero means only the clue the task opened with (Part 2 §38–§40).
   int _hintStep = 0;
@@ -160,6 +160,29 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   bool get _twoStepAnswer =>
       widget.skill == SkillType.reading || widget.skill == SkillType.listening;
 
+  /// Whether this question ends in an explicit "check", or whether the foot of
+  /// the screen goes straight to "next".
+  ///
+  /// Spelling keeps its own control: with letter tiles it sits in the same row
+  /// as undo and clear, and it belongs beside the tiles it commits.
+  bool _hasCheckStep(SessionItem item) =>
+      _twoStepAnswer || item.type == SessionItemType.writingTask;
+
+  /// What "check" does for this question, or null while there is nothing yet
+  /// to check — an unchosen option, or an empty box.
+  VoidCallback? _checkAction(SessionItem item) {
+    if (_busy || _answered) return null;
+
+    if (item.type == SessionItemType.writingTask) {
+      // `_submitWriting` refuses an empty sentence anyway; refusing it here as
+      // well is what stops the button looking pressable when it is not.
+      return _freeText.text.trim().isEmpty ? null : () => _submitWriting(item);
+    }
+
+    final chosen = _selectedOption;
+    return chosen == null ? null : () => _answer(item, chosen);
+  }
+
   SessionItem? get _currentItem {
     final session = _session;
     final id = _currentItemId;
@@ -185,9 +208,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   /// for this session — a comprehension question and its options — arrives as
   /// text and is shown exactly as it is, because that text is the English the
   /// learner is here to read (ADR-035).
-  String _instruction(AppStrings s, SessionItem item) => item.promptKey == null
-      ? item.prompt
-      : s.sessionPrompt(item.promptKey, _targetTextFor(item) ?? '');
+  ///
+  /// Which language it is said in is the *session's* answer, not the app's: a
+  /// Writing task from B1 up is set in English (ADR-088). Applied here, to the
+  /// instruction alone, so it cannot leak into the buttons and headings around
+  /// it — those are the app talking, and the app still speaks the learner's
+  /// language.
+  String _instruction(AppStrings s, SessionItem item) {
+    if (item.promptKey == null) return item.prompt;
+
+    final said = s.forInstructions(_session?.instructionLanguage);
+    return said.sessionPrompt(item.promptKey, _targetTextFor(item) ?? '');
+  }
 
   /// True once the learner has chosen to practise instead of waiting (§5).
   bool _practice = false;
@@ -201,13 +233,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       // Resuming is the same call: the server returns the open session for this
       // skill if there is one, so a killed app picks up exactly where it was
       // (and does not spend a second AI call on a new passage).
-      final session = await _api.startSession(widget.skill, practice: _practice);
+      final session = await _api.startSession(
+        widget.skill,
+        practice: _practice,
+      );
       if (!mounted) return;
 
       // Where to continue is the server's answer, not `items.first` — on a
       // resumed session the early items are already cleared, and a requeued one
       // may be waiting at the back of the queue.
-      final progress = session.progress ??
+      final progress =
+          session.progress ??
           SessionProgress(
             nextItemId: session.items.isEmpty ? null : session.items.first.id,
             remaining: session.items.length,
@@ -231,10 +267,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           final turns = session.conversation!.turns;
           _chat.clear();
           if (turns.isEmpty) {
-            _chat.add(_ChatMessage(session.conversation!.opening, fromAi: true));
+            _chat.add(
+              _ChatMessage(session.conversation!.opening, fromAi: true),
+            );
           } else {
-            _chat.addAll(turns
-                .map((t) => _ChatMessage(t.text, fromAi: t.fromAi)));
+            _chat.addAll(
+              turns.map((t) => _ChatMessage(t.text, fromAi: t.fromAi)),
+            );
           }
           // The learner has already spoken, so this is a conversation being
           // resumed rather than one about to start.
@@ -310,10 +349,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     setState(() => _busy = true);
     try {
       final result = await _api.submitAnswer(
-            sessionId: _session!.id,
-            itemId: item.id,
-            answer: answer,
-          );
+        sessionId: _session!.id,
+        itemId: item.id,
+        answer: answer,
+      );
       if (mounted) {
         setState(() {
           _lastAnswer = result;
@@ -354,10 +393,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     setState(() => _busy = true);
     try {
       final evaluation = await _api.submitWriting(
-            sessionId: _session!.id,
-            itemId: item.id,
-            sentence: sentence,
-          );
+        sessionId: _session!.id,
+        itemId: item.id,
+        sentence: sentence,
+      );
       if (mounted) {
         setState(() {
           _lastWriting = evaluation;
@@ -402,8 +441,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     final canListen = await _mic.initialise();
     if (!mounted) return;
 
-    setState(() => _voice =
-        canListen ? _VoicePhase.idle : _VoicePhase.unavailable);
+    setState(
+      () => _voice = canListen ? _VoicePhase.idle : _VoicePhase.unavailable,
+    );
   }
 
   /// Opens the microphone and leaves it open until the learner says they are
@@ -483,8 +523,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       // The same box the typed answer uses, so editing is a normal text field
       // rather than a special mode.
       _chatInput.text = said;
-      _chatInput.selection =
-          TextSelection.collapsed(offset: _chatInput.text.length);
+      _chatInput.selection = TextSelection.collapsed(
+        offset: _chatInput.text.length,
+      );
     });
   }
 
@@ -522,9 +563,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
     try {
       final turn = await _api.submitSpeakingTurn(
-            sessionId: _session!.id,
-            transcript: text,
-          );
+        sessionId: _session!.id,
+        transcript: text,
+      );
       if (!mounted) return;
       setState(() {
         _chat.add(_ChatMessage(turn.aiMessage, fromAi: true));
@@ -537,7 +578,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         // being cut off mid-goodbye is worse than waiting a moment for the
         // result — and only then is the session completed and evaluated.
         setState(() => _voice = _VoicePhase.speaking);
-        await _speech.speakToCompletion('tutor:${turn.aiMessage.hashCode}', turn.aiMessage);
+        await _speech.speakToCompletion(
+          'tutor:${turn.aiMessage.hashCode}',
+          turn.aiMessage,
+        );
         if (mounted) await _complete();
         return;
       }
@@ -586,8 +630,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     _speech.stop();
     setState(() => _busy = true);
     try {
-      final result =
-          await _api.completeSession(_session!.id);
+      final result = await _api.completeSession(_session!.id);
       if (mounted) setState(() => _result = result);
     } catch (rawError) {
       final e = ApiException.from(rawError);
@@ -599,8 +642,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
   void _snack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -626,9 +670,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               onPressed: _busy
                   ? null
                   : () => setState(() => _passageRevisit = true),
-              icon: Icon(widget.skill == SkillType.listening
-                  ? Icons.headphones_rounded
-                  : Icons.menu_book_rounded),
+              icon: Icon(
+                widget.skill == SkillType.listening
+                    ? Icons.headphones_rounded
+                    : Icons.menu_book_rounded,
+              ),
               tooltip: widget.skill == SkillType.listening
                   ? s.showRecording
                   : s.showPassage,
@@ -666,8 +712,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     final canChange = switch (widget.skill) {
       SkillType.speaking => !_speakingFinished,
       SkillType.writing => _result == null,
-      SkillType.reading || SkillType.listening => !_contentDone &&
-          (session.content?.canChangeLevel ?? false),
+      SkillType.reading || SkillType.listening =>
+        !_contentDone && (session.content?.canChangeLevel ?? false),
       _ => false,
     };
 
@@ -701,20 +747,27 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.md, 0, AppSpacing.md, AppSpacing.xs),
+                AppSpacing.md,
+                0,
+                AppSpacing.md,
+                AppSpacing.xs,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(s.changeLevelTitle,
-                      style: sheetContext.text.titleMedium),
+                  Text(
+                    s.changeLevelTitle,
+                    style: sheetContext.text.titleMedium,
+                  ),
                   const SizedBox(height: AppSpacing.xxs),
                   Text(
                     widget.skill == SkillType.speaking
                         ? s.changeLevelHintSpeaking
                         : s.changeLevelHint,
                     style: sheetContext.text.bodySmall?.copyWith(
-                      color: sheetContext.colors.onSurface
-                          .withValues(alpha: 0.7),
+                      color: sheetContext.colors.onSurface.withValues(
+                        alpha: 0.7,
+                      ),
                     ),
                   ),
                 ],
@@ -733,8 +786,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                     ChoiceChip(
                       label: Text(level.label),
                       selected: level == current,
-                      onSelected: (_) =>
-                          Navigator.of(sheetContext).pop(level),
+                      onSelected: (_) => Navigator.of(sheetContext).pop(level),
                     ),
                 ],
               ),
@@ -769,8 +821,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         // the first.
         if (widget.skill != SkillType.speaking &&
             widget.skill != SkillType.writing) {
-          _currentItemId =
-              session.items.isEmpty ? null : session.items.first.id;
+          _currentItemId = session.items.isEmpty
+              ? null
+              : session.items.first.id;
         }
       });
 
@@ -779,7 +832,6 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       // profile, so without this they keep showing the old band until the next
       // sign-in — the learner changes it here and finds it unchanged there.
       await ref.read(sessionProvider.notifier).refresh();
-      ref.invalidate(hubProvider);
     } catch (rawError) {
       final e = ApiException.from(rawError);
       if (mounted) _snack(_s.apiError(e.code, e.message));
@@ -797,7 +849,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         // came to practise is offered a practice session rather than a closed
         // door (§5). The other three need words to be about anything, and
         // pretending otherwise would waste the learner's time.
-        final canPractise = widget.skill == SkillType.reading ||
+        final canPractise =
+            widget.skill == SkillType.reading ||
             widget.skill == SkillType.listening;
 
         return EmptyState(
@@ -833,9 +886,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       // finished session or a question that has moved on will answer exactly
       // the same way a second time, and a button that cannot help is worse
       // than no button — it makes the learner press it repeatedly.
-      return ErrorView(
-        message: s.apiError(_error!.code, _error!.message),
-        retryLabel: s.retry,
+      return ErrorView.from(
+        _error!,
+        s,
         onRetry: _error!.isRetryable ? _start : null,
       );
     }
@@ -996,8 +1049,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               _passageRevisit
                   ? s.backToQuestions
                   : isListening
-                      ? s.iFinishedListening
-                      : s.iFinishedReading,
+                  ? s.iFinishedListening
+                  : s.iFinishedReading,
             ),
           ),
         ),
@@ -1078,24 +1131,33 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         ),
         Padding(
           padding: const EdgeInsets.all(AppSpacing.md),
-          // Choose → check → next. Until the answer has been submitted this is
-          // the "check" button, so the option a learner taps is only a choice
-          // and can still be changed; it becomes "next" once the verdict is on
-          // screen. Every other skill keeps its single button, because their
-          // tasks are typed or spoken rather than tapped.
-          child: _twoStepAnswer && !_answered
-              ? FilledButton(
-                  onPressed: _selectedOption == null || _busy
-                      ? null
-                      : () => _answer(item, _selectedOption!),
-                  child: Text(_busy ? s.evaluating : s.checkAnswer),
-                )
-              : FilledButton(
-                  onPressed: _answered && !_busy ? _next : null,
-                  child: Text(
-                    _progress?.nextItemId == null ? s.finish : s.next,
+          // One question, one button: it reads "check" until the verdict is on
+          // screen and "next" afterwards (ADR-095).
+          //
+          // Reading and Listening already worked this way — a tap on an option
+          // is only a choice, so a mis-tap does not spend the attempt. Writing
+          // did not: it carried its own "check" inside the scrolling body while
+          // this foot of the screen held a disabled "next", which is two
+          // buttons for one decision with the live one further from the thumb
+          // than the dead one.
+          //
+          // Rebuilt as the learner types, because for a written answer the
+          // question of whether there is anything to check is the text field's
+          // to answer.
+          child: ValueListenableBuilder(
+            valueListenable: _freeText,
+            builder: (context, _, _) => _hasCheckStep(item) && !_answered
+                ? FilledButton(
+                    onPressed: _checkAction(item),
+                    child: Text(_busy ? s.evaluating : s.checkAnswer),
+                  )
+                : FilledButton(
+                    onPressed: _answered && !_busy ? _next : null,
+                    child: Text(
+                      _progress?.nextItemId == null ? s.finish : s.next,
+                    ),
                   ),
-                ),
+          ),
         ),
       ],
     );
@@ -1103,6 +1165,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
   Widget _multipleChoice(AppStrings s, SessionItem item, Color color) {
     final result = _lastAnswer;
+    // Listening only, and only on the questions that are about a word: the
+    // comprehension questions have no word of their own, and Reading already
+    // shows the word spelled out in its sentences (ADR-081).
+    final pronounce =
+        widget.skill == SkillType.listening &&
+            item.type == SessionItemType.targetWord
+        ? _targetTextFor(item)
+        : null;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1124,10 +1195,24 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         // The question carries the same reading comfort as the passage
         // (§25) — it is read carefully, often twice, and a listening question
         // is all the learner has left once the audio has stopped.
-        Text(
-          item.prompt,
+        // Through [_instruction], so a question that arrives as a *key* is
+        // said in the learner's own language — which is how Listening's word
+        // question avoids naming the word at all (ADR-035, ADR-085). A
+        // comprehension question has no key and is shown as written.
+        //
+        // Direction follows the text: rendered in the Arabic interface's
+        // direction, the question mark of `What does "fan" mean here?` moved
+        // to the front of the sentence.
+        AutoDirectionText(
+          _instruction(s, item),
           style: context.text.titleMedium?.copyWith(fontSize: 18, height: 1.45),
         ),
+        // Under the question, above the options: the learner has just been
+        // asked about a word, and this is the moment they want to hear it.
+        if (pronounce != null && pronounce.trim().isNotEmpty) ...[
+          const SizedBox(height: AppSpacing.sm),
+          WordPronunciation(word: pronounce, color: color),
+        ],
         const SizedBox(height: AppSpacing.md),
         for (final option in item.options)
           OptionTile(
@@ -1139,8 +1224,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             correct: result == null
                 ? null
                 : option == result.correctAnswer
-                    ? true
-                    : (_selectedOption == option ? false : null),
+                ? true
+                : (_selectedOption == option ? false : null),
             onTap: () {
               // A tap is only a choice here; the answer goes to the server when
               // the learner presses "check" (see the footer).
@@ -1178,7 +1263,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(_instruction(s, item), style: context.text.titleMedium),
+        // Direction follows the instruction's own language, not the
+        // interface's: an English task set in the Arabic app would otherwise
+        // be laid out right-to-left and lose its full stop to the front.
+        AutoDirectionText(
+          _instruction(s, item),
+          style: context.text.titleMedium,
+        ),
         const SizedBox(height: AppSpacing.md),
         TextField(
           controller: _freeText,
@@ -1186,15 +1277,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           enabled: evaluation == null,
           decoration: InputDecoration(hintText: s.writeSentence),
         ),
-        const SizedBox(height: AppSpacing.sm),
-        if (evaluation == null)
-          FilledButton.tonal(
-            onPressed: _busy ? null : () => _submitWriting(item),
-            child: _busy
-                ? Text(s.evaluating)
-                : Text(s.checkAnswer),
-          )
-        else ...[
+        // No button here: the one at the foot of the screen marks this answer
+        // and then moves on (ADR-095).
+        if (evaluation != null) ...[
+          const SizedBox(height: AppSpacing.md),
           _FeedbackBanner(
             correct: evaluation.passed,
             title: evaluation.passed ? s.correct : s.incorrect,
@@ -1209,8 +1295,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               color: context.palette.subtleSurface,
               child: Row(
                 children: [
-                  Icon(Icons.lightbulb_outline_rounded,
-                      size: 18, color: context.palette.warning),
+                  Icon(
+                    Icons.lightbulb_outline_rounded,
+                    size: 18,
+                    color: context.palette.warning,
+                  ),
                   const SizedBox(width: AppSpacing.xs),
                   Expanded(
                     child: Column(
@@ -1218,8 +1307,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                       children: [
                         Text(
                           s.atYourLevel(_session!.levelUsed),
-                          style: context.text.labelSmall
-                              ?.copyWith(color: context.palette.warning),
+                          style: context.text.labelSmall?.copyWith(
+                            color: context.palette.warning,
+                          ),
                         ),
                         const SizedBox(height: AppSpacing.xxs),
                         EnglishText(
@@ -1239,9 +1329,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     );
   }
 
+  /// Spelling is always assembled from letters — there is no typed variant.
+  ///
+  /// A text field on a phone raises the keyboard, and the keyboard autocorrects,
+  /// predicts and completes: the learner taps a suggestion and the exercise has
+  /// measured the keyboard rather than them (ADR-100). The difficulty lives in
+  /// the hint ladder instead, which already starts at the rung that suits the
+  /// level.
   Widget _spellingTask(AppStrings s, SessionItem item, Color color) {
     final result = _lastAnswer;
-    final tiles = item.inputMode == SpellingInputMode.letterTiles;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1259,10 +1355,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               const SizedBox(height: AppSpacing.xxs),
               Text(
                 item.clue ?? '',
-                textDirection:
-                    item.clueKind == SpellingClueKind.arabicMeaning
-                        ? TextDirection.rtl
-                        : TextDirection.ltr,
+                textDirection: item.clueKind == SpellingClueKind.arabicMeaning
+                    ? TextDirection.rtl
+                    : TextDirection.ltr,
                 style: context.text.titleMedium,
               ),
             ],
@@ -1279,8 +1374,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.lightbulb_outline_rounded,
-                      size: 18, color: context.palette.warning),
+                  Icon(
+                    Icons.lightbulb_outline_rounded,
+                    size: 18,
+                    color: context.palette.warning,
+                  ),
                   const SizedBox(width: AppSpacing.xs),
                   Expanded(
                     child: Column(
@@ -1288,16 +1386,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                       children: [
                         Text(
                           s.spellingClueLabel(hint.kind),
-                          style: context.text.labelSmall
-                              ?.copyWith(color: context.palette.warning),
+                          style: context.text.labelSmall?.copyWith(
+                            color: context.palette.warning,
+                          ),
                         ),
                         const SizedBox(height: AppSpacing.xxs),
                         Text(
                           hint.text,
                           textDirection:
                               hint.kind == SpellingClueKind.arabicMeaning
-                                  ? TextDirection.rtl
-                                  : TextDirection.ltr,
+                              ? TextDirection.rtl
+                              : TextDirection.ltr,
                           style: context.text.titleSmall,
                         ),
                       ],
@@ -1317,98 +1416,81 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           ],
         ],
         const SizedBox(height: AppSpacing.lg),
-        if (tiles) ...[
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.md,
-              vertical: AppSpacing.sm,
-            ),
-            decoration: BoxDecoration(
-              color: context.palette.subtleSurface,
-              borderRadius: AppRadii.fieldBorder,
-              border: Border.all(color: context.palette.border),
-            ),
-            child: Text(
-              _tiles.join(),
-              style: context.text.headlineSmall?.copyWith(letterSpacing: 2),
-            ),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: AppSpacing.sm,
           ),
-          const SizedBox(height: AppSpacing.md),
-          Text(s.tapLetters, style: context.text.bodySmall),
-          const SizedBox(height: AppSpacing.xs),
-          Wrap(
-            spacing: AppSpacing.xs,
-            runSpacing: AppSpacing.xs,
-            children: [
-              for (var i = 0; i < item.letters.length; i++)
-                _LetterTile(
-                  letter: item.letters[i],
-                  used: _usedTileIndexes.contains(i),
-                  onTap: result != null
-                      ? null
-                      : () => setState(() {
-                            _usedTileIndexes.add(i);
-                            _tiles.add(item.letters[i]);
-                          }),
-                ),
-            ],
+          decoration: BoxDecoration(
+            color: context.palette.subtleSurface,
+            borderRadius: AppRadii.fieldBorder,
+            border: Border.all(color: context.palette.border),
           ),
-          const SizedBox(height: AppSpacing.sm),
-          Row(
-            children: [
-              // Undo one letter. With decoy tiles in the pool (§36) a mis-tap
-              // is ordinary, and making the learner retype the whole word for
-              // one wrong letter punishes the wrong mistake.
-              IconButton(
-                onPressed: result != null || _tiles.isEmpty
+          child: Text(
+            _tiles.join(),
+            style: context.text.headlineSmall?.copyWith(letterSpacing: 2),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        Text(s.tapLetters, style: context.text.bodySmall),
+        const SizedBox(height: AppSpacing.xs),
+        Wrap(
+          spacing: AppSpacing.xs,
+          runSpacing: AppSpacing.xs,
+          children: [
+            for (var i = 0; i < item.letters.length; i++)
+              _LetterTile(
+                letter: item.letters[i],
+                used: _usedTileIndexes.contains(i),
+                onTap: result != null
                     ? null
                     : () => setState(() {
-                          _tiles.removeLast();
-                          _usedTileIndexes.removeLast();
-                        }),
-                icon: const Icon(Icons.backspace_outlined, size: 20),
-                tooltip: s.undoLetter,
+                        _usedTileIndexes.add(i);
+                        _tiles.add(item.letters[i]);
+                      }),
               ),
-              TextButton(
-                onPressed: result != null || _tiles.isEmpty
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Row(
+          children: [
+            // Undo one letter. With decoy tiles in the pool (§36) a mis-tap
+            // is ordinary, and making the learner retype the whole word for
+            // one wrong letter punishes the wrong mistake.
+            IconButton(
+              onPressed: result != null || _tiles.isEmpty
+                  ? null
+                  : () => setState(() {
+                      _tiles.removeLast();
+                      _usedTileIndexes.removeLast();
+                    }),
+              icon: const Icon(Icons.backspace_outlined, size: 20),
+              tooltip: s.undoLetter,
+            ),
+            TextButton(
+              onPressed: result != null || _tiles.isEmpty
+                  ? null
+                  : () => setState(() {
+                      _tiles.clear();
+                      _usedTileIndexes.clear();
+                    }),
+              child: Text(s.clear),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            // Expanded, not trailing after a Spacer: the theme gives every
+            // FilledButton `Size.fromHeight(54)` — an infinite minimum width —
+            // so an unflexed one in a Row fails layout outright.
+            Expanded(
+              child: FilledButton.tonal(
+                onPressed: result != null || _tiles.isEmpty || _busy
                     ? null
-                    : () => setState(() {
-                          _tiles.clear();
-                          _usedTileIndexes.clear();
-                        }),
-                child: Text(s.clear),
+                    : () => _answer(item, _tiles.join()),
+                child: Text(s.checkAnswer),
               ),
-              const SizedBox(width: AppSpacing.sm),
-              // Expanded, not trailing after a Spacer: the theme gives every
-              // FilledButton `Size.fromHeight(54)` — an infinite minimum width —
-              // so an unflexed one in a Row fails layout outright.
-              Expanded(
-                child: FilledButton.tonal(
-                  onPressed: result != null || _tiles.isEmpty || _busy
-                      ? null
-                      : () => _answer(item, _tiles.join()),
-                  child: Text(s.checkAnswer),
-                ),
-              ),
-            ],
-          ),
-        ] else ...[
-          TextField(
-            controller: _freeText,
-            enabled: result == null,
-            textCapitalization: TextCapitalization.none,
-            decoration: const InputDecoration(hintText: 'Type the word'),
-            style: context.text.titleMedium,
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          FilledButton.tonal(
-            onPressed: result != null || _busy
-                ? null
-                : () => _answer(item, _freeText.text.trim()),
-            child: Text(s.checkAnswer),
-          ),
-        ],
+            ),
+          ],
+        ),
         if (result != null) ...[
           const SizedBox(height: AppSpacing.md),
           _FeedbackBanner(
@@ -1494,7 +1576,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                           ),
                         ),
                       ),
-                      SpeakerButton(
+                      WordSpeakerButtons(
                         id: 'warmup:${word.wordId}',
                         text: word.text,
                         color: color,
@@ -1511,8 +1593,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                     correct: result == null
                         ? null
                         : option == result.correctAnswer
-                            ? true
-                            : (_selectedOption == option ? false : null),
+                        ? true
+                        : (_selectedOption == option ? false : null),
                     onTap: () {
                       _selectedOption = option;
                       unawaited(_answerWarmup(word, option));
@@ -1557,8 +1639,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
       // A right answer moves on briskly; a wrong one holds long enough to read
       // the meaning it just showed.
-      await Future<void>.delayed(Duration(
-          milliseconds: result.isCorrect ? 550 : 1800));
+      await Future<void>.delayed(
+        Duration(milliseconds: result.isCorrect ? 550 : 1800),
+      );
       if (!mounted) return;
 
       setState(() {
@@ -1577,8 +1660,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       final e = ApiException.from(rawError);
       if (mounted) {
         setState(() => _busy = false);
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(_s.apiError(e.code, e.message))));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_s.apiError(e.code, e.message))));
       }
     }
   }
@@ -1684,7 +1768,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       // The label is an instruction while listening: the learner needs to know
       // that nothing is waiting on a pause, and that finishing is their move.
       _VoicePhase.listening => (s.tapWhenDone, Icons.stop_rounded, true),
-      _VoicePhase.reviewing => (s.checkBeforeSending, Icons.edit_rounded, false),
+      _VoicePhase.reviewing => (
+        s.checkBeforeSending,
+        Icons.edit_rounded,
+        false,
+      ),
       _VoicePhase.thinking => (s.thinking, Icons.more_horiz_rounded, true),
       _ => (s.tapToSpeak, Icons.mic_none_rounded, false),
     };
@@ -1754,9 +1842,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               },
             ),
             const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Text(label, style: context.text.titleSmall),
-            ),
+            Expanded(child: Text(label, style: context.text.titleSmall)),
             // Only while there is something to throw away. A bin beside an
             // idle microphone offers to delete nothing, and a learner reading
             // it wonders what they are about to lose.
@@ -1887,8 +1973,9 @@ class _ChatBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final fromAi = message.fromAi;
     return Align(
-      alignment:
-          fromAi ? AlignmentDirectional.centerStart : AlignmentDirectional.centerEnd,
+      alignment: fromAi
+          ? AlignmentDirectional.centerStart
+          : AlignmentDirectional.centerEnd,
       child: Container(
         margin: const EdgeInsets.only(bottom: AppSpacing.xs),
         padding: const EdgeInsets.symmetric(
@@ -1907,7 +1994,9 @@ class _ChatBubble extends StatelessWidget {
             bottomRight: fromAi ? AppRadii.md : Radius.zero,
           ),
           border: Border.all(
-            color: fromAi ? context.palette.border : color.withValues(alpha: 0.3),
+            color: fromAi
+                ? context.palette.border
+                : color.withValues(alpha: 0.3),
           ),
         ),
         child: Text(message.text, style: context.text.bodyMedium),
@@ -1985,8 +2074,9 @@ class _FeedbackBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = correct ? context.palette.success : context.palette.danger;
-    final background =
-        correct ? context.palette.successSurface : context.palette.dangerSurface;
+    final background = correct
+        ? context.palette.successSurface
+        : context.palette.dangerSurface;
 
     return Container(
       width: double.infinity,
@@ -2051,138 +2141,81 @@ class _ListeningPlayer extends ConsumerStatefulWidget {
 }
 
 class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
-  /// The clip, cut where a listener would hear a break.
-  late final List<String> _sentences = _splitSentences(widget.text);
-
-  /// Where each sentence starts, in characters, and the total. The bar is
-  /// drawn against these so a long sentence takes proportionally longer to
-  /// cross than a short one.
-  late final List<int> _starts = _cumulativeStarts(_sentences);
-  late final int _totalChars =
-      _starts.isEmpty ? 1 : _starts.last + _sentences.last.length;
-
-  bool _slow = false;
-  bool _played = false;
-  bool _audioFailed = false;
-  bool _finished = false;
-
-  /// Which sentence is being spoken, or would be if the learner pressed play.
-  int _index = 0;
+  /// The engine, shared with every other player in the app
+  /// (`clip_playback.dart`). This widget owns only the layout.
+  ///
+  /// Not `final`: a clip regenerated on this screen — the learner changes the
+  /// level and the passage is written again — arrives as a new [text] on this
+  /// same State. See [didUpdateWidget].
+  late ClipPlayback _clip;
 
   /// Where the learner's finger is while dragging, in characters. The bar
   /// follows the finger; the audio does not move until they let go.
   double? _scrubbing;
 
-  /// Invalidates the playback loop.
-  ///
-  /// The loop awaits one sentence at a time, so a seek or a stop cannot simply
-  /// set a flag and expect the next iteration to notice — it has to be able to
-  /// tell "I am the current loop" from "I was replaced while I was waiting".
-  int _run = 0;
-
-  String get _id => 'listening:${widget.text.hashCode}';
-
-  SpeechService get _speech => ref.read(speechServiceProvider);
-
-  bool get _playing => _speech.isSpeakingId(_id);
-
   @override
   void initState() {
     super.initState();
-    // The clip starts on its own (§22). A listening exercise whose first
-    // action is "press play" spends the learner's first interaction on
-    // something the screen already knew it had to do.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_playFrom(0));
-    });
+    _clip = _newClip();
+  }
+
+  // `ref.read` here rather than in a `late final` initialiser: a lazy
+  // initialiser runs on first use, and the controller's own teardown is one
+  // of the uses — by which time reading a provider throws (ADR-080).
+  ClipPlayback _newClip() => ClipPlayback(
+    speech: ref.read(speechServiceProvider),
+    text: widget.text,
+    idPrefix: 'listening',
+  )..addListener(_repaint);
+
+  @override
+  void didUpdateWidget(_ListeningPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The same trap the sentence player fell into: Flutter keeps this State
+    // and swaps the text under it, so a controller built once in `initState`
+    // would go on speaking the clip the learner just left behind — here, the
+    // passage from the level they abandoned, complete with its own scrubber
+    // length and clock (ADR-086).
+    if (widget.text != oldWidget.text) {
+      _clip.removeListener(_repaint);
+      _clip.dispose();
+      _scrubbing = null;
+      _clip = _newClip();
+    }
+  }
+
+  // Deliberately no auto-play. The clip used to start by itself the moment the
+  // screen appeared (§22), which read as the app talking over the learner:
+  // they arrive mid-load, the title they were meant to read goes past, and the
+  // first thing they do is hunt for the control that makes it stop. The title
+  // is the point of the pause — it names what is coming, exactly as an exam
+  // prints it above the audio — and the clip begins when they say so (ADR-080).
+
+  void _repaint() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    // Nothing may keep talking after this screen is gone. The loop checks
-    // `mounted`, but the sentence already in the speaker's mouth does not.
-    _run++;
+    _clip.removeListener(_repaint);
+    // Silences the voice as it goes: nothing may keep talking once this screen
+    // is gone, least of all a transcript that is the answer key.
+    _clip.dispose();
     super.dispose();
   }
 
-  /// Speaks from [index] to the end, sentence by sentence.
-  Future<void> _playFrom(int index) async {
-    if (_sentences.isEmpty) return;
+  double get _position => _scrubbing ?? _clip.position;
 
-    final run = ++_run;
-    setState(() {
-      _played = true;
-      _finished = false;
-      _index = index.clamp(0, _sentences.length - 1);
-    });
-
-    for (var i = _index; i < _sentences.length; i++) {
-      if (!mounted || run != _run) return;
-      setState(() => _index = i);
-
-      final ok = await _speech.speakToCompletion(
-        _id,
-        _sentences[i],
-        rate: _slow ? SpeechRate.slow : SpeechRate.normal,
-      );
-
-      // A device with no voice at all: say so once and stop, rather than
-      // walking silently through every remaining sentence.
-      if (!ok) {
-        if (mounted) setState(() => _audioFailed = true);
-        return;
-      }
-      if (run != _run) return;
-    }
-
-    if (mounted && run == _run) setState(() => _finished = true);
-  }
-
-  Future<void> _stop() async {
-    _run++;
-    await _speech.stop();
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _toggle() async {
-    if (_playing) {
-      await _stop();
-      return;
-    }
-    // Pressing play at the end starts the clip again rather than doing
-    // nothing, which is what a replay button is for.
-    await _playFrom(_finished ? 0 : _index);
-  }
-
-  /// The sentence that contains a point on the bar.
-  int _sentenceAt(double chars) {
-    for (var i = _sentences.length - 1; i >= 0; i--) {
-      if (chars >= _starts[i]) return i;
-    }
-    return 0;
-  }
-
-  Future<void> _seekTo(double chars) async {
-    final target = _sentenceAt(chars);
-    if (_playing) {
-      await _playFrom(target);
-    } else {
-      setState(() {
-        _index = target;
-        _finished = false;
-      });
-    }
-  }
-
-  double get _position =>
-      _scrubbing ?? (_starts.isEmpty ? 0 : _starts[_index].toDouble());
+  /// The clock at a point on the bar — so dragging shows where the finger is
+  /// going rather than where the audio still is.
+  String _clockAt(double chars) => formatClipTime(_clip.timeAt(chars));
 
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(stringsProvider);
-    // Watched, not read: when the clip ends by itself the control has to
-    // return to "replay" without being told.
-    final playing = ref.watch(speechServiceProvider).isSpeakingId(_id);
+    // From the controller, which follows the voice itself: when the clip ends
+    // on its own the control has to change face without being told.
+    final playing = _clip.isPlaying;
 
     return AppCard(
       color: widget.color.withValues(alpha: 0.06),
@@ -2200,7 +2233,7 @@ class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
                 iconSize: 30,
                 color: widget.color,
                 tooltip: s.jumpToStart,
-                onPressed: () => _seekTo(0),
+                onPressed: () => unawaited(_clip.seekTo(0)),
                 icon: const Icon(Icons.first_page_rounded),
               ),
               const SizedBox(width: AppSpacing.sm),
@@ -2214,13 +2247,21 @@ class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
                 child: IconButton(
                   iconSize: 40,
                   color: widget.color,
-                  onPressed: _toggle,
+                  onPressed: () => unawaited(_clip.toggle()),
+                  // Three faces, and each one states what the *next* tap does.
+                  //
+                  // Pausing used to leave a replay face on the button, which
+                  // promised the wrong thing: the learner who stopped to think
+                  // about a line was told the only way back was from the top.
+                  // A paused clip therefore shows the ordinary play triangle,
+                  // because the next tap continues (ADR-080). Only a clip that
+                  // has actually reached its end offers to replay it.
                   icon: Icon(
                     playing
-                        ? Icons.stop_rounded
-                        : _played
-                            ? Icons.replay_rounded
-                            : Icons.play_arrow_rounded,
+                        ? Icons.pause_rounded
+                        : _clip.finished
+                        ? Icons.replay_rounded
+                        : Icons.play_arrow_rounded,
                   ),
                 ),
               ),
@@ -2229,47 +2270,74 @@ class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
                 iconSize: 30,
                 color: widget.color,
                 tooltip: s.jumpToEnd,
-                onPressed: () => _seekTo(_totalChars.toDouble()),
+                onPressed: () =>
+                    unawaited(_clip.seekTo(_clip.totalChars.toDouble())),
                 icon: const Icon(Icons.last_page_rounded),
               ),
             ],
           ),
           const SizedBox(height: AppSpacing.sm),
-          // The scrubber. Sentence-granular where it lands, continuous to the
-          // finger — a bar that jumped in eleven steps would feel broken.
+          // The scrubber, word-granular where it lands (ADR-082).
+          //
+          // The unplayed part is drawn in `trackRest` rather than the theme's
+          // faint default: this line is the only thing telling the learner
+          // where the clip starts and ends, and at border strength it vanished
+          // into the card.
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
-              trackHeight: 4,
+              trackHeight: 6,
               activeTrackColor: widget.color,
+              inactiveTrackColor: context.palette.trackRest,
               thumbColor: widget.color,
               overlayShape: const RoundSliderOverlayShape(overlayRadius: 16),
             ),
             child: Slider(
-              value: _position.clamp(0, _totalChars.toDouble()),
-              max: _totalChars.toDouble(),
+              value: _position.clamp(0, _clip.totalChars.toDouble()),
+              max: _clip.totalChars.toDouble(),
               onChanged: (value) => setState(() => _scrubbing = value),
               onChangeEnd: (value) {
                 setState(() => _scrubbing = null);
-                unawaited(_seekTo(value));
+                unawaited(_clip.seekTo(value));
               },
             ),
           ),
-          Text(
-            s.clipPosition(
-              _sentenceAt(_position) + 1,
-              _sentences.length,
-            ),
-            style: context.text.labelMedium?.copyWith(
-              color: context.colors.onSurface.withValues(alpha: 0.6),
+          // How far in, and how long altogether. Both estimated — see
+          // `clipClock` — and both read off the same playhead as the bar, so
+          // the two can never disagree.
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  _clockAt(_position),
+                  style: context.text.labelMedium?.copyWith(
+                    color: context.colors.onSurface.withValues(alpha: 0.7),
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+                Text(
+                  formatClipTime(_clip.total),
+                  style: context.text.labelMedium?.copyWith(
+                    color: context.colors.onSurface.withValues(alpha: 0.7),
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
+          // The word under the control names the **state**, not the next tap.
+          // It used to name the action, so a learner who had just pressed
+          // pause read "Continue" and took the clip to be running (ADR-082).
           Text(
             playing
-                ? s.stopAudio
-                : _played
-                    ? s.playAgain
-                    : s.playAudio,
+                ? s.audioPlaying
+                : _clip.finished
+                ? s.audioFinished
+                : _clip.started
+                ? s.audioPaused
+                : s.playAudio,
             style: context.text.titleSmall,
           ),
           const SizedBox(height: AppSpacing.md),
@@ -2278,20 +2346,15 @@ class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
               ButtonSegment(value: false, label: Text(s.normalSpeed)),
               ButtonSegment(value: true, label: Text(s.slowSpeed)),
             ],
-            selected: {_slow},
-            onSelectionChanged: (value) {
-              setState(() => _slow = value.first);
-              // Carries on from the sentence being spoken rather than starting
-              // the clip again: a learner switches to the slow voice *because*
-              // of the line they are on, and sending them back to the
-              // beginning answers the wrong request.
-              if (_playing) unawaited(_playFrom(_index));
-            },
+            selected: {_clip.slow},
+            // Carries on from the sentence being spoken rather than starting
+            // the clip again — the controller's rule, not this screen's.
+            onSelectionChanged: (value) => _clip.setSlow(value.first),
           ),
           // A device that cannot speak must not block the whole session: the
           // transcript is revealed early rather than after the test
           // (demo review §51).
-          if (_audioFailed) ...[
+          if (_clip.audioFailed) ...[
             const SizedBox(height: AppSpacing.md),
             AppCard(
               color: context.palette.warningSurface,
@@ -2301,12 +2364,17 @@ class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.volume_off_rounded,
-                          size: 18, color: context.palette.warning),
+                      Icon(
+                        Icons.volume_off_rounded,
+                        size: 18,
+                        color: context.palette.warning,
+                      ),
                       const SizedBox(width: AppSpacing.xs),
                       Expanded(
-                        child: Text(s.audioUnavailable,
-                            style: context.text.labelMedium),
+                        child: Text(
+                          s.audioUnavailable,
+                          style: context.text.labelMedium,
+                        ),
                       ),
                     ],
                   ),
@@ -2322,41 +2390,4 @@ class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
       ),
     );
   }
-}
-
-/// Cuts a clip where a listener would hear a break.
-///
-/// Sentence-ended, and a paragraph break counts as one too: the generator
-/// marks them, and a learner scrubbing through a structured text expects the
-/// paragraph starts to be places they can land on.
-List<String> _splitSentences(String text) {
-  final out = <String>[];
-  for (final paragraph in text.split(RegExp(r'\n\s*\n'))) {
-    for (final match
-        in RegExp(r'[^.!?]+[.!?]+[")’”]*').allMatches(paragraph)) {
-      final sentence = match.group(0)!.trim();
-      if (sentence.isNotEmpty) out.add(sentence);
-    }
-    // Whatever was left after the last full stop — a clip that ends without
-    // one must not lose its final words.
-    final tail = paragraph
-        .substring(
-          RegExp(r'[^.!?]+[.!?]+[")’”]*')
-              .allMatches(paragraph)
-              .fold<int>(0, (end, m) => m.end),
-        )
-        .trim();
-    if (tail.isNotEmpty) out.add(tail);
-  }
-  return out.isEmpty ? [text.trim()] : out;
-}
-
-List<int> _cumulativeStarts(List<String> sentences) {
-  final starts = <int>[];
-  var running = 0;
-  for (final sentence in sentences) {
-    starts.add(running);
-    running += sentence.length + 1;
-  }
-  return starts;
 }

@@ -44,8 +44,18 @@ void advanceToSkill(MockEngine engine, MockUser user, SkillType skill) {
                 .submitAnswer(user, session.id, item.id, word!.text)
                 .progress;
           case SessionItemType.targetWord:
+            // The answer key, not the word's Arabic meaning: from B1 up the
+            // correct option is an English definition instead (ADR-088), and a
+            // helper that assumed otherwise would quietly stop advancing the
+            // pipeline it exists to advance.
             progress = engine
-                .submitAnswer(user, session.id, item.id, word!.meaning)
+                .submitAnswer(
+                  user,
+                  session.id,
+                  item.id,
+                  engine.correctAnswerFor(user, session.id, item.id) ??
+                      word!.meaning,
+                )
                 .progress;
           default:
             progress = engine

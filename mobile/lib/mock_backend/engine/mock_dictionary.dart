@@ -196,6 +196,13 @@ class MockDictionary {
   };
 
   /// Distractor pool for building multiple-choice options.
+  ///
+  /// Wide enough that a full session — five words, three wrong options each —
+  /// can give every question its own set without repeating one. The real
+  /// generator writes them per word from the sentence instead (ADR-084); this
+  /// pool only has to keep the *shape* of that honest, which means never
+  /// handing two questions the same option and never handing one question
+  /// another word's answer.
   static const List<String> distractorMeanings = [
     'لوحة مفاتيح',
     'شبكة الإنترنت',
@@ -209,6 +216,52 @@ class MockDictionary {
     'رحلة قصيرة',
     'سيارة أجرة',
     'ملعب رياضي',
+    'غرفة انتظار',
+    'محطة قطار',
+    'دفتر ملاحظات',
+    'قائمة أسعار',
+    'جهاز تحكم',
+    'صندوق بريد',
+    'ورشة عمل',
+    'موعد طبي',
+    'خريطة مدينة',
+    'فاتورة شهرية',
+    'مفتاح احتياطي',
+    'حقيبة سفر',
+  ];
+
+  /// The same pool for the bands that answer in English (ADR-088).
+  ///
+  /// Written as definitions rather than as bare nouns: at B1 and above the
+  /// correct option is a definition, and a wrong option shaped like a
+  /// dictionary word would mark itself out as the odd one — which lets the
+  /// question be passed without knowing the word, exactly the failure the
+  /// per-word distractors exist to prevent.
+  static const List<String> distractorDefinitions = [
+    'a set of keys used for typing',
+    'a network that connects computers around the world',
+    'a program for drawing pictures',
+    'a place where books are kept and lent out',
+    'a building where aircraft arrive and leave',
+    'an organised collection of stored information',
+    'a program for looking at pages on the internet',
+    'a round object used in games and sport',
+    'a small amount of food eaten between meals',
+    'a short journey made for pleasure',
+    'a car that takes passengers for a fare',
+    'an area of ground marked out for a sport',
+    'a room where people sit until they are called',
+    'a place where trains stop for passengers',
+    'a small book for writing notes in',
+    'a list showing what each thing costs',
+    'a small device for operating something from a distance',
+    'a box where letters are delivered or posted',
+    'a meeting where a group practises a skill together',
+    'an arranged time to see a doctor',
+    'a drawing showing the streets of a town',
+    'a bill that arrives once every month',
+    'an extra key kept in case the first is lost',
+    'a bag for carrying clothes on a journey',
   ];
 
   /// English synonyms, used as a spelling clue at lower levels
@@ -374,6 +427,33 @@ class MockDictionary {
         continue;
       }
       if (row.meaning.trim() == meaning.trim()) return resolved;
+    }
+    return null;
+  }
+
+  /// Every entry whose Arabic meaning is exactly [meaning].
+  ///
+  /// The dictionary is what can answer "whose meaning is this?" — the whole
+  /// difference between telling a learner they are wrong and telling them they
+  /// are on `book` (ADR-101).
+  static List<WordCandidate> byMeaning(String meaning) {
+    final wanted = meaning.trim();
+    if (wanted.isEmpty) return const [];
+
+    return [
+      for (final rows in entries.values)
+        for (final row in rows)
+          if (row.meaning.trim() == wanted) _withSenseId(row),
+    ];
+  }
+
+  /// The one entry with this sense id, or null.
+  static WordCandidate? bySenseId(String senseId) {
+    for (final rows in entries.values) {
+      for (final row in rows) {
+        final resolved = _withSenseId(row);
+        if (resolved.senseId == senseId) return resolved;
+      }
     }
     return null;
   }

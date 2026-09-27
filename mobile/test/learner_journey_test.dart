@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:wordos/core/widgets/app_widgets.dart';
 import 'package:wordos/core/models/models.dart';
 import 'package:wordos/mock_backend/engine/mock_dictionary.dart';
 
@@ -86,7 +87,11 @@ void main() {
     await tester.tap(find.text('Weekly Review'));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Remaining'), findsOneWidget);
+    // A bar rather than a count (ADR-091): "3 of 50" tells a learner who has
+    // just started that they have forty-seven to go, at the moment they are
+    // deciding whether to continue.
+    expect(find.byType(StepProgressBar), findsOneWidget);
+    expect(find.textContaining('Remaining'), findsNothing);
 
     // Meaning lookup: answering correctly is what empties the queue — a wrong
     // answer is requeued by design, so a random tapper would never finish.

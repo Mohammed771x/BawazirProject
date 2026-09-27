@@ -227,6 +227,7 @@ public static class AuthEndpoints
         RefreshRequest request,
         WordOsDbContext db,
         JwtTokenService tokens,
+        WordOsConfiguration config,
         TimeProvider clock,
         CancellationToken ct)
     {
@@ -239,18 +240,84 @@ public static class AuthEndpoints
         if (stored is null)
             return Problems.Unauthorized("INVALID_REFRESH", "Please sign in again.");
 
-        // Presenting an already-used token means it leaked: revoke the whole
-        // rotation family rather than merely refusing this one.
+        // Presenting an already-used token usually means it leaked: revoke the
+        // whole rotation family rather than merely refusing this one.
+        //
+        // **Usually.** There is one honest way a learner's own app presents a
+        // used token, and on a phone it is not rare: the exchange succeeded
+        // here, the reply never arrived, and the app still holds the old one
+        // (ADR-093). Treating that as a leak signs somebody out permanently
+        // because a train went into a tunnel at the wrong moment — and because
+        // the family is revoked, not even waiting fixes it.
         if (stored.UsedAt is not null)
         {
             var family = await db.RefreshTokens
                 .Where(t => t.FamilyId == stored.FamilyId && t.RevokedAt == null)
                 .ToListAsync(ct);
-            foreach (var token in family) token.Revoke(now);
+
+            // The token this one was exchanged for. A lost reply leaves it
+            // **unused** — nobody ever received it — which is the whole tell.
+            // If it has been used, a real client did receive it, and whoever is
+            // presenting the old one is not that client.
+            //
+            // Ordered by id as well as by time. Two rotations can share a
+            // `CreatedAt` — certainly under a frozen clock, and in principle
+            // whenever two land inside one tick — and then "the first one" is
+            // whatever order the database happened to return, which picked an
+            // unused grandchild over the used child and answered a genuine
+            // replay with a fresh token. `Guid.CreateVersion7` is time-ordered,
+            // so it breaks the tie the same way the clock would have.
+            var successor = family
+                .Where(t => t.Id != stored.Id && t.CreatedAt >= stored.UsedAt)
+                .OrderBy(t => t.CreatedAt)
+                .ThenBy(t => t.Id)
+                .FirstOrDefault();
+
+            // Zero switches the whole allowance off and restores the strict
+            // rule, so the trade-off can be taken back without a deploy.
+            var replyWasLost =
+                config.RefreshReplayGraceSeconds > 0 &&
+                successor is { UsedAt: null, RevokedAt: null } &&
+                now - stored.UsedAt <= TimeSpan.FromSeconds(
+                    config.RefreshReplayGraceSeconds);
+
+            if (!replyWasLost)
+            {
+                foreach (var token in family) token.Revoke(now);
+                await db.SaveChangesAsync(ct);
+
+                return Problems.Unauthorized(
+                    "REFRESH_REUSED", "Please sign in again.");
+            }
+
+            // Retire the pair nobody has and issue one they will actually
+            // receive. The family survives; a genuine replay outside this
+            // window, or after the real client has used the successor, still
+            // revokes everything.
+            successor!.Revoke(now);
+
+            var user2 = await db.Users
+                .Include(u => u.Interests)
+                .Include(u => u.SkillLevels)
+                .FirstOrDefaultAsync(u => u.Id == stored.UserId, ct);
+
+            if (user2 is null)
+            {
+                return Problems.Unauthorized(
+                    "INVALID_REFRESH", "Please sign in again.");
+            }
+
+            var reissued = tokens.Issue(user2, now);
+            db.RefreshTokens.Add(RefreshToken.Issue(
+                user2.Id,
+                JwtTokenService.HashRefreshToken(reissued.RefreshToken),
+                now,
+                reissued.RefreshExpiresAt,
+                stored.FamilyId));
+
             await db.SaveChangesAsync(ct);
 
-            return Problems.Unauthorized(
-                "REFRESH_REUSED", "Please sign in again.");
+            return Results.Ok(ToAuthResponse(user2, reissued));
         }
 
         if (!stored.IsActive(now))

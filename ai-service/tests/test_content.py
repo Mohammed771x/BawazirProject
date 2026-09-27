@@ -84,7 +84,7 @@ def test_a_passage_comes_back_whole(client, auth, stub_gemini):
     assert body["sentences"] == _payload()["sentences"]
     assert body["text"].startswith("The morning was quiet.")
     assert body["tokens"] == 456
-    assert body["prompt_version"] == "reading-v4"
+    assert body["prompt_version"] == "reading-v6"
     # The passage arrives with its own heading (ADR-066).
     assert body["title"] == "A Quiet Morning"
 
@@ -580,3 +580,87 @@ def test_the_known_word_prompt_does_not_ask_it():
     assert "word_recognized" not in known
     # Every sense, not the commonest — the bug this whole feature tripped over.
     assert "a set of printed pages" in known
+
+
+# ── The English registers, end to end (ADR-088) ──────────────────────────────
+
+
+def test_the_english_options_come_back_with_the_word(client, auth, stub_gemini):
+    stub_gemini(_payload(targets=[{
+        "word": "garden",
+        "sentence_index": 1,
+        "meaning_here_en": "a piece of land where plants are grown",
+        "wrong_meanings_en": [
+            "a path between two fields",
+            "a small building for tools",
+            "a room at the back of a house",
+        ],
+    }]))
+
+    response = client.post(
+        "/ai/content",
+        json=_content_request(option_style="SIMPLE_DEFINITION"),
+        headers=auth)
+
+    context = response.json()["contexts"][0]
+    assert context["meaning_here_en"] == "a piece of land where plants are grown"
+    assert len(context["wrong_meanings_en"]) == 3
+
+
+def test_fewer_than_three_english_options_is_none_of_them(
+        client, auth, stub_gemini):
+    """All-or-nothing, exactly as the Arabic ones are (ADR-084).
+
+    Two options is not a question. The backend has to be told it must build
+    them itself, and "some" is the one answer it cannot act on.
+    """
+    stub_gemini(_payload(targets=[{
+        "word": "garden",
+        "sentence_index": 1,
+        "meaning_here_en": "a piece of land where plants are grown",
+        "wrong_meanings_en": ["a path between two fields"],
+    }]))
+
+    response = client.post(
+        "/ai/content",
+        json=_content_request(option_style="SIMPLE_DEFINITION"),
+        headers=auth)
+
+    context = response.json()["contexts"][0]
+    assert context["wrong_meanings_en"] == []
+    # The correct one survives: it is not a distractor and losing it would
+    # leave the backend without the answer it was asked to grade against.
+    assert context["meaning_here_en"]
+
+
+def test_a_blank_meaning_is_no_meaning(client, auth, stub_gemini):
+    """An empty string here would be shown to the learner as an empty option."""
+    stub_gemini(_payload(targets=[{
+        "word": "garden",
+        "sentence_index": 1,
+        "meaning_here_en": "   ",
+        "wrong_meanings_en": ["a", "b", "c"],
+    }]))
+
+    response = client.post(
+        "/ai/content",
+        json=_content_request(option_style="SIMPLE_DEFINITION"),
+        headers=auth)
+
+    assert response.json()["contexts"][0]["meaning_here_en"] is None
+
+
+def test_a_request_that_names_no_register_still_gets_arabic(
+        client, auth, stub_gemini):
+    """Every caller that predates the field keeps exactly what it had."""
+    stub_gemini(_payload(targets=[{
+        "word": "garden",
+        "sentence_index": 1,
+        "wrong_meanings_ar": ["حديقة حيوان", "ممر", "سقيفة"],
+    }]))
+
+    response = client.post("/ai/content", json=_content_request(), headers=auth)
+
+    context = response.json()["contexts"][0]
+    assert len(context["wrong_meanings_ar"]) == 3
+    assert context["wrong_meanings_en"] == []

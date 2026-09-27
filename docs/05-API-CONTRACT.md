@@ -147,18 +147,37 @@ handed one item at a time instead of a fixed list.
     "prompt":"What surprised the library staff?",
     "options":["…","…","…","…"]                       // already shuffled (R7)
   },
-  "progress": { "answered": 4, "estimatedTotal": 20,   // estimate: adaptive
-                "currentSkill":"READING", "skillIndex":0, "skillCount":5 }
+  "progress": { "answered": 4, "estimatedTotal": 8,    // exact since ADR-098
+                "currentSkill":"READING", "skillCount":4 }
 }
+// `skillIndex` was listed here and has never been sent — not by this version and
+// not by the first. Found by starting a placement on the live service and reading
+// what came back (2026-09-28). Harmless: both the current app and every older one
+// read it as `?? 0`, and no screen uses it. Recorded rather than silently removed
+// so nobody adds a screen that trusts it.
+
 
 // PlacementResult — levels are computed server-side (ADR-007)
 {
   "levels": [ /* SkillLevel — `confidence` is meaningful here */ ],
-  "spelling": { "itemsAnswered": 4, "correct": 3,
-                "supportMode": "LETTER_TILES" },       // LETTER_TILES | FREE_TYPING
+  "spelling": { "itemsAnswered": 0, "correct": 0,
+                "supportMode": "LETTER_TILES" },       // always (ADR-100)
   "summary": "…short human text…"
 }
 ```
+
+> **Eight questions**: three Reading, three Listening, one Speaking, one
+> Writing (ADR-098). `estimatedTotal` keeps its name and is now the real total;
+> it is still clamped upwards, so a run started under an older, longer version
+> of the test cannot report more answered than there are questions.
+>
+> Spelling is no longer asked about. The `spelling` object stays in the payload
+> — it is published contract, and a client that drew a "spelling measured" row
+> reads 0 of 0 rather than crashing on a missing object — and `supportMode` is
+> the mode every learner now starts on.
+>
+> Speaking and Writing are one question each, so their `confidence` is near
+> zero by construction and the client shows those rows as provisional.
 
 > The item's difficulty band is deliberately **not** in the projection, and the
 > correct answer never leaves the server.
@@ -189,7 +208,11 @@ handed one item at a time instead of a fixed list.
       "sessionWordCount":0, "level":"B1", "nextDueAt":"2026-08-14T00:00:00Z",
       "activeSessionId": null }
   ],
+  // `nextAvailableAt` is the day the learner's first words ripen and is set
+  // whenever `available` is false — the card waits in plain sight with the date
+  // on it rather than disappearing for a week (ADR-089).
   "weeklyReview": { "available": true, "wordCount": 23,
+                    "wordsWaitingAfterThis": 13,
                     "periodStart":"2026-08-05T00:00:00Z", "nextAvailableAt": null },
   "vocabulary": { "learning": 31, "active": 12, "archived": 0 }
 }
@@ -215,6 +238,34 @@ handed one item at a time instead of a fixed list.
 | GET | `/words?state=LEARNING\|ACTIVE\|ARCHIVED&q=&page=&pageSize=` | → `{items:[Word], total, page, pageSize, hasMore}` |
 | GET | `/words/{id}` | → `WordDetail` |
 | DELETE | `/words/{id}` | → `204` — the learner removes it (ADR-071) |
+| PATCH | `/words/{id}/meaning` | `{meaning, acceptAnyway?}` → `Word` — rewrite the Arabic meaning, keeping the journey (ADR-101) |
+| PATCH | `/words/{id}/meaning` | `{meaning, replaceWithSenseId}` → `Word` — swap for the word that meaning belongs to, from the beginning |
+
+> **The meaning may change; the word may not** (ADR-101). Nothing about the
+> journey moves — state, current skill, every skill's status, attempts and
+> schedule, the exposure count and `addedAt` are all left exactly as they were.
+> A word that must start again does so by being replaced, not by being edited.
+>
+> Two authorities answer "is this still the same word", in this order:
+>
+> * **the dictionary**, when it recognises the wording — the only thing that can
+>   *name* the English word a meaning belongs to. `409
+>   MEANING_IS_ANOTHER_WORD` carries `candidates: [WordCandidate]`, and
+>   `acceptAnyway` does **not** override it: insisting is how one word would
+>   silently become another;
+> * **the checker**, when the dictionary has never seen the wording. It can only
+>   judge the pairing, so `409 MEANING_REJECTED` is the softer refusal
+>   `acceptAnyway` does overrule (ADR-074), and the disagreement is recorded.
+>
+> The sense id travels with the meaning when the new wording is another sense of
+> the same word, so the stored English definition still describes what the
+> learner says it means. `409 WORD_ALREADY_ADDED` when they already own that
+> sense. Sending the meaning it already has is a no-op: nothing is asked and
+> nothing is written.
+>
+> The swap is one request because it is one decision — the old word is deleted
+> and the new one added in the same transaction, so a learner who agreed to it
+> cannot end up holding both, or neither.
 
 > **Lookup searches from either side and never invents an entry.** `bo` returns
 > every sense whose word starts with those letters, each row carrying the word,
@@ -360,10 +411,22 @@ handed one item at a time instead of a fixed list.
 ```json
 { "reminders": [
     { "slot": "MORNING", "date": "2026-09-14", "hour": 8, "minute": 0,
-      "kind": "WORDS_DUE", "count": 4 },
+      "kind": "WORDS_DUE", "message": "WORDS_DUE_STREAK", "count": 5 },
     { "slot": "EVENING", "date": "2026-09-14", "hour": 20, "minute": 0,
-      "kind": "WORDS_DUE", "count": 4 } ] }
+      "kind": "WORDS_DUE", "message": "WORDS_DUE_FIVE_MINUTES", "count": 0 } ] }
 ```
+
+> `kind` is the coarse one — three values, unchanged since ADR-076. `message` is
+> **which of the twenty lines** to say (ADR-090); a client that does not
+> recognise it falls back on `kind`, which is why both are sent. `count` is the
+> number *in that line* and is zero when it has none — what it counts depends on
+> the message (words due, days of a streak, days until the next word ripens), so
+> no client has to guess what it was handed.
+>
+> Every message is chosen from facts the server holds. Anything that looks
+> backwards — a streak, yesterday, a level that rose — is only ever scheduled for
+> **today's** slots, because these fire up to a week later with no network and a
+> fact that has gone stale is a notification that lies.
 
 > **There is no push.** These are local notifications: the phone sets alarms for
 > itself, fires them offline with the app closed, and has nobody to ask what
@@ -459,6 +522,12 @@ per-user limiter.
 {
   "id":"s_1", "skill":"READING", "levelUsed":"B1",
   "isPractice": false,                          // true → owns no words (ADR-023)
+  // The language this session's own task instructions are given in, or null for
+  // the learner's (ADR-088). "EN" on a WRITING session at B1 and above; never
+  // set on any other skill. The client renders what it is handed — the decision
+  // is the level's, and the level lives here (R1). It moves the instruction
+  // only: the buttons and headings around it stay in the interface language.
+  "instructionLanguage": null,
   "content": {                                  // READING / LISTENING only
      "text":"Ahmed was studying computer science…",
      "revealTextAfterTest": false,              // true for LISTENING
@@ -480,6 +549,13 @@ per-user limiter.
                 "sentence":"The operating system is the interface between…",
                 "after":"Everyone in the group wrote that down."},
      "prompt":"What does \"operating system\" mean here?",
+     // The register follows the learner's band (ADR-088), not the skill:
+     //   A1–A2+   the Arabic meaning, as below
+     //   B1–B2    a plain-English definition, written for this sentence
+     //   B2+ …C2  the dictionary's own definition, unchanged
+     // All four options are always in one language — a single line in the other
+     // script marks itself out and the question can be passed without knowing
+     // the word.
      "options":["نظام تشغيل","لوحة مفاتيح","شبكة الإنترنت","برنامج رسم"]},
 
     // LISTENING target word: the same three sentences, spoken and never shown.
@@ -503,8 +579,8 @@ per-user limiter.
        {"kind":"SYNONYM","text":"OS"},
        {"kind":"ARABIC_MEANING","text":"نظام تشغيل"},
        {"kind":"LETTER_COUNT","text":"15"}],
-     "letters":["o","p","e","r","a","t","i","n","g"],   // lower levels only, shuffled
-     "inputMode":"LETTER_TILES"},                       // LETTER_TILES | FREE_TYPING
+     "letters":["o","p","e","r","a","t","i","n","g"],   // shuffled, with decoys
+     "inputMode":"LETTER_TILES"},                       // always, at every level
     {"id":"it9","type":"WRITING_TASK","wordId":"w_1",
      "clue":"نظام تشغيل",
      "prompt":"Write one sentence using \"operating system\"."}
@@ -606,7 +682,16 @@ substantial enough to judge (ADR-016).
 
 ```jsonc
 // WeeklyReviewSession
+//
+// Asks only about words that have had a week to settle and have not been
+// recalled correctly yet, oldest first, at most 50 at a time (ADR-089,
+// ADR-099). A word named right on the first attempt is retired for good; one
+// that was missed ripens again a week after the challenge that missed it.
+// `start` answers 409 REVIEW_NOT_READY while a learner's words are still
+// ripening, and 409 REVIEW_NOTHING_TO_REVIEW when they have recalled
+// everything — two situations, and only one of them has a date to wait for.
 { "id":"wr_1", "periodStart":"2026-08-05T00:00:00Z", "totalWords": 23,
+  "wordsWaitingAfterThis": 13,     // ripe words behind the cap of fifty
   "queue":[ {"id":"ri1","wordId":"w_1","prompt":"operating system",
              "options":["نظام تشغيل","كرة","قاعدة بيانات","متصفح"]} ] }
 
@@ -643,7 +728,7 @@ limit (R8). `start` returns `409 NO_WORDS_IN_PERIOD` when the week was empty.
 // PublicConfig — client-visible tunables (never client-enforced business rules)
 { "skillIntervalDays":2, "minDailyTarget":5, "maxDailyTarget":15,
   "defaultDailyTarget":10, "cefrLevels":["A1","A1_PLUS", "…"],
-  "skillsOrder":["READING","LISTENING","SPEAKING","WRITING","SPELLING"],
+  "skillsOrder":["READING","LISTENING","SPEAKING","SPELLING","WRITING"],
   "weeklyReviewPeriodDays":7 }
 ```
 
@@ -682,8 +767,7 @@ activity log (ADR-025) — the raw trail behind every figure beside it.
 > shows all three events — its current row remembers only the ending.
 
 > **Placement evidence is the audit trail for a level.** Each answer carries the
-> item, its CEFR band, the domain it measured (grammar and spelling included,
-> though neither is a visible skill), the partial-credit score, and — for
+> item, its CEFR band, the domain it measured, the partial-credit score, and — for
 > free-text and spoken items — the learner's own words. Multiple-choice items
 > deliberately store no raw answer: the score already says which option was
 > picked. `testVersion` stamps which item bank produced the result, because a
@@ -760,7 +844,7 @@ activity log (ADR-025) — the raw trail behind every figure beside it.
   "summary": { /* AdminUserSummary */ },
   "interests": ["technology","تصوير فوتوغرافي"],
   "levels": [ /* SkillLevel — spelling's are null */ ],
-  "spelling": { "itemsAnswered":4, "correct":3, "supportMode":"LETTER_TILES" },
+  "spelling": { "itemsAnswered":0, "correct":0, "supportMode":"LETTER_TILES" },
   "wordsLearning":31, "wordsActive":12, "wordsArchived":0,
   "wordsAddedToday":10, "wordsAddedThisWeek":63, "wordsAddedThisMonth":241,
   "skillStats": [ /* SkillStat, this user only */ ],

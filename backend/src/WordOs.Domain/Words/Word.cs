@@ -74,7 +74,20 @@ public class Word
     /// </summary>
     public int ExposureCount { get; private set; }
 
+    /// <summary>The last time the weekly challenge asked about this word.</summary>
     public DateTimeOffset? LastReviewedAt { get; private set; }
+
+    /// <summary>
+    /// When the learner first recalled this word correctly in a weekly
+    /// challenge — and therefore stopped being asked about it (ADR-099).
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="LastReviewedAt"/> because the two answer
+    /// different questions. "When was it last asked" sets when it ripens
+    /// again; "was it ever recalled" decides whether it ripens at all.
+    /// Rule R9 is untouched: neither field moves a word through the pipeline.
+    /// </remarks>
+    public DateTimeOffset? ReviewPassedAt { get; private set; }
 
     public IReadOnlyList<WordSkillState> Skills => _skills;
 
@@ -132,6 +145,39 @@ public class Word
         _skills.Single(s => s.Skill == skill);
 
     /// <summary>
+    /// The next skill this word still owes, in pipeline order, or null when it
+    /// has passed them all.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not</b> "the one after the skill just passed" (ADR-087). The pipeline
+    /// order is configuration and it changed once already — Writing moved
+    /// behind Spelling — and on the day it changed every word in flight was
+    /// standing somewhere in the old order. Advancing by position would have
+    /// walked a word sitting at the old last skill straight past the new one:
+    /// it passes Writing, the index says there is nothing after Writing, and
+    /// the word matures having never been asked to spell it.
+    ///
+    /// Asking instead which skills are still unpassed is correct under any
+    /// order, needs no migration, and takes nothing away from anyone: a word
+    /// mid-flight finishes in the order it started, and the skill it has not
+    /// done yet is still waiting for it afterwards. It is also the honest
+    /// reading of what the pipeline means — five skills, each demonstrated
+    /// once, in a preferred order (rule R5).
+    /// </remarks>
+    public SkillType? NextPendingSkill(WordOsConfiguration config)
+    {
+        foreach (var skill in config.SkillsOrder)
+        {
+            // A skill this word does not carry at all: the order gained an
+            // entry after the word was added. It owes it like any other.
+            var state = _skills.SingleOrDefault(s => s.Skill == skill);
+            if (state is null || state.Status != SkillStatus.Passed) return skill;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Eligibility for a session: still learning, it is this word's current
     /// skill, and the scheduled gap has elapsed.
     /// </summary>
@@ -186,7 +232,7 @@ public class Word
         state.Pass(now);
         _events.Add(WordEvent.Create(Id, WordEventType.SkillPassed, skill, now));
 
-        var next = config.NextSkillAfter(skill);
+        var next = NextPendingSkill(config);
         if (next is null)
         {
             // All five passed → Mature → Active (Word Life Cycle §22, §34).
@@ -202,7 +248,19 @@ public class Word
 
         var availableAt = now.AddDays(config.SkillIntervalDays);
         CurrentSkill = next;
-        SkillState(next.Value).ScheduleAt(availableAt);
+
+        // Seeded here rather than assumed, for the same reason NextPendingSkill
+        // exists: a word added under an older configuration may not carry a row
+        // for a skill the order has since gained, and `Single` on a missing row
+        // is an exception thrown at the moment a learner passes something.
+        var pending = _skills.SingleOrDefault(s => s.Skill == next.Value);
+        if (pending is null)
+        {
+            pending = WordSkillState.Pending(Id, next.Value);
+            _skills.Add(pending);
+        }
+
+        pending.ScheduleAt(availableAt);
 
         return new WordOutcome(Id, true, state.Status, next, availableAt, false);
     }
@@ -255,6 +313,52 @@ public class Word
         _events.Add(WordEvent.Create(Id, WordEventType.Deleted, null, now));
     }
 
+    /// <summary>
+    /// Rewrites the Arabic meaning of this word, and nothing else (ADR-101).
+    /// </summary>
+    /// <remarks>
+    /// The learner may decide that <c>create</c> is better written
+    /// <c>يصنع</c> than <c>أنشأ</c>, months after adding it, and be right. What
+    /// they must not do is turn it into a different word by the back door —
+    /// whether the new meaning still belongs to this English word is decided
+    /// before this is called, because it needs the dictionary and the checker,
+    /// and neither belongs in the aggregate.
+    ///
+    /// <para><b>Nothing about the journey moves.</b> Not the state, not the
+    /// current skill, not a single skill's status, attempts or schedule, not
+    /// the exposure count, not <see cref="AddedAt"/>. Same word, same queue,
+    /// same position — which is the whole promise the feature makes. A word
+    /// that must start again does so by being replaced, not by being
+    /// edited.</para>
+    ///
+    /// <para>The sense may be adopted along with the meaning when the new
+    /// wording is a sense the dictionary holds <i>for this same word</i>:
+    /// leaving the old sense id behind would keep an English definition that
+    /// describes the meaning the learner just rejected. The caller is
+    /// responsible for the identity check — <c>(UserId, SenseId)</c> is unique
+    /// and the learner may already own the sense being adopted.</para>
+    /// </remarks>
+    public void ChangeMeaning(
+        string meaning,
+        MeaningSource source,
+        MeaningCheckResult? check,
+        DateTimeOffset now,
+        string? senseId = null,
+        string? definitionEn = null,
+        string? partOfSpeech = null)
+    {
+        Meaning = meaning;
+        MeaningSource = source;
+        MeaningCheck = check;
+
+        if (senseId is { Length: > 0 }) SenseId = senseId;
+        if (definitionEn is not null) DefinitionEn = definitionEn;
+        if (partOfSpeech is not null) PartOfSpeech = partOfSpeech;
+
+        _events.Add(
+            WordEvent.Create(Id, WordEventType.MeaningChanged, null, now));
+    }
+
     public void RecordExposure(DateTimeOffset now)
     {
         ExposureCount++;
@@ -262,7 +366,23 @@ public class Word
             WordEvent.Create(Id, WordEventType.ExposureIncremented, null, now));
     }
 
-    public void MarkReviewed(DateTimeOffset now) => LastReviewedAt = now;
+    /// <summary>
+    /// Records that the weekly challenge asked about this word.
+    /// </summary>
+    /// <param name="passed">
+    /// Whether the learner named it correctly on the <b>first</b> attempt. A
+    /// word rescued on the second try was not remembered, which is the same
+    /// standard the weekly score is computed to (R9) — so it comes back.
+    /// </param>
+    /// <remarks>
+    /// Passing is recorded once and never withdrawn: the first correct recall
+    /// retires the word from the challenge for good (ADR-099).
+    /// </remarks>
+    public void MarkReviewed(DateTimeOffset now, bool passed)
+    {
+        LastReviewedAt = now;
+        if (passed) ReviewPassedAt ??= now;
+    }
 
     /// <summary>
     /// Brings every waiting skill of this word forward by <paramref name="days"/>.

@@ -76,6 +76,7 @@ class AppPalette extends ThemeExtension<AppPalette> {
     required this.danger,
     required this.dangerSurface,
     required this.border,
+    required this.trackRest,
     required this.subtleSurface,
     required this.canvas,
     required this.skillReading,
@@ -93,6 +94,17 @@ class AppPalette extends ThemeExtension<AppPalette> {
   final Color danger;
   final Color dangerSurface;
   final Color border;
+
+  /// The unplayed part of an audio track.
+  ///
+  /// Deliberately much stronger than [border]: this is the one line on the
+  /// player that tells a learner where the clip begins and ends, and drawn at
+  /// border strength it disappeared into the card — the bar looked like it had
+  /// no end, so there was no reading of how far through the clip they were
+  /// (ADR-082). Near-white on the dark theme, as asked; its light-theme
+  /// counterpart is a mid grey, because white on a white card is the same
+  /// invisibility with the opposite colour.
+  final Color trackRest;
   final Color subtleSurface;
   final Color canvas;
   final Color skillReading;
@@ -110,6 +122,7 @@ class AppPalette extends ThemeExtension<AppPalette> {
     danger: AppColors.dangerLight,
     dangerSurface: Color(0xFFFDECEC),
     border: Color(0xFFE3E5EF),
+    trackRest: Color(0xFFB9BECF),
     subtleSurface: Color(0xFFF2F3F9),
     canvas: Color(0xFFF7F8FC),
     skillReading: AppColors.reading,
@@ -128,6 +141,7 @@ class AppPalette extends ThemeExtension<AppPalette> {
     danger: AppColors.dangerDark,
     dangerSurface: Color(0xFF2D1618),
     border: Color(0xFF262A38),
+    trackRest: Color(0xFFE9EBF4),
     subtleSurface: Color(0xFF171A24),
     canvas: Color(0xFF0E1015),
     skillReading: Color(0xFF8B87FF),
@@ -147,6 +161,7 @@ class AppPalette extends ThemeExtension<AppPalette> {
     Color? danger,
     Color? dangerSurface,
     Color? border,
+    Color? trackRest,
     Color? subtleSurface,
     Color? canvas,
     Color? skillReading,
@@ -164,6 +179,7 @@ class AppPalette extends ThemeExtension<AppPalette> {
       danger: danger ?? this.danger,
       dangerSurface: dangerSurface ?? this.dangerSurface,
       border: border ?? this.border,
+      trackRest: trackRest ?? this.trackRest,
       subtleSurface: subtleSurface ?? this.subtleSurface,
       canvas: canvas ?? this.canvas,
       skillReading: skillReading ?? this.skillReading,
@@ -187,6 +203,7 @@ class AppPalette extends ThemeExtension<AppPalette> {
       danger: c(danger, other.danger),
       dangerSurface: c(dangerSurface, other.dangerSurface),
       border: c(border, other.border),
+      trackRest: c(trackRest, other.trackRest),
       subtleSurface: c(subtleSurface, other.subtleSurface),
       canvas: c(canvas, other.canvas),
       skillReading: c(skillReading, other.skillReading),

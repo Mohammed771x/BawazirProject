@@ -36,6 +36,20 @@ abstract class SpeechProvider {
   /// opens on the callback rather than on a guessed delay.
   set onComplete(VoidCallback? callback);
 
+  /// Fires as each word is about to be spoken, with where it starts in the
+  /// text that was handed over.
+  ///
+  /// The real playhead, and the reason a clip does not have to be chopped into
+  /// words to be positioned at one. Chopping it would give an exact position
+  /// and ruin the audio — every word its own utterance, with a gap after it,
+  /// which is not English being spoken but English being dictated. So the
+  /// engine keeps whole sentences and reports where inside one it has reached
+  /// (ADR-082).
+  ///
+  /// Platforms that do not report progress simply never call this; a caller
+  /// must still work without it.
+  set onWordBoundary(void Function(int start)? callback);
+
   /// False once the engine has proved unusable on this device.
   bool get isAvailable;
 
@@ -123,6 +137,7 @@ class DeviceSpeechProvider implements SpeechProvider {
   bool _available = true;
   String? _voice;
   VoidCallback? _onComplete;
+  void Function(int start)? _onWordBoundary;
 
   @override
   bool get isAvailable => _available;
@@ -132,6 +147,10 @@ class DeviceSpeechProvider implements SpeechProvider {
 
   @override
   set onComplete(VoidCallback? callback) => _onComplete = callback;
+
+  @override
+  set onWordBoundary(void Function(int start)? callback) =>
+      _onWordBoundary = callback;
 
   @override
   Future<void> initialise() async {
@@ -161,6 +180,12 @@ class DeviceSpeechProvider implements SpeechProvider {
 
       _tts.setCompletionHandler(_finished);
       _tts.setCancelHandler(_finished);
+      // iOS reports this from `willSpeakRangeOfSpeechString`, Android from
+      // `onRangeStart`. Neither is guaranteed, so nothing may depend on it
+      // arriving — it refines a position that is already usable without it.
+      _tts.setProgressHandler((text, start, end, word) {
+        _onWordBoundary?.call(start);
+      });
       _tts.setErrorHandler((dynamic _) {
         _available = false;
         _finished();
@@ -229,6 +254,7 @@ class DeviceSpeechProvider implements SpeechProvider {
   @override
   Future<void> dispose() async {
     _onComplete = null;
+    _onWordBoundary = null;
     // No timeout on teardown: a pending timer would outlive the widget tree,
     // and nobody is left to care whether the stop succeeded.
     unawaited(_guard(() => _tts.stop(), timeout: null));

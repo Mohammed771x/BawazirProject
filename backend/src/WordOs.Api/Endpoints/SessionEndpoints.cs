@@ -436,7 +436,12 @@ public static class SessionEndpoints
                 session.LevelUsed,
                 level.Value,
                 await DescribeWordsAsync(db, words, ct),
-                config.ComprehensionQuestionCount), ct);
+                config.ComprehensionQuestionCount,
+                // The band they are moving *to*. Re-telling regenerates the
+                // questions, so the options move with the text (ADR-088) — a
+                // learner who dropped to A2 because the passage was too hard
+                // would otherwise keep answering it in English.
+                LevelBands.OptionStyleFor(level.Value)), ct);
         }
         catch (Exception e) when (e is AiServiceException or HttpRequestException
                                       or TaskCanceledException)
@@ -458,7 +463,8 @@ public static class SessionEndpoints
 
         SessionContentBuilder.BuildComprehensionItems(
             session, content, words,
-            session.Skill == SkillType.Listening, Random.Shared);
+            session.Skill == SkillType.Listening, Random.Shared,
+            LevelBands.OptionStyleFor(level.Value));
 
         session.RecordAiCall(
             content.PromptVersion, content.Model, content.Tokens);
@@ -725,13 +731,22 @@ public static class SessionEndpoints
             case SkillType.Listening:
             {
                 var listening = skillType == SkillType.Listening;
+
+                // The register the word questions are answered in — Arabic up
+                // to A2+, plain English through B2, the dictionary's own above
+                // it (ADR-088). Decided from the level this session was built
+                // at, which for Reading and Listening is the learner's own
+                // standing in that skill.
+                var optionStyle = LevelBands.OptionStyleFor(contentLevel);
+
                 var content = await ai.GenerateContentAsync(new ContentRequest(
                     Level: contentLevel,
                     Interests: user.Interests.Select(i => i.Interest).ToList(),
                     Words: await DescribeWordsAsync(db, due, ct),
                     Listening: listening,
                     ComprehensionCount: config.ComprehensionQuestionCount,
-                    ReuseWords: await DescribeWordsAsync(db, activeWords, ct)), ct);
+                    ReuseWords: await DescribeWordsAsync(db, activeWords, ct),
+                    OptionStyle: optionStyle), ct);
 
                 session.SetContent(
                     content.Text, content.PromptVersion, content.Model,
@@ -739,7 +754,7 @@ public static class SessionEndpoints
                     GlossaryJson(content), content.Title);
 
                 SessionContentBuilder.BuildComprehensionItems(
-                    session, content, due, listening, random);
+                    session, content, due, listening, random, optionStyle);
 
                 await CreditExposureAsync(
                     db, session.Id, activeWords, content.Text, now, ct);
@@ -775,8 +790,7 @@ public static class SessionEndpoints
                     .ToDictionary(x => x.Id, x => x.Synonym!);
 
                 SessionContentBuilder.BuildSpellingItems(
-                    session, due, contentLevel, level.SpellingSupportMode,
-                    random, synonyms);
+                    session, due, contentLevel, random, synonyms);
                 break;
             }
 
@@ -1762,6 +1776,18 @@ public static class SessionEndpoints
         id = session.Id,
         skill = session.Skill.ToWire(),
         levelUsed = session.LevelUsed.ToWire(),
+        // Which language this session's own instructions are given in
+        // (ADR-088). Null means the learner's, which is what every session was
+        // and what every session below B1 still is.
+        //
+        // Derived here rather than stored: both facts it rests on are already
+        // persisted, so there is nothing to migrate and nothing that can fall
+        // out of step with the level the session was built at.
+        instructionLanguage =
+            session.Skill == SkillType.Writing &&
+            LevelBands.InstructionsInEnglish(session.LevelUsed)
+                ? "EN"
+                : null,
         // The client says so on screen: a learner should never be unsure
         // whether what they just did counted (§5).
         isPractice = session.IsPractice,

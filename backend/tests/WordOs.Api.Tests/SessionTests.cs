@@ -498,6 +498,84 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
     // ── Writing ──────────────────────────────────────────────────────────────
 
     [SkippableFact]
+    public async Task A_words_journey_is_listed_in_pipeline_order()
+    {
+        // Every list of a word's skills is drawn in the order it is sent, so
+        // the order it is sent in *is* the order the learner reads. It used to
+        // be `OrderBy(s => s.Skill)` — the enum's declaration — which went on
+        // saying Writing-then-Spelling after the pipeline stopped (ADR-092).
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var wordId = await AddWordAsync("research", "بحث علمي");
+
+        var response = await Client.GetAsync($"/api/words/{wordId}");
+        response.EnsureSuccessStatusCode();
+        var word = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        var skills = word.GetProperty("skills").EnumerateArray()
+            .Select(s => s.GetProperty("skill").GetString())
+            .ToList();
+
+        Assert.Equal(
+            new WordOsConfiguration().SkillsOrder.Select(s => s.ToWire()),
+            skills);
+    }
+
+    [SkippableFact]
+    public async Task The_hub_lists_its_skills_in_the_same_order()
+    {
+        // Two screens, one order. A hub that runs Spelling-then-Writing beside
+        // a word detail that runs the other way is the app disagreeing with
+        // itself about what happens next.
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        var response = await Client.GetAsync("/api/hub");
+        response.EnsureSuccessStatusCode();
+        var hub = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(
+            new WordOsConfiguration().SkillsOrder.Select(s => s.ToWire()),
+            hub.GetProperty("skills").EnumerateArray()
+                .Select(s => s.GetProperty("skill").GetString()));
+    }
+
+    [SkippableFact]
+    public async Task A_writing_task_is_set_in_English_from_B1_up()
+    {
+        // The language of the instruction is a *server* decision, sent with the
+        // session (ADR-088). The client renders what it is handed and decides
+        // nothing (rule R1), so this is where the rule has to be pinned.
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToWritingAsync();
+
+        var session = await StartAsync("writing");
+
+        // The seeded learner is at B1.
+        Assert.Equal("EN", session.GetProperty("instructionLanguage").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_reading_session_never_carries_an_instruction_language()
+    {
+        // The rule is about the Writing task, and a field that appeared on
+        // every session would quietly move the language of every instruction
+        // in the app the moment a client started honouring it.
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        var session = await StartAsync("reading");
+
+        Assert.Equal(
+            JsonValueKind.Null,
+            session.GetProperty("instructionLanguage").ValueKind);
+    }
+
+    [SkippableFact]
     public async Task Writing_asks_the_learner_to_use_the_word()
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);
@@ -642,6 +720,37 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
     }
 
     // ── Spelling ─────────────────────────────────────────────────────────────
+
+    [SkippableFact]
+    public async Task An_advanced_learner_still_spells_with_letters_not_a_keyboard()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpellingAsync();
+
+        // Spelling borrows the Reading level (ADR-017), and B2 and above used
+        // to be handed a text field. On a phone that raises a keyboard which
+        // autocorrects, predicts and completes the word — so the exercise
+        // measured the keyboard (ADR-100).
+        foreach (var level in new[] { "A1", "B2", "C2" })
+        {
+            (await Client.PatchAsJsonAsync(
+                "/api/settings/skill-level",
+                new { skill = "READING", level })).EnsureSuccessStatusCode();
+
+            var session = await StartAsync("spelling");
+            var item = session.GetProperty("items").EnumerateArray().Single();
+
+            Assert.Equal(
+                "LETTER_TILES", item.GetProperty("inputMode").GetString());
+            Assert.NotEmpty(item.GetProperty("letters").EnumerateArray());
+
+            (await Client.PostAsync(
+                $"/api/sessions/{session.GetProperty("id").GetGuid()}/abandon",
+                null)).EnsureSuccessStatusCode();
+        }
+    }
 
     [SkippableFact]
     public async Task Spelling_gives_a_clue_and_letters_but_no_level()
@@ -1620,20 +1729,27 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Passing_spelling_matures_the_word_into_active_vocabulary()
+    public async Task Passing_the_last_skill_matures_the_word_into_active_vocabulary()
     {
+        // Writing is the last skill (ADR-087). What matures a word is owing
+        // nothing, so this drives all five and asserts on the one that closes
+        // the pipeline rather than on a named skill's position in it.
         Skip.IfNot(db.IsAvailable, db.SkipReason);
         await SignInAsync();
         var wordId = await AddWordAsync("research", "بحث علمي");
-        await AdvanceToSpellingAsync();
+        await AdvanceToWritingAsync();
 
-        var session = await StartAsync("spelling");
+        var session = await StartAsync("writing");
         var sessionId = session.GetProperty("id").GetGuid();
         var item = session.GetProperty("items").EnumerateArray().Single();
 
         var answer = await Client.PostAsJsonAsync(
-            $"/api/sessions/{sessionId}/answer",
-            new { itemId = item.GetProperty("id").GetGuid(), answer = "research" });
+            $"/api/sessions/{sessionId}/writing",
+            new
+            {
+                itemId = item.GetProperty("id").GetGuid(),
+                answer = "Yesterday I used research in a real sentence.",
+            });
         answer.EnsureSuccessStatusCode();
 
         var complete = await Client.PostAsync(
@@ -1902,12 +2018,7 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         var userId = await SignInAsync();
         await AddWordAsync("research", "بحث علمي");
 
-        await FinishAsync(await StartAsync("reading"));
-        Clock.SkipDays(2);
-        await FinishAsync(await StartAsync("listening"));
-        Clock.SkipDays(2);
-        await FinishSpeakingAsync();
-        Clock.SkipDays(2);
+        await AdvanceToWritingAsync();
 
         var writing = await StartAsync("writing");
         var writingId = writing.GetProperty("id").GetGuid();
@@ -1977,6 +2088,10 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         // Put one word mid-pipeline so a state change would be visible.
         await FinishAsync(await StartAsync("reading"));
 
+        // The challenge asks about words that have had a week to settle
+        // (ADR-089), so the clock has to reach them.
+        Clock.SkipDays(new WordOsConfiguration().WeeklyReviewMaturityDays);
+
         WordSnapshot before;
         await using (var context = db.CreateContext())
         {
@@ -2022,6 +2137,87 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
                 .FirstAsync(w => w.Id == wordId);
             Assert.Equal(before, WordSnapshot.Of(word));
         }
+    }
+
+    [SkippableFact]
+    public async Task Only_the_words_the_learner_missed_come_back_next_week()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AddWordAsync("theory", "نظرية");
+
+        var config = new WordOsConfiguration();
+        Clock.SkipDays(config.WeeklyReviewMaturityDays);
+
+        var review = await StartReviewAsync();
+        var reviewId = review.GetProperty("id").GetGuid();
+        var queue = review.GetProperty("queue").EnumerateArray().ToList();
+        Assert.Equal(2, queue.Count);
+
+        // One recalled first time; one missed and then rescued on the retry.
+        await AnswerReviewAsync(reviewId, queue[0], correct: true);
+        await AnswerReviewAsync(reviewId, queue[1], correct: false);
+        await AnswerReviewAsync(reviewId, queue[1], correct: true);
+
+        (await Client.PostAsync($"/api/weekly-review/{reviewId}/complete", null))
+            .EnsureSuccessStatusCode();
+
+        // Not tomorrow: a word that came back gets its own week to be
+        // forgotten in, or the challenge is the same lesson again (ADR-099).
+        var tooSoon = await Client.PostAsync("/api/weekly-review/start", null);
+        Assert.Equal(HttpStatusCode.Conflict, tooSoon.StatusCode);
+
+        Clock.SkipDays(config.WeeklyReviewMaturityDays);
+
+        var second = await StartReviewAsync();
+
+        // The one they got right is finished with. The one they missed — even
+        // though the retry got it — is exactly what the challenge is for: the
+        // weekly score counts first attempts only, and so does this.
+        Assert.Equal(1, second.GetProperty("totalWords").GetInt32());
+
+        var asked = second.GetProperty("queue").EnumerateArray().First()
+            .GetProperty("wordId").GetGuid();
+        Assert.Equal(queue[1].GetProperty("wordId").GetGuid(), asked);
+    }
+
+    [SkippableFact]
+    public async Task A_word_recalled_correctly_is_never_asked_about_again()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        var config = new WordOsConfiguration();
+        Clock.SkipDays(config.WeeklyReviewMaturityDays);
+
+        var review = await StartReviewAsync();
+        var reviewId = review.GetProperty("id").GetGuid();
+        await AnswerReviewAsync(
+            reviewId,
+            review.GetProperty("queue").EnumerateArray().First(),
+            correct: true);
+
+        (await Client.PostAsync($"/api/weekly-review/{reviewId}/complete", null))
+            .EnsureSuccessStatusCode();
+
+        Clock.SkipDays(config.WeeklyReviewMaturityDays * 10);
+
+        var again = await Client.PostAsync("/api/weekly-review/start", null);
+        Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+
+        var problem = await again.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(
+            "REVIEW_NOTHING_TO_REVIEW",
+            problem.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    private async Task<JsonElement> StartReviewAsync()
+    {
+        var response = await Client.PostAsync("/api/weekly-review/start", null);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<JsonElement>();
     }
 
     private async Task<JsonElement> AnswerReviewAsync(
@@ -2072,7 +2268,15 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         Clock.SkipDays(2);
     }
 
-    private async Task AdvanceToWritingAsync()
+    /// <summary>
+    /// Carries a word through Reading, Listening and Speaking — as far as the
+    /// pipeline goes before it splits into the two productive skills.
+    /// </summary>
+    /// <remarks>
+    /// Spelling comes before Writing (ADR-087), so this is what "ready for
+    /// Spelling" means and Writing is one skill further on.
+    /// </remarks>
+    private async Task AdvanceToSpellingAsync()
     {
         await FinishAsync(await StartAsync("reading"));
         Clock.SkipDays(2);
@@ -2082,33 +2286,10 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         Clock.SkipDays(2);
     }
 
-    private async Task AdvanceToSpellingAsync()
+    private async Task AdvanceToWritingAsync()
     {
-        await AdvanceToWritingAsync();
-
-        var session = await StartAsync("writing");
-        var sessionId = session.GetProperty("id").GetGuid();
-
-        foreach (var item in session.GetProperty("items").EnumerateArray())
-        {
-            var word = session.GetProperty("targetWords").EnumerateArray()
-                .First(w => w.GetProperty("wordId").GetGuid()
-                            == item.GetProperty("wordId").GetGuid())
-                .GetProperty("text").GetString();
-
-            var response = await Client.PostAsJsonAsync(
-                $"/api/sessions/{sessionId}/writing",
-                new
-                {
-                    itemId = item.GetProperty("id").GetGuid(),
-                    answer = $"Yesterday I used {word} in a real sentence.",
-                });
-            response.EnsureSuccessStatusCode();
-        }
-
-        var complete = await Client.PostAsync(
-            $"/api/sessions/{sessionId}/complete", null);
-        complete.EnsureSuccessStatusCode();
+        await AdvanceToSpellingAsync();
+        await FinishAsync(await StartAsync("spelling"));
         Clock.SkipDays(2);
     }
 

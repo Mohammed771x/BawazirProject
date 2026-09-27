@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import '../../app/router.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/theme/app_tokens.dart';
-import 'hub_screen.dart';
 
 /// Bottom-navigation shell: Skills Hub · Vocabulary · Settings, with Add Word
 /// always one tap away.
@@ -23,10 +22,7 @@ class AppShell extends ConsumerWidget {
       floatingActionButton: shell.currentIndex == 2
           ? null
           : FloatingActionButton.extended(
-              onPressed: () async {
-                await context.push(Routes.addWord);
-                ref.invalidate(hubProvider);
-              },
+              onPressed: () => context.push(Routes.addWord),
               icon: const Icon(Icons.add_rounded),
               label: Text(s.addWord),
             ),

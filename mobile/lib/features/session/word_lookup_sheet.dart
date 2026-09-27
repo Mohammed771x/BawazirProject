@@ -146,7 +146,7 @@ class _WordLookupSheetState extends ConsumerState<_WordLookupSheet> {
                     ),
                   ),
                 ),
-                SpeakerButton(
+                WordSpeakerButtons(
                   id: 'lookup:${widget.word}',
                   text: widget.word,
                   size: 26,
@@ -365,8 +365,11 @@ class _SenseTile extends ConsumerWidget {
           Text(sense.meaning, style: context.text.titleSmall),
           if (sense.definitionEn.isNotEmpty) ...[
             const SizedBox(height: AppSpacing.xxs),
-            Text(
+            // English, laid out left-to-right so the full stop stays at the
+            // end (see add_word_screen).
+            EnglishText(
               sense.definitionEn,
+              textAlign: EnglishText.interfaceStart(context),
               style: context.text.bodySmall?.copyWith(
                 color: context.colors.onSurface.withValues(alpha: 0.7),
               ),

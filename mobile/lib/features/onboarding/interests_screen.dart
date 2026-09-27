@@ -52,9 +52,9 @@ class _InterestsScreenState extends ConsumerState<InterestsScreen> {
       body: SafeArea(
         child: options.when(
           loading: () => BusyView(message: s.loading),
-          error: (e, _) => ErrorView(
-            message: s.somethingWentWrong,
-            retryLabel: s.retry,
+          error: (e, _) => ErrorView.from(
+            e,
+            s,
             onRetry: () => ref.invalidate(interestOptionsProvider),
           ),
           data: (items) => Column(

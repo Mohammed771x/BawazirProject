@@ -2,12 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wordos/app/wordos_app.dart';
-import 'package:wordos/core/storage/app_preferences.dart';
-import 'package:wordos/core/storage/preferences_providers.dart';
-import 'package:wordos/core/api/api_providers.dart';
 import 'package:wordos/features/session/session_widgets.dart';
 
-import 'package:wordos/core/notifications/reminder_providers.dart';
 
 import 'support/test_harness.dart';
 
@@ -46,21 +42,10 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [
-          // The mock backend, pinned. A widget test must not depend on a
-          // server being up — see the note on `testOverrides`.
-          appEnvironmentProvider.overrideWithValue(
-            const AppEnvironment(useMockBackend: true, baseUrl: ''),
-          ),
-          appPreferencesProvider.overrideWithValue(
-            InMemoryAppPreferences(locale: locale, themeMode: theme),
-          ),
-          tokenStoreProvider.overrideWith((ref) => FakeTokenStore()),
-          // The app schedules reminders on sign-in (ADR-076), and the real
-          // scheduler is a platform channel this binary does not have.
-          notificationSchedulerProvider
-              .overrideWithValue(FakeNotificationScheduler()),
-        ],
+        // The shared harness rather than a copy of it: this list drifted out
+        // of step once already, and the symptom was a pending-timer failure
+        // that said nothing about what it was testing.
+        overrides: testOverrides(locale: locale, themeMode: theme),
         child: const WordOsApp(),
       ),
     );
@@ -156,21 +141,7 @@ void main() {
     // surface. Full-strength decoration is the fix, and it is worth pinning.
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [
-          // The mock backend, pinned — see the note on `testOverrides`.
-          appEnvironmentProvider.overrideWithValue(
-            const AppEnvironment(useMockBackend: true, baseUrl: ''),
-          ),
-          appPreferencesProvider.overrideWithValue(
-            InMemoryAppPreferences(
-                locale: const Locale('en'), themeMode: ThemeMode.dark),
-          ),
-          tokenStoreProvider.overrideWith((ref) => FakeTokenStore()),
-          // The app schedules reminders on sign-in (ADR-076), and the real
-          // scheduler is a platform channel this binary does not have.
-          notificationSchedulerProvider
-              .overrideWithValue(FakeNotificationScheduler()),
-        ],
+        overrides: testOverrides(themeMode: ThemeMode.dark),
         child: const WordOsApp(),
       ),
     );

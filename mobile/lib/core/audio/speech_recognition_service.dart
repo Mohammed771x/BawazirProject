@@ -47,6 +47,11 @@ class SpeechRecognitionService {
   /// The segment being spoken right now, replaced as it is refined.
   String _partial = '';
 
+  /// Which platform session is current. Results carry the number of the
+  /// session that produced them, so a late one from a session already closed
+  /// — and already saved — cannot be added a second time.
+  int _session = 0;
+
   void Function(String heard)? _onPartial;
 
   /// Restarts since the last word was heard, so a recogniser that has stopped
@@ -149,6 +154,7 @@ class SpeechRecognitionService {
     _committed = '';
     _partial = '';
     _emptyRestarts = 0;
+    _session++;
     _onPartial = onPartial;
     _wantsToListen = true;
 
@@ -166,27 +172,45 @@ class SpeechRecognitionService {
   Future<bool> _listen() async {
     if (_listening) return true;
 
+    // Whatever the closed session was still refining is kept, not dropped.
+    //
+    // This is the Android bug: a learner pauses, the recogniser decides the
+    // speech is over and closes the session with `error_speech_timeout` or
+    // `error_no_match` — **without** a final result. The words were only ever
+    // a partial, so nothing had moved them into [_committed], and the new
+    // session's first result replaced them. Everything said before the pause
+    // vanished. iOS nearly always finalises before closing, which is why this
+    // was reported only from Android phones.
+    _commitPartial();
+
+    final session = ++_session;
+
     try {
       _listening = true;
 
       await _speech.listen(
         onResult: (result) {
+          // A late result from a session already closed. Its words were saved
+          // when that session ended (above), so taking them again would say
+          // everything twice.
+          if (session != _session) return;
+
           final words = result.recognizedWords.trim();
 
           if (result.finalResult) {
-            // The segment is closed. Move it into the transcript so the next
-            // session's empty first result cannot take it away.
-            if (words.isNotEmpty) {
-              _committed =
-                  _committed.isEmpty ? words : '$_committed $words';
-              _emptyRestarts = 0;
-            }
-
-            _partial = '';
-          } else {
+            // The segment is closed. A final result with *no* words — which
+            // Android sends after `error_no_match` — does not mean the
+            // learner said nothing; it means the platform gave up refining.
+            // What was heard so far is kept.
+            _partial = words.isNotEmpty ? words : _partial;
+            _commitPartial();
+          } else if (words.isNotEmpty) {
             _partial = words;
-            if (words.isNotEmpty) _emptyRestarts = 0;
+            _emptyRestarts = 0;
           }
+          // An empty partial carries no information — some Android
+          // recognisers send one at the start of a session and after a pause —
+          // so it never overwrites words already heard.
 
           _onPartial?.call(heard);
         },
@@ -224,6 +248,14 @@ class SpeechRecognitionService {
       _listening = false;
       return false;
     }
+  }
+
+  /// Moves the segment in progress into the transcript.
+  void _commitPartial() {
+    if (_partial.isEmpty) return;
+    _committed = _committed.isEmpty ? _partial : '$_committed $_partial';
+    _partial = '';
+    _emptyRestarts = 0;
   }
 
   /// Reopens the microphone after the platform closed its session.

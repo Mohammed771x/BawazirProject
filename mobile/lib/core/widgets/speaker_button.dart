@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../audio/speech_provider.dart';
+import '../l10n/app_strings.dart';
 import '../audio/speech_service.dart';
 import '../theme/app_tokens.dart';
 
@@ -23,6 +24,7 @@ class SpeakerButton extends ConsumerWidget {
     this.size = 20,
     this.tooltip,
     this.color,
+    this.slow = false,
   });
 
   /// Identifies this utterance. Two buttons speaking different things must use
@@ -35,8 +37,15 @@ class SpeakerButton extends ConsumerWidget {
   final String? tooltip;
   final Color? color;
 
+  /// Draws the slow-speed face and names itself accordingly. Kept separate
+  /// from [rate] on purpose: a caller may want the slow voice without the
+  /// button announcing it — the placement screen does — and a button that
+  /// looked identical to its neighbour would be the real problem.
+  final bool slow;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
     final speech = ref.watch(speechServiceProvider);
     final playing = speech.isSpeakingId(id);
     final tint = color ?? context.colors.primary;
@@ -45,7 +54,9 @@ class SpeakerButton extends ConsumerWidget {
       onPressed: text.trim().isEmpty
           ? null
           : () => speech.toggle(id, text, rate: rate),
-      tooltip: tooltip,
+      // Named, so the slow one is distinguishable by a screen reader and by
+      // anyone who long-presses rather than guessing from a small glyph.
+      tooltip: tooltip ?? (slow ? s.slowSpeed : null),
       iconSize: size,
       visualDensity: VisualDensity.compact,
       style: IconButton.styleFrom(
@@ -56,8 +67,58 @@ class SpeakerButton extends ConsumerWidget {
       icon: Icon(
         // A distinct stop icon, not a differently-coloured speaker: the learner
         // needs to know the second tap will stop it, not replay it.
-        playing ? Icons.stop_rounded : Icons.volume_up_rounded,
+        playing
+            ? Icons.stop_rounded
+            : (slow
+                ? Icons.slow_motion_video_rounded
+                : Icons.volume_up_rounded),
       ),
+    );
+  }
+}
+
+/// How a word sounds — at ordinary speed, and slowly.
+///
+/// The pair, not a single button, and **everywhere a word can be heard**: the
+/// slow voice is the one a learner reaches for when they did not catch the
+/// word the first time, and it used to exist on exactly two screens. A learner
+/// who finds it beside a Listening question and not in their own word list has
+/// not learned that the app has two speeds; they have learned that this screen
+/// is missing something (ADR-083).
+///
+/// Two ids, one per speed, so the two buttons can never light up together.
+class WordSpeakerButtons extends StatelessWidget {
+  const WordSpeakerButtons({
+    super.key,
+    required this.id,
+    required this.text,
+    this.size = 20,
+    this.color,
+  });
+
+  /// Identifies this word's utterances. The slow one derives from it, so a
+  /// caller never has to remember to make them differ.
+  final String id;
+
+  final String text;
+  final double size;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SpeakerButton(id: id, text: text, size: size, color: color),
+        SpeakerButton(
+          id: 'slow:$id',
+          text: text,
+          rate: SpeechRate.slow,
+          size: size,
+          color: color,
+          slow: true,
+        ),
+      ],
     );
   }
 }

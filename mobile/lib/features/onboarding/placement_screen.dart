@@ -297,8 +297,8 @@ class _QuestionView extends ConsumerWidget {
                     icon: SkillVisuals.icon(item.skill),
                   ),
                   const Spacer(),
-                  // An adaptive test has no fixed length, so this is shown as
-                  // an approximation rather than a countdown.
+                  // Eight questions, and the app says which one this is: the
+                  // length stopped varying with ADR-098.
                   Text(
                     s.placementApproxProgress(
                       progress.answered + 1,

@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/enums.dart';
+import '../models/reminder.dart';
 import '../storage/app_preferences.dart';
 import '../storage/preferences_providers.dart';
 
@@ -15,6 +16,23 @@ class AppStrings {
   final Locale locale;
 
   bool get isArabic => locale.languageCode == 'ar';
+
+  /// The strings a session's own task instructions are written with.
+  ///
+  /// Usually these ones. A session whose server told it `'EN'` renders its
+  /// instructions in English instead: from B1 up, a learner about to write
+  /// English has already started in it, and an instruction in the language of
+  /// the task is one less translation between them and the work (ADR-088).
+  ///
+  /// Only the instruction moves. The buttons, the headings and the errors
+  /// around it stay in the interface's own language, because those are the app
+  /// talking rather than the exercise.
+  ///
+  /// The decision is the server's; this only obeys it (rule R1). Anything other
+  /// than `'EN'` — including null, and including a value this build has never
+  /// heard of — leaves the learner's language alone.
+  AppStrings forInstructions(String? language) =>
+      language == 'EN' ? const AppStrings(Locale('en')) : this;
 
   String _(String en, String ar) => isArabic ? ar : en;
 
@@ -464,14 +482,17 @@ class AppStrings {
         'A short check to find your starting point for each skill. It is not a certificate.',
         'اختبار قصير لتحديد نقطة البداية لكل مهارة، وليس شهادة نهائية.',
       );
+  // Eight questions, and the app says eight. The note used to promise a test
+  // that "stops as soon as it is sure", which was true of the twenty-question
+  // version and is a strange thing to read on a fixed-length test (ADR-098).
   String get placementAdaptiveNote => _(
-        'The questions adapt to your answers, so the test stays short and stops '
-            'as soon as it is sure.',
-        'تتكيّف الأسئلة مع إجاباتك، لذا يبقى الاختبار قصيرًا وينتهي فور التأكد من مستواك.',
+        'Eight questions, and they adapt to your answers — so the test finds '
+            'your level without taking your evening.',
+        'ثمانية أسئلة فقط، وتتكيّف مع إجاباتك — فيحدّد الاختبار مستواك دون أن يطول عليك.',
       );
   String placementApproxProgress(int current, int approxTotal) => _(
-        '$current of ~$approxTotal',
-        '$current من ~$approxTotal',
+        '$current of $approxTotal',
+        '$current من $approxTotal',
       );
   String get placementProvisional => _(
         'Provisional — we will confirm this from your first sessions',
@@ -485,11 +506,11 @@ class AppStrings {
   String get placementResultTitle =>
       _('Your estimated levels', 'مستوياتك التقديرية');
   String get placementEstimateNote => _(
-        'These are estimates from a short test — not a judgement of you. '
-        'WordOS keeps adjusting them from your real sessions, and you can '
-        'change any of them yourself in Settings.',
-        'هذه تقديرات من اختبار قصير — وليست حكمًا عليك. يواصل WordOS تعديلها '
-        'من جلساتك الفعلية، ويمكنك تغيير أيٍّ منها بنفسك من الإعدادات.',
+        'A first, rough reading from eight questions — not a judgement of you. '
+        'WordOS keeps adjusting it from your real sessions, and you can change '
+        'any of these levels yourself in Settings.',
+        'هذا تحليل مبدئي من ثمانية أسئلة — وليس حكمًا عليك. يواصل WordOS تعديله '
+        'من جلساتك الفعلية، ويمكنك تعديل أيٍّ من هذه المستويات بنفسك من الإعدادات.',
       );
   String get spellingMeasured => _('Measured', 'مُقاسة');
   String spellingAccuracyLabel(int correct, int total) => _(
@@ -513,6 +534,24 @@ class AppStrings {
         count == 1 ? 'كلمة واحدة جاهزة' : '$count كلمات جاهزة',
       );
   String get nothingDue => _('Nothing due yet', 'لا يوجد مستحق الآن');
+
+  /// The challenge, before it opens (ADR-089).
+  ///
+  /// A word is not reviewable the day it is added, so a learner's first week
+  /// has no challenge in it. Naming the day is what turns that from a feature
+  /// that appears broken into one that is obviously coming.
+  String challengeOpensOn(String when) =>
+      _('Opens on $when', 'يفتح في $when');
+
+  /// Said before they start, not discovered after they finish.
+  String challengeMoreAfterThis(int count) => _(
+        count == 1
+            ? '1 more word waiting after these'
+            : '$count more words waiting after these',
+        count == 1
+            ? 'كلمة أخرى تنتظر بعد هذه'
+            : '$count كلمات أخرى تنتظر بعد هذه',
+      );
   String nextDue(String when) =>
       _('Next on $when', 'التالي في $when');
   String get openSkill => _('Start session', 'ابدأ الجلسة');
@@ -617,6 +656,8 @@ class AppStrings {
         WordEventType.exposureIncremented => _('Reused', 'أُعيد استخدامها'),
         WordEventType.archived => _('Archived', 'أُرشفت'),
         WordEventType.deleted => _('Deleted by the learner', 'حذفها المتعلّم'),
+        WordEventType.meaningChanged =>
+          _('Meaning rewritten', 'عدّل المتعلّم المعنى'),
       };
 
   String get pipeline => _('Pipeline', 'المسار');
@@ -715,6 +756,151 @@ class AppStrings {
         'قائمتك فارغة. أضف أول كلمة، لن تأخذ منك دقيقة.',
       );
 
+  /// The twenty lines a reminder can say (ADR-090).
+  ///
+  /// The server chooses which — it is the only side that knows whether there is
+  /// a streak to mention or a level that moved — and this decides how it reads.
+  /// [message] is null on a server that predates the catalogue or a key this
+  /// build has never met, and then [kind] answers instead: three sentences that
+  /// are always true, which is what a fallback has to be.
+  ///
+  /// Written to be read, not to nag. The rules they were written under:
+  ///
+  /// * **Never a reproach.** "You haven't practised in 4 days" is accurate and
+  ///   it makes the app something to avoid. The same fact says "your words are
+  ///   where you left them".
+  /// * **Name the size of the ask, not the size of the backlog.** "Five
+  ///   minutes" is a decision somebody can make standing at a bus stop; "you
+  ///   have 23 words waiting" is a decision to postpone.
+  /// * **The number is a guest, not the host.** It appears where it helps and
+  ///   is absent everywhere else — see how few of these carry one.
+  /// * **Say one thing.** A notification is read in the time it takes to
+  ///   decide whether to swipe it away.
+  String reminderBody(ReminderMessage? message, ReminderKind kind, int count) =>
+      switch (message) {
+        // ── Words are waiting ────────────────────────────────────────────────
+        ReminderMessage.wordsDueCount => reminderWordsDue(count),
+
+        ReminderMessage.wordsDueOne => _(
+            'One word is waiting. That is the whole list.',
+            'كلمة واحدة تنتظرك. هذه كل القائمة.',
+          ),
+
+        ReminderMessage.wordsDueFiveMinutes => _(
+            'Five minutes now beats an hour on Friday.',
+            'خمس دقائق الآن خير من ساعة يوم الجمعة.',
+          ),
+
+        ReminderMessage.wordsDueMorning => _(
+            'Start the day with your words, before the day takes the time.',
+            'ابدأ يومك بكلماتك، قبل أن يأخذ اليوم وقته منك.',
+          ),
+
+        ReminderMessage.wordsDueEvening => _(
+            'The day is nearly over, and your words are still waiting.',
+            'اليوم أوشك على الانتهاء، وكلماتك ما زالت تنتظر.',
+          ),
+
+        ReminderMessage.wordsDueStreak => _(
+            '$count days in a row. Today keeps it going.',
+            'ـ$count أيام متتالية. اليوم يكملها.',
+          ),
+
+        // The one line in here with a deadline in it, and the reason the
+        // composer refuses to let the rotation trade it for a gentler one.
+        ReminderMessage.wordsDueStreakAtRisk => _(
+            'Your $count-day run ends at midnight. A few minutes saves it.',
+            'سلسلتك التي بلغت $count أيام تنتهي منتصف الليل. دقائق تكفي لإنقاذها.',
+          ),
+
+        ReminderMessage.wordsDueAfterGoodDay => _(
+            'Yesterday went well. Today is waiting for you.',
+            'الأمس كان جيدًا. واليوم ينتظرك.',
+          ),
+
+        // Never "you have been away for four days". The fact is the same and
+        // the sentence is an accusation.
+        ReminderMessage.wordsDueWelcomeBack => _(
+            'Your words are exactly where you left them. Pick one up.',
+            'كلماتك في مكانها تمامًا كما تركتها. ابدأ بواحدة.',
+          ),
+
+        ReminderMessage.wordsDueLevelRose => _(
+            'Your level went up recently. Today shows whether it holds.',
+            'مستواك ارتفع مؤخرًا. اليوم يثبت إن كان سيصمد.',
+          ),
+
+        ReminderMessage.wordsDueAlmostActive => _(
+            count == 1
+                ? 'One word is a single step from being yours for good.'
+                : '$count words are one step from being yours for good.',
+            count == 1
+                ? 'كلمة واحدة تفصلها خطوة عن أن تصبح لك للأبد.'
+                : 'ـ$count كلمات تفصلها خطوة واحدة عن أن تصبح لك للأبد.',
+          ),
+
+        // ── Nothing due, and that is the design working ──────────────────────
+        ReminderMessage.nothingDueResting => reminderNothingDue(count),
+
+        ReminderMessage.nothingDueAddOne => _(
+            'A quiet day. A good one to add a word you met today.',
+            'يوم هادئ. فرصة لإضافة كلمة قابلتها اليوم.',
+          ),
+
+        ReminderMessage.nothingDueActiveCount => _(
+            count == 1
+                ? 'One word has made it all the way. Nothing due today.'
+                : '$count words have made it all the way. Nothing due today.',
+            count == 1
+                ? 'كلمة واحدة أكملت الطريق حتى النهاية. لا شيء مستحق اليوم.'
+                : 'ـ$count كلمات أكملت الطريق حتى النهاية. لا شيء مستحق اليوم.',
+          ),
+
+        ReminderMessage.nothingDueNextOpens => _(
+            count <= 1
+                ? 'Nothing today — your next words open tomorrow.'
+                : 'Nothing today — your next words open in $count days.',
+            count <= 1
+                ? 'لا شيء اليوم، وكلماتك التالية تفتح غدًا.'
+                : 'لا شيء اليوم، وكلماتك التالية تفتح بعد $count أيام.',
+          ),
+
+        // ── Nothing at all ───────────────────────────────────────────────────
+        ReminderMessage.noWordsFirst => reminderNoWords,
+
+        ReminderMessage.noWordsOneADay => _(
+            'One word a day is three hundred a year. Start with one.',
+            'كلمة واحدة كل يوم تعني ثلاثمئة في السنة. ابدأ بواحدة.',
+          ),
+
+        // ── The weekly challenge (ADR-089) ───────────────────────────────────
+        //
+        // Neither carries a number, by instruction: how many words ripened is
+        // the product's bookkeeping, and a count here would make a quiet week
+        // look like a failure.
+        ReminderMessage.reviewReady => _(
+            'Your words for this week are ready. Start the challenge.',
+            'كلماتك لهذا الأسبوع جاهزة. ابدأ التحدي.',
+          ),
+
+        ReminderMessage.reviewMoreWaiting => _(
+            'There is another group of words waiting. Finish them off.',
+            'ما زالت هناك مجموعة أخرى من الكلمات. أكملها.',
+          ),
+
+        ReminderMessage.openTheApp => _(
+            'A few minutes with your words today?',
+            'دقائق قليلة مع كلماتك اليوم؟',
+          ),
+
+        // A key this build does not know, or a server that predates them all.
+        null => switch (kind) {
+            ReminderKind.wordsDue => reminderWordsDue(count),
+            ReminderKind.nothingDue => reminderNothingDue(count),
+            ReminderKind.noWords => reminderNoWords,
+          },
+      };
+
   // ── Writing your own meaning (ADR-072) ────────────────────────────────────
   String get writeMeaningYourself =>
       _('Write the meaning yourself', 'اكتب المعنى بنفسك');
@@ -762,6 +948,49 @@ class AppStrings {
         'تعذّر التحقق من المعنى الآن. حاول بعد قليل.',
       );
 
+  // ── Rewriting the meaning of a word already owned (ADR-101) ───────────────
+
+  String get changeMeaningTitle =>
+      _('What does this word mean?', 'ما معنى هذه الكلمة؟');
+
+  /// Said above the field, because the rule is not obvious and the refusal
+  /// downstream would otherwise arrive as a surprise: the *meaning* is theirs
+  /// to change, the *word* is not.
+  String changeMeaningNote(String word) => _(
+        'Write it however you would say it. It still has to be a meaning of '
+        '"$word" — a meaning of a different word is a different word, and this '
+        'one keeps everything you have done on it.',
+        'اكتبه كما تقوله أنت. لكن يبقى شرطًا أن يكون معنى لكلمة «$word» — فمعنى '
+        'كلمة أخرى هو كلمة أخرى، وهذه تحتفظ بكل ما أنجزته فيها.',
+      );
+
+  String get meaningUpdated => _('Meaning updated', 'تم تعديل المعنى');
+
+  String get meaningIsAnotherWordTitle =>
+      _('That is a different word', 'هذا معنى كلمة أخرى');
+
+  /// Names both words, because the learner was not wrong — they were on
+  /// another word, and the useful thing to say is which.
+  String meaningIsAnotherWordBody(
+    String meaning,
+    String otherWord,
+    String thisWord,
+  ) =>
+      _(
+        '"$meaning" is what "$otherWord" means, not "$thisWord". Swap them? '
+        '"$thisWord" is removed and "$otherWord" starts from the beginning — '
+        'it has never been tested on you.',
+        '«$meaning» معنى كلمة «$otherWord»، وليست «$thisWord». تبديلهما؟ '
+        'ستُحذف «$thisWord» وتبدأ «$otherWord» من أول المسار — فأنت لم تُختبر '
+        'فيها بعد.',
+      );
+
+  String swapForWord(String word) =>
+      _('Swap for "$word"', 'استبدلها بـ«$word»');
+
+  String wordSwapped(String word) =>
+      _('"$word" added, from the beginning', 'أُضيفت «$word» من البداية');
+
   String get meaningNeedsRealWord => _(
         'The meaning is yours to write. We check the spelling and that it '
         'really is what the word means.',
@@ -805,7 +1034,29 @@ class AppStrings {
       _('Read it over before sending', 'راجع ما قلته قبل الإرسال');
   String get recordAgain => _('Record again', 'تسجيل من جديد');
   String get send => _('Send', 'إرسال');
+  /// The clip is paused, not stopped: the control that suspends it says so,
+  /// and the one that picks it up again promises to continue rather than to
+  /// start over (ADR-080).
+  String get pauseAudio => _('Pause', 'إيقاف مؤقت');
+  String get resumeAudio => _('Continue', 'متابعة');
+
+  /// The line under the control names the **state**, not the next tap.
+  ///
+  /// It used to name the action, so a learner who had just pressed pause read
+  /// "Continue" and understood the clip to be running. The icon is the verb;
+  /// the words say where things stand (ADR-082).
+  String get audioPlaying => _('Playing', 'قيد التشغيل');
+  String get audioPaused => _('Paused', 'متوقف مؤقتًا');
+  String get audioFinished => _('Finished', 'انتهى المقطع');
+
+  /// Elapsed and total, as `0:12 / 0:45`.
+  ///
+  /// Both are **estimates**. Text-to-speech has no file and no duration to
+  /// report, so the clock is the playhead expressed in seconds, using a
+  /// speaking rate measured as the clip runs (ADR-082).
+  String clipClock(String elapsed, String total) => '$elapsed / $total';
   String get jumpToStart => _('Back to the start', 'إلى البداية');
+
   String get jumpToEnd => _('Skip to the end', 'إلى النهاية');
   /// Where the clip has reached. Counted in sentences because that is what a
   /// text-to-speech voice can actually be positioned at — there is no
@@ -929,6 +1180,17 @@ class AppStrings {
       );
   String get startConversation => _('Start the conversation', 'ابدأ المحادثة');
   String get listenToSentence => _('Listen to this sentence', 'استمع إلى هذه الجملة');
+  /// The target word said on its own, beside the question that asks about it.
+  ///
+  /// Listening is the one skill where the word is never read aloud in
+  /// isolation — it arrives buried in a sentence, at speaking speed — so
+  /// "what does it mean" is asked of a learner who may not have caught how it
+  /// sounds at all (ADR-081).
+  String get hearTheWord => _('Hear the word', 'استمع إلى الكلمة');
+  String hearTheWordSlowly(String word) =>
+      _('Hear "$word" slowly', 'استمع إلى «$word» ببطء');
+  String hearTheWordNormally(String word) =>
+      _('Hear "$word"', 'استمع إلى «$word»');
   String get audioUnavailable => _(
         'Audio is unavailable on this device — here is the sentence instead',
         'الصوت غير متاح على هذا الجهاز — إليك الجملة بدلًا من ذلك',
@@ -967,6 +1229,13 @@ class AppStrings {
         SessionPromptKey.writeASentenceAboutYourself => _(
             'Write one sentence about your own life using "$word".',
             'اكتب جملة واحدة عن حياتك تستخدم فيها «$word».',
+          ),
+        // [word] is deliberately unused. Listening's whole task is that the
+        // learner never sees the word — they hear it inside a sentence and say
+        // what it meant — so the question names it in no language (ADR-085).
+        SessionPromptKey.listeningWordMeaning => _(
+            'What does the word you just heard mean here?',
+            'ما معنى الكلمة التي سمعتها في هذه الجملة؟',
           ),
         null => '',
       };

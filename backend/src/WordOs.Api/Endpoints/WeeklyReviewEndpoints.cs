@@ -56,21 +56,44 @@ public static class WeeklyReviewEndpoints
         if (userId is null) return Results.Unauthorized();
 
         var now = clock.GetUtcNow();
-        var periodStart = now.AddDays(-config.WeeklyReviewPeriodDays);
 
-        // Everything added in the period, whatever state it reached. A word
-        // that is still on Reading counts exactly as much as one that matured:
-        // the question is what the learner remembers, not how far it travelled.
-        var words = await db.Words
-            .Where(w => w.UserId == userId && w.AddedAt >= periodStart)
+        // Every word this learner still owes a review, whatever pipeline state
+        // it reached — a word on Reading counts exactly as much as one that
+        // matured, because the question is what they remember (rule R9). A word
+        // already recalled correctly is done and is not here (ADR-099).
+        var owned = await db.Words
+            .Where(w => w.UserId == userId && w.ReviewPassedAt == null)
             .OrderBy(w => w.AddedAt)
             .ToListAsync(ct);
 
+        // Ripe, oldest first, capped at one sitting (ADR-089). A word added
+        // today is deliberately not here: testing it the day it arrived asks
+        // what the learner still has in mind, not what they retained.
+        var words = WeeklyReviewPolicy.NextSitting(owned, now, config);
+
         if (words.Count == 0)
         {
-            return Problems.Conflict(
-                "NO_WORDS_IN_PERIOD", "No words were added in this period.");
+            // Two different situations, and telling them apart is the whole
+            // value of the message: a learner in their first week has a *date*
+            // to be given, and one who has cleared everything has nothing to do
+            // and should be told so plainly.
+            var opensAt = WeeklyReviewPolicy.OpensAt(owned, config);
+
+            return opensAt is null
+                ? Problems.Conflict(
+                    "REVIEW_NOTHING_TO_REVIEW",
+                    "You have recalled every word you added. Nothing to review.")
+                // The *date* lives on the hub, which is the screen with the
+                // challenge card on it and the one place a client needs it.
+                // This message only has to be honest to a caller who reached
+                // the endpoint another way.
+                : Problems.Conflict(
+                    "REVIEW_NOT_READY",
+                    "Your words need a week to settle before the challenge "
+                    + $"opens. The first are ready on {opensAt:yyyy-MM-dd}.");
         }
+
+        var periodStart = words[0].AddedAt;
 
         // An unfinished review is replaced rather than resumed — a half-answered
         // review carries a stale queue and would distort the score.
@@ -94,11 +117,18 @@ public static class WeeklyReviewEndpoints
         db.WeeklyReviews.Add(review);
         await db.SaveChangesAsync(ct);
 
+        // What is left behind the cap, so the client can say "there is another
+        // group after this one" instead of letting it arrive as a surprise
+        // tomorrow (ADR-089).
+        var remainingAfter =
+            WeeklyReviewPolicy.Ripe(owned, now, config).Count - words.Count;
+
         return Results.Ok(new
         {
             id = review.Id,
             periodStart = review.PeriodStart,
             totalWords = review.TotalWords,
+            wordsWaitingAfterThis = remainingAfter,
             queue = review.Queue.Select(ToItem).ToList(),
         });
     }
@@ -157,7 +187,12 @@ public static class WeeklyReviewEndpoints
         var word = await db.Words.FirstOrDefaultAsync(w => w.Id == item.WordId, ct);
         if (word is not null)
         {
-            word.MarkReviewed(now);
+            // Correct first time retires the word from the challenge; anything
+            // else leaves it in the pool, ripening again for next week
+            // (ADR-099). First attempt, because that is the standard the
+            // weekly score itself is computed to — a word rescued on the
+            // second try was not remembered (R9).
+            word.MarkReviewed(now, passed: item.FirstAttemptCorrect == true);
 
             var alreadyCounted = await db.WordExposures.AnyAsync(
                 e => e.WordId == word.Id

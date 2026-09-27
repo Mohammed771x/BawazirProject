@@ -5,7 +5,7 @@ import 'package:intl/intl.dart' hide TextDirection;
 
 import '../../app/router.dart';
 import '../../core/api/api_providers.dart';
-import '../../core/api/wordos_api.dart';
+import '../../core/api/server_revision.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
@@ -15,9 +15,12 @@ import '../../core/widgets/app_widgets.dart';
 /// The query behind the Owner's view of one learner's vocabulary.
 final adminUserWordsProvider = FutureProvider.autoDispose
     .family<AdminWordPage, ({String userId, WordState? state})>(
-  (ref, key) => ref
-      .watch(wordOsApiProvider)
-      .adminUserWords(key.userId, state: key.state),
+  (ref, key) {
+    refetchWhenServerChanges(ref);
+    return ref
+        .watch(wordOsApiProvider)
+        .adminUserWords(key.userId, state: key.state);
+  },
 );
 
 /// One learner's vocabulary, filtered by pipeline state (Part 3).
@@ -51,10 +54,9 @@ class DeveloperWordsScreen extends ConsumerWidget {
       ),
       body: words.when(
         loading: () => BusyView(message: s.loading),
-        error: (e, _) => ErrorView(
-          message: s.apiError(
-              ApiException.from(e).code, ApiException.from(e).message),
-          retryLabel: s.retry,
+        error: (e, _) => ErrorView.from(
+          e,
+          s,
           onRetry: () => ref.invalidate(adminUserWordsProvider(key)),
         ),
         data: (page) {
@@ -157,7 +159,10 @@ class _WordRow extends ConsumerWidget {
 
 final adminWordJourneyProvider =
     FutureProvider.autoDispose.family<AdminWordJourney, String>(
-  (ref, wordId) => ref.watch(wordOsApiProvider).adminWordJourney(wordId),
+  (ref, wordId) {
+    refetchWhenServerChanges(ref);
+    return ref.watch(wordOsApiProvider).adminWordJourney(wordId);
+  },
 );
 
 /// One word's whole life (Part 3).
@@ -181,10 +186,9 @@ class DeveloperWordJourneyScreen extends ConsumerWidget {
       ),
       body: journey.when(
         loading: () => BusyView(message: s.loading),
-        error: (e, _) => ErrorView(
-          message: s.apiError(
-              ApiException.from(e).code, ApiException.from(e).message),
-          retryLabel: s.retry,
+        error: (e, _) => ErrorView.from(
+          e,
+          s,
           onRetry: () => ref.invalidate(adminWordJourneyProvider(wordId)),
         ),
         data: (data) => _Journey(journey: data),

@@ -111,4 +111,48 @@ void main() {
       expect(stringsFor('ar').sessionPrompt(null, 'research'), isEmpty);
     });
   });
+
+  englishDefinitionsInTheArabicInterface();
+}
+
+/// An English dictionary definition shown inside the Arabic interface.
+///
+/// A plain `Text` inherited the interface's right-to-left direction, and a
+/// trailing full stop in an RTL paragraph belongs to the paragraph rather than
+/// to the words — so every definition was drawn with its punctuation at the
+/// front: ".money", ":To move". Seen on the simulator against the rebuilt
+/// dictionary, on every result card.
+void englishDefinitionsInTheArabicInterface() {
+  testWidgets(
+      'a definition reads left-to-right in the Arabic interface, '
+      'and stays aligned with the card', (tester) async {
+    await bootApp(
+      tester,
+      locale: const Locale('ar'),
+      surfaceSize: const Size(1200, 2600),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'تسجيل الدخول'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('إضافة كلمة').last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, 'book');
+    await tester.pumpAndSettle(const Duration(milliseconds: 600));
+
+    const definition = 'a set of printed pages held together in a cover';
+    final shown = find.text(definition);
+    expect(shown, findsWidgets);
+
+    final element = tester.element(shown.first);
+
+    // The fix: English direction, so the full stop stays at the end.
+    expect(Directionality.of(element), TextDirection.ltr);
+
+    // And not dragged to the left edge — it hangs from the same side as the
+    // Arabic meaning above it.
+    expect(tester.widget<Text>(shown.first).textAlign, TextAlign.right);
+  });
 }

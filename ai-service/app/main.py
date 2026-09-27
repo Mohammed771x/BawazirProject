@@ -101,6 +101,11 @@ class ContentRequest(BaseModel):
     # Either a bare word or one carrying the form the learner knows it in —
     # `gone` the participle should come back as `gone` (ADR-047).
     reuse_words: list[str | TargetWord] = Field(default_factory=list, max_length=10)
+    # Which register the answer options are written in — the caller's decision,
+    # taken from the learner's band (ADR-088). Bounded and validated downstream:
+    # anything this service does not recognise falls back to Arabic, which is
+    # what every caller got before the field existed.
+    option_style: str = Field(default=prompts.ARABIC_MEANING, max_length=32)
 
 
 class WordContext(BaseModel):
@@ -108,6 +113,20 @@ class WordContext(BaseModel):
     before: str | None
     sentence: str
     after: str | None
+    # The wrong answers to "what does this word mean here?", written from the
+    # sentence this word lives in.
+    #
+    # Empty when the model gave none usable. The backend then falls back to the
+    # way it used to build them, which is worse but never fewer than four
+    # options — a question with two is not a question (ADR-084).
+    wrong_meanings_ar: list[str] = []
+
+    # The same question answered in English, for the bands that answer it in
+    # English (ADR-088). Empty at the Arabic bands, and empty whenever the model
+    # gave fewer than three usable wrong answers — the backend then builds the
+    # options the way it always could, rather than asking a question with two.
+    meaning_here_en: str | None = None
+    wrong_meanings_en: list[str] = []
 
 
 class ComprehensionQuestion(BaseModel):
@@ -152,6 +171,7 @@ class RelevelRequest(BaseModel):
     to_level: str = Field(max_length=8)
     words: list[TargetWord] = Field(default_factory=list, max_length=15)
     comprehension_count: int = Field(default=5, ge=1, le=10)
+    option_style: str = Field(default=prompts.ARABIC_MEANING, max_length=32)
 
 
 class WritingRequest(BaseModel):
@@ -374,10 +394,13 @@ def generate_content(request: ContentRequest) -> ContentResponse:
             for w in request.reuse_words
         ],
         inline_glossary=inline,
+        option_style=request.option_style,
     )
 
     generated = _generate_json(
-        prompt, prompts.reading_schema(inline_glossary=inline))
+        prompt,
+        prompts.reading_schema(
+            inline_glossary=inline, option_style=request.option_style))
     return _shape_content(
         generated.payload, prompts.READING_PROMPT_VERSION, started,
         generated.tokens)
@@ -554,6 +577,43 @@ def _join_into_paragraphs(sentences: list[str], breaks: object) -> str:
     return "".join(out)
 
 
+def _clean_text(raw: object) -> str | None:
+    """One non-empty line, or nothing at all.
+
+    A blank string is worse than a missing one here: it would be handed to the
+    backend as the correct answer and shown to the learner as an empty option.
+    """
+    text = str(raw or "").strip()
+    return text or None
+
+
+def _clean_distractors(raw: object) -> list[str]:
+    """Three usable wrong meanings, or none at all.
+
+    Deliberately all-or-nothing. A word that comes back with one wrong meaning
+    would otherwise be asked with two options, which is not a question — the
+    backend needs to know it must build the rest itself, and "some" is the one
+    answer it cannot act on (ADR-084).
+
+    Deduplicated case-insensitively after stripping, because a model asked for
+    three distinct things occasionally returns the same one twice with
+    different spacing.
+    """
+    if not isinstance(raw, list):
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        text = str(item or "").strip()
+        if not text or text.casefold() in seen:
+            continue
+        seen.add(text.casefold())
+        out.append(text)
+
+    return out[:3] if len(out) >= 3 else []
+
+
 def _shape_content(
     payload: dict,
     prompt_version: str,
@@ -593,6 +653,11 @@ def _shape_content(
             before=sentences[index - 1] if index > 0 else None,
             sentence=sentences[index],
             after=sentences[index + 1] if index + 1 < len(sentences) else None,
+            wrong_meanings_ar=_clean_distractors(
+                target.get("wrong_meanings_ar")),
+            meaning_here_en=_clean_text(target.get("meaning_here_en")),
+            wrong_meanings_en=_clean_distractors(
+                target.get("wrong_meanings_en")),
         ))
 
     questions = [
@@ -668,10 +733,13 @@ def relevel_content(request: RelevelRequest) -> ContentResponse:
         words=[w.model_dump() for w in request.words],
         comprehension_count=request.comprehension_count,
         inline_glossary=inline,
+        option_style=request.option_style,
     )
 
     generated = _generate_json(
-        prompt, prompts.reading_schema(inline_glossary=inline))
+        prompt,
+        prompts.reading_schema(
+            inline_glossary=inline, option_style=request.option_style))
     return _shape_content(
         generated.payload, prompts.RELEVEL_PROMPT_VERSION, started,
         generated.tokens)

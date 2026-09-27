@@ -1,5 +1,7 @@
 using WordOs.Domain.Common;
 
+using WordOs.Domain.Lexicon;
+
 namespace WordOs.Domain.Common;
 
 /// <summary>
@@ -25,16 +27,81 @@ public sealed record WordOsConfiguration
     public int WeeklyReviewPeriodDays { get; init; } = 7;
 
     /// <summary>
-    /// The pipeline order. Configurable per ADR-001; the product owner
-    /// confirmed <c>Speaking → Writing</c> on 2026-08-15.
+    /// Days between adding a word and its first weekly challenge (ADR-089).
     /// </summary>
+    /// <remarks>
+    /// The gap is the feature. A word tested the day it was added is not being
+    /// reviewed, it is being taught again — the learner still has it in mind,
+    /// answers correctly, and the score says nothing about retention, which is
+    /// the only thing rule R9 lets this measure.
+    /// </remarks>
+    public int WeeklyReviewMaturityDays { get; init; } = 7;
+
+    /// <summary>
+    /// The most words one sitting of the challenge may ask about (ADR-089).
+    /// </summary>
+    /// <remarks>
+    /// Unreviewed words carry over instead of expiring, so a learner who missed
+    /// a fortnight could otherwise be met with a hundred and thirty questions
+    /// and simply close the app. The rest are not lost: they stay ripe, and the
+    /// next day's reminder offers them again.
+    ///
+    /// Fifty is the product owner's number (2026-09-17), and it is configuration
+    /// rather than a constant because the right ceiling is a judgement about
+    /// people, not about software (rule R3).
+    /// </remarks>
+    public int WeeklyReviewMaxWords { get; init; } = 50;
+
+    /// <summary>
+    /// Which build of the dictionary the app looks words up in (ADR-096).
+    /// </summary>
+    /// <remarks>
+    /// The first lexicon put <c>تُوُفِّيَ</c> at the top of <c>go</c> and cited
+    /// every verb in the past, so <c>sell</c> read as <c>باع</c>. The rebuild
+    /// is a second edition in the same table rather than a replacement, and
+    /// this setting says which one is served.
+    ///
+    /// It is configuration because the answer to "is the new one better?" is a
+    /// judgement made after learners have used it, and going back must not
+    /// require a re-import or a deploy (rule R3). Both editions are present, so
+    /// a word added under either still resolves.
+    /// </remarks>
+    /// <para>Moved to the second edition on 2026-09-17, after it was imported
+    /// and measured: it wins on quality everywhere it has an entry, and — once
+    /// its gaps are filled from the first edition — on coverage in every
+    /// frequency band too (92.2 % of the commonest thousand words against
+    /// 85.4 %). Set it back to <c>oewn-awn</c> to return to the first
+    /// dictionary; both are in the table.</para>
+    /// <para><b>The default is the first edition again (2026-09-28, ADR-103)</b>,
+    /// and only development asks for the second, in
+    /// <c>appsettings.Development.json</c>. Production has no second-edition
+    /// rows until they are loaded, and search reads only the configured
+    /// edition — so a default of <c>wiktionary</c> would ship this code to an
+    /// empty search for every learner. The switch in production is the
+    /// environment variable <c>WordOs__LexiconEdition=wiktionary</c>, set after
+    /// the load (docs/09-DEPLOYMENT.md §4½); a default that is safe to deploy
+    /// is better than a deploy step that must be remembered.</para>
+    public string LexiconEdition { get; init; } = LexiconEditions.OewnAwn;
+
+    /// <summary>
+    /// The pipeline order. Configurable per ADR-001; the product owner
+    /// confirmed <c>Speaking → Writing</c> on 2026-08-15 and moved Writing to
+    /// the end, behind Spelling, on 2026-09-17 (ADR-087).
+    /// </summary>
+    /// <remarks>
+    /// Writing is last because it is the only skill that asks the learner to
+    /// <i>produce</i> the written word unaided, and a learner who cannot yet
+    /// spell it is being marked on two things at once. Spelling first means
+    /// that by the time a sentence is asked for, the spelling is not in
+    /// question — so what Writing measures is use, which is what it is for.
+    /// </remarks>
     public IReadOnlyList<SkillType> SkillsOrder { get; init; } =
     [
         SkillType.Reading,
         SkillType.Listening,
         SkillType.Speaking,
-        SkillType.Writing,
         SkillType.Spelling,
+        SkillType.Writing,
     ];
 
     /// <summary>
@@ -206,6 +273,41 @@ public sealed record WordOsConfiguration
     /// </remarks>
     public int PasswordResetMaxAttempts { get; init; } = 5;
 
+    /// <summary>
+    /// How long after a refresh the same token may be presented again without
+    /// it being treated as a leak (ADR-093).
+    /// </summary>
+    /// <remarks>
+    /// Refresh tokens rotate, and presenting a used one normally means it was
+    /// stolen — so the whole family is revoked. There is exactly one honest way
+    /// a learner's own app does it: the exchange succeeded on the server, the
+    /// reply was lost on the way back, and the app still holds the old token.
+    /// On a phone that is not rare, and the consequence is a *permanent*
+    /// sign-out for somebody who did nothing wrong.
+    ///
+    /// <para>Inside this window, and <b>only</b> when the replacement token has
+    /// never been used — which is what proves nobody received it — the exchange
+    /// is honoured instead. A replay after the real client has used the
+    /// replacement, or one that arrives later than this, still revokes the
+    /// family.</para>
+    ///
+    /// <para>Sixty seconds: long enough to cover a retry over a bad connection,
+    /// short enough that an exfiltrated token is almost never redeemed inside
+    /// it. Configuration rather than a constant, because it is a security
+    /// trade-off the product owner is entitled to tighten (rule R3).</para>
+    /// </remarks>
+    public int RefreshReplayGraceSeconds { get; init; } = 60;
+
+    /// <summary>
+    /// The skill that follows <paramref name="skill"/> in the pipeline.
+    /// </summary>
+    /// <remarks>
+    /// Positional, and therefore only correct for a word whose journey matches
+    /// the current order. A word already in flight when the order changes does
+    /// not — see <c>Word.NextPendingSkill</c>, which is what the pipeline
+    /// actually advances on (ADR-087). This remains for callers that are asking
+    /// about the *order* rather than about a word.
+    /// </remarks>
     public SkillType? NextSkillAfter(SkillType skill)
     {
         var index = SkillsOrder.ToList().IndexOf(skill);
@@ -214,6 +316,26 @@ public sealed record WordOsConfiguration
     }
 
     public SkillType FirstSkill => SkillsOrder[0];
+
+    /// <summary>
+    /// Where a skill sits in the pipeline — for sorting anything shown to a
+    /// learner in pipeline order.
+    /// </summary>
+    /// <remarks>
+    /// Use this rather than <c>OrderBy(x =&gt; x.Skill)</c>. Ordering by the enum
+    /// sorts by its <i>declaration</i>, which is an arbitrary fact about a
+    /// source file and was quietly wrong for every word list in the app the day
+    /// the order changed (ADR-087): the pipeline ran Spelling then Writing while
+    /// every word's journey was drawn Writing then Spelling.
+    ///
+    /// A skill that is not in the order sorts last rather than throwing — a
+    /// misconfigured list should mis-sort a row, not fail a request.
+    /// </remarks>
+    public int PipelinePosition(SkillType skill)
+    {
+        var index = SkillsOrder.ToList().IndexOf(skill);
+        return index < 0 ? int.MaxValue : index;
+    }
 
     public int ClampDailyTarget(int target) =>
         Math.Clamp(target, MinDailyTarget, MaxDailyTarget);

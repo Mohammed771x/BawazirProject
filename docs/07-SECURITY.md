@@ -53,12 +53,26 @@ Validate issuer, audience, expiry and signature on every request.
 📋 Refresh tokens are stored hashed, are single-use, and are revoked on logout,
 password change and role change.
 
+⚠️ **One deliberate exception** (ADR-093). Presenting a spent refresh token
+revokes the whole rotation family — except when its replacement has **never been
+used** and the replay arrives within `RefreshReplayGraceSeconds` (60). That is
+the signature of a reply that was lost in transit: the exchange succeeded here,
+the phone never received it, and the app retried with the only token it had.
+Treating it as a leak was permanently signing out real learners for losing
+signal. The cost is that a token stolen *in transit* could be redeemed inside
+that minute without tripping revocation; the token travels over TLS, and a
+device-level theft is redeemed later and still caught. Set the window to `0` to
+restore the strict rule.
+
 ✅ On the client the token lives in `flutter_secure_storage` (Keychain /
 Keystore), never in `SharedPreferences` — `AppPreferences` is explicitly limited
 to language and theme.
 
-✅ A `401` clears the stored token immediately (`onUnauthorized`), so a rejected
-token is not replayed on every subsequent request.
+✅ A **rejected** session clears the stored token immediately
+(`onUnauthorized`), so a dead token is not replayed on every subsequent request.
+Rejected means the server said so — a 401 or 403 on the refresh exchange. A
+request that never got an answer leaves the tokens alone: it is a network, not a
+verdict, and deleting credentials over it is what ADR-093 fixed.
 
 📋 Login is rate-limited and does not reveal whether an email exists: the same
 `INVALID_CREDENTIALS` response for unknown email and wrong password. The mock

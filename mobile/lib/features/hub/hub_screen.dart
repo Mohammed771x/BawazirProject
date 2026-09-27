@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import '../../app/router.dart';
 import '../../core/api/api_providers.dart';
+import '../../core/api/server_revision.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
@@ -12,9 +13,10 @@ import '../../core/theme/skill_visuals.dart';
 import '../../core/widgets/app_widgets.dart';
 import '../auth/session_controller.dart';
 
-final hubProvider = FutureProvider.autoDispose<HubState>(
-  (ref) => ref.watch(wordOsApiProvider).hub(),
-);
+final hubProvider = FutureProvider.autoDispose<HubState>((ref) {
+  refetchWhenServerChanges(ref);
+  return ref.watch(wordOsApiProvider).hub();
+});
 
 /// The Skills Hub — the user's control point. It shows *what the backend says*
 /// is available; the number of words behind each skill stays deliberately calm
@@ -35,9 +37,9 @@ class HubScreen extends ConsumerWidget {
           onRefresh: () async => ref.refresh(hubProvider.future),
           child: hub.when(
             loading: () => BusyView(message: s.loading),
-            error: (e, _) => ErrorView(
-              message: s.somethingWentWrong,
-              retryLabel: s.retry,
+            error: (e, _) => ErrorView.from(
+              e,
+              s,
               onRetry: () => ref.invalidate(hubProvider),
             ),
             data: (data) => ListView(
@@ -58,7 +60,13 @@ class HubScreen extends ConsumerWidget {
                   _SkillCardTile(card: card),
                   const SizedBox(height: AppSpacing.xs),
                 ],
-                if (data.weeklyReview.available) ...[
+                // Shown while it is still *coming*, not only once it is
+                // open. A learner's first week has no challenge in it
+                // (ADR-089), and a card that simply is not there teaches them
+                // the feature does not exist — so it waits in plain sight with
+                // the date on it.
+                if (data.weeklyReview.available ||
+                    data.weeklyReview.nextAvailableAt != null) ...[
                   const SizedBox(height: AppSpacing.md),
                   _WeeklyReviewCard(status: data.weeklyReview),
                 ],
@@ -155,10 +163,7 @@ class _SkillCardTile extends ConsumerWidget {
 
     return AppCard(
       onTap: isReady || canPractise
-          ? () async {
-              await context.push(Routes.session(card.skill));
-              ref.invalidate(hubProvider);
-            }
+          ? () => context.push(Routes.session(card.skill))
           : null,
       borderColor: isReady ? color.withValues(alpha: 0.35) : null,
       child: Row(
@@ -235,17 +240,28 @@ class _WeeklyReviewCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(stringsProvider);
     final color = context.palette.review;
+    final open = status.available;
+
+    // Waiting, not broken. A muted card that names the day is the difference
+    // between "this is coming" and "this does not work".
+    final accent =
+        open ? color : context.colors.onSurface.withValues(alpha: 0.45);
 
     return AppCard(
-      borderColor: color.withValues(alpha: 0.35),
-      color: color.withValues(alpha: 0.06),
-      onTap: () async {
-        await context.push(Routes.weeklyReview);
-        ref.invalidate(hubProvider);
-      },
+      borderColor: accent.withValues(alpha: open ? 0.35 : 0.2),
+      color: accent.withValues(alpha: open ? 0.06 : 0.03),
+      onTap: open
+          ? () => context.push(Routes.weeklyReview)
+          : null,
       child: Row(
         children: [
-          Icon(Icons.replay_circle_filled_rounded, color: color, size: 34),
+          Icon(
+            open
+                ? Icons.replay_circle_filled_rounded
+                : Icons.lock_clock_rounded,
+            color: accent,
+            size: 34,
+          ),
           const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Column(
@@ -254,16 +270,33 @@ class _WeeklyReviewCard extends ConsumerWidget {
                 Text(s.weeklyReview, style: context.text.titleSmall),
                 const SizedBox(height: 2),
                 Text(
-                  s.wordsDue(status.wordCount),
-                  style: context.text.bodySmall?.copyWith(color: color),
+                  open
+                      ? s.wordsDue(status.wordCount)
+                      : s.challengeOpensOn(
+                          DateFormat.MMMd(s.locale.languageCode)
+                              .format(status.nextAvailableAt!.toLocal()),
+                        ),
+                  style: context.text.bodySmall?.copyWith(color: accent),
                 ),
+                // Said before they start, not discovered after they finish
+                // what they thought was everything (ADR-089).
+                if (open && status.wordsWaitingAfterThis > 0) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    s.challengeMoreAfterThis(status.wordsWaitingAfterThis),
+                    style: context.text.labelSmall?.copyWith(
+                      color: context.colors.onSurface.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
-          Icon(
-            Icons.chevron_right_rounded,
-            color: context.colors.onSurface.withValues(alpha: 0.65),
-          ),
+          if (open)
+            Icon(
+              Icons.chevron_right_rounded,
+              color: context.colors.onSurface.withValues(alpha: 0.65),
+            ),
         ],
       ),
     );

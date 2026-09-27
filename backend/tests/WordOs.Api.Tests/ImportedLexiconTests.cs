@@ -226,11 +226,13 @@ public class ImportedLexiconTests : IAsyncLifetime
     {
         Skip.IfNot(_skipReason is null, _skipReason);
 
-        // Two provenances, and a row must declare one of them: joined from the
-        // three datasets, or authored here because no dataset carries it
-        // (ADR-033 — WordNet has no pronouns, articles or auxiliaries).
+        // Three provenances now, and a row must declare one of them: joined
+        // from the three datasets, taken from Wiktionary (ADR-096), or authored
+        // here because no dataset carries it (ADR-033 — WordNet has no
+        // pronouns, articles or auxiliaries).
         var missing = await Db.LexiconEntries
             .CountAsync(l => !l.SourceFlags.Contains("wordos-closed-class")
+                             && !l.SourceFlags.Contains("en=wiktionary")
                              && (!l.SourceFlags.Contains("en=oewn")
                                  || !l.SourceFlags.Contains("ar=awn")
                                  || !l.SourceFlags.Contains("cefr=")));

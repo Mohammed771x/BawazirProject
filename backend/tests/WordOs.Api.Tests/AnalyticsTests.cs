@@ -731,7 +731,7 @@ public class AnalyticsTests(PostgresFixture db) : IAsyncLifetime
             $"/api/admin/users/{learnerId}/placement");
 
         Assert.True(evidence.GetProperty("completed").GetBoolean());
-        Assert.Equal(2, evidence.GetProperty("testVersion").GetInt32());
+        Assert.Equal(3, evidence.GetProperty("testVersion").GetInt32());
 
         var answers = evidence.GetProperty("answers").EnumerateArray().ToList();
         Assert.NotEmpty(answers);
@@ -752,13 +752,16 @@ public class AnalyticsTests(PostgresFixture db) : IAsyncLifetime
         Assert.Contains(answers, a =>
             !string.IsNullOrWhiteSpace(a.GetProperty("rawAnswer").GetString()));
 
-        // Grammar and spelling appear even though neither is a visible skill:
-        // they are evidence for the ones that are.
+        // Every answer says what it measured. Since ADR-098 those are the four
+        // visible skills only: the grammar items were extra Writing questions
+        // and the shortened test has no room for them, and spelling left the
+        // test entirely.
         var domains = answers
             .Select(a => a.GetProperty("domain").GetString())
             .Distinct()
             .ToList();
-        Assert.Contains("Grammar", domains);
+        Assert.All(domains, d => Assert.False(string.IsNullOrWhiteSpace(d)));
+        Assert.DoesNotContain("Spelling", domains);
 
         // And the two halves of "have they moved?" are both present.
         var levels = evidence.GetProperty("progress").GetProperty("levels")

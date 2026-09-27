@@ -65,6 +65,18 @@ public class LexiconEntry
     /// </summary>
     public string SourceFlags { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// Which build of the dictionary this row belongs to (ADR-096).
+    /// </summary>
+    /// <remarks>
+    /// Two editions live in this table at once, and the API serves whichever
+    /// <see cref="WordOsConfiguration.LexiconEdition"/> names. That is what
+    /// makes the rebuild reversible: the old dictionary is not deleted, so
+    /// going back is a configuration change rather than a re-import — and a
+    /// word a learner added under either edition still resolves.
+    /// </remarks>
+    public string Edition { get; private set; } = LexiconEditions.OewnAwn;
+
     public DateTimeOffset UpdatedAt { get; private set; }
 
     public static LexiconEntry Create(
@@ -77,7 +89,8 @@ public class LexiconEntry
         CefrLevel? cefrLevel,
         int? frequencyRank,
         string sourceFlags,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        string edition = LexiconEditions.OewnAwn)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(senseId);
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
@@ -96,7 +109,23 @@ public class LexiconEntry
             CefrLevel = cefrLevel,
             FrequencyRank = frequencyRank,
             SourceFlags = sourceFlags,
+            Edition = edition,
             UpdatedAt = now,
         };
     }
+}
+
+/// <summary>The dictionary builds this service knows how to serve (ADR-096).</summary>
+/// <remarks>
+/// Strings rather than an enum: the value is stored in the database and named
+/// in configuration, and a new edition should be addable by importing it and
+/// pointing the setting at it — not by shipping a new binary.
+/// </remarks>
+public static class LexiconEditions
+{
+    /// <summary>The first build: Open English WordNet joined to Arabic WordNet.</summary>
+    public const string OewnAwn = "oewn-awn";
+
+    /// <summary>The second: Wiktionary, in both languages (ADR-096).</summary>
+    public const string Wiktionary = "wiktionary";
 }

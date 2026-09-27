@@ -68,6 +68,26 @@ public static class PlacementItemBank
             AudioText = null,
             ExpectedWords = 0,
         },
+        // A third A1 item in each receptive skill, added with ADR-098.
+        //
+        // The test asks three Reading questions and never one harder than a
+        // question just missed — so a learner who misses both A1 items has
+        // nothing left to be asked, and their test quietly ends two questions
+        // short. Three floor items is what lets the shape hold for the
+        // learner who needs the floor most.
+        new()
+        {
+            Id = "rd_a1_3",
+            Skill = SkillType.Reading,
+            Level = CefrLevel.A1,
+            Type = PlacementItemType.MultipleChoice,
+            Prompt = "How many brothers does Sami have?",
+            Options = ["Two", "One", "Three", "None"],
+            CorrectAnswer = "Two",
+            Passage = "Sami lives with his mother and his two brothers. They have a small house near the sea.",
+            AudioText = null,
+            ExpectedWords = 0,
+        },
         new()
         {
             Id = "rd_a2_1",
@@ -196,6 +216,19 @@ public static class PlacementItemBank
             CorrectAnswer = "A teacher",
             Passage = null,
             AudioText = "My brother is a teacher. He works at a school near our house.",
+            ExpectedWords = 0,
+        },
+        new()
+        {
+            Id = "ls_a1_3",
+            Skill = SkillType.Listening,
+            Level = CefrLevel.A1,
+            Type = PlacementItemType.MultipleChoice,
+            Prompt = "What colour is the car?",
+            Options = ["Red", "Blue", "Black", "White"],
+            CorrectAnswer = "Red",
+            Passage = null,
+            AudioText = "My father has a red car. He drives it to work every morning.",
             ExpectedWords = 0,
         },
         new()

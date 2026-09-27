@@ -138,8 +138,7 @@ void main() {
           reason: 'skills are measured independently, never averaged');
     });
 
-    test('the test always terminates and asks a bounded number of questions',
-        () {
+    test('the test always terminates and asks exactly eight questions', () {
       final engine = PlacementEngine(random: Random(3));
       var step = engine.start('pt_bounded', 'u_1');
       var asked = 0;
@@ -153,10 +152,8 @@ void main() {
       }
 
       expect(step.isComplete, isTrue);
-      expect(asked, lessThanOrEqualTo(24),
-          reason: 'the caps in PlacementConfig bound the test length');
-      expect(asked, greaterThanOrEqualTo(10),
-          reason: 'every skill must contribute at least its minimum items');
+      // Three reading, three listening, one speaking, one writing (ADR-098).
+      expect(asked, 8, reason: 'the caps in PlacementConfig fix the length');
     });
 
     test('no question is ever asked twice', () {
@@ -175,26 +172,52 @@ void main() {
   });
 
   group('spelling', () {
-    test('is measured but never assigned a CEFR level', () {
+    test('is not part of the test any more', () {
+      // Four questions that produced no level — only the choice between letter
+      // tiles and free typing, which the first real spelling session settles
+      // anyway (ADR-098).
       final result = runPlacement(correctFor);
-      final spelling =
-          result.levels.firstWhere((l) => l.skill == SkillType.spelling);
 
-      expect(spelling.systemAssessedLevel, isNull);
-      expect(spelling.userSelectedLevel, isNull);
-      expect(spelling.carriesCefrLevel, isFalse);
-      expect(result.spelling.itemsAnswered, greaterThan(0));
+      expect(
+        result.levels.where((l) => l.skill == SkillType.spelling),
+        isEmpty,
+      );
+      expect(result.spelling.itemsAnswered, 0);
+
+      // Nothing measured it, so everyone starts on the supported mode.
+      expect(result.spelling.supportMode, SpellingInputMode.letterTiles);
+
+      // The items stay in the bank: putting the ladder back is skillOrder plus
+      // its limits, not re-authoring six questions.
+      expect(PlacementItemBank.forSkill(SkillType.spelling), isNotEmpty);
+    });
+  });
+
+  group('the one-question skills', () {
+    test('one question still separates a strong writer from a weak one', () {
+      // The reason a single-response skill is estimated against what the rest
+      // of the test showed rather than the population mean (ADR-098).
+      final strong = runPlacement(correctFor);
+      final weak = runPlacement((item) => switch (item.skill) {
+            SkillType.speaking || SkillType.writing => wrongFor(item),
+            _ => correctFor(item),
+          });
+
+      expect(
+        levelOf(strong, SkillType.writing)!.rank,
+        greaterThan(levelOf(weak, SkillType.writing)!.rank),
+        reason: 'the written answer must change the band it produces',
+      );
     });
 
-    test('a strong speller starts on free typing, a weak one on letter tiles',
-        () {
-      final strong = runPlacement(correctFor);
-      final weak = runPlacement(wrongFor);
+    test('is never reported as confident', () {
+      final result = runPlacement(correctFor);
 
-      expect(strong.spelling.supportMode, SpellingInputMode.freeTyping);
-      expect(strong.spelling.accuracy, 1.0);
-      expect(weak.spelling.supportMode, SpellingInputMode.letterTiles);
-      expect(weak.spelling.accuracy, 0.0);
+      for (final skill in [SkillType.speaking, SkillType.writing]) {
+        final level = result.levels.firstWhere((l) => l.skill == skill);
+        expect(level.confidence, lessThan(0.5),
+            reason: '$skill was placed from a single answer');
+      }
     });
   });
 

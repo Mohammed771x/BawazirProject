@@ -132,6 +132,13 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)");
 
+                    b.Property<string>("Edition")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasDefaultValue("oewn-awn");
+
                     b.Property<int?>("FrequencyRank")
                         .HasColumnType("integer");
 
@@ -179,6 +186,9 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_lexicon_text_prefix");
 
                     NpgsqlIndexBuilderExtensions.HasOperators(b.HasIndex("TextNormalized"), new[] { "text_pattern_ops" });
+
+                    b.HasIndex("Edition", "TextNormalized")
+                        .HasDatabaseName("IX_lexicon_Edition_TextNormalized");
 
                     b.HasIndex("TextNormalized", "PartOfSpeech");
 
@@ -835,6 +845,9 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset?>("ReviewPassedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("SenseId")
                         .IsRequired()

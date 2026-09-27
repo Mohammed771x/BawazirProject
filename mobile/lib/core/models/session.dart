@@ -399,6 +399,7 @@ class SkillSession {
     this.usedAiFallback = false,
     this.isPractice = false,
     this.warmup = const [],
+    this.instructionLanguage,
   });
 
   final String id;
@@ -428,6 +429,20 @@ class SkillSession {
   /// when there are none, and then the learner goes straight in.
   final List<WarmupWord> warmup;
 
+  /// The language this session's own instructions are given in, or null for
+  /// the learner's own.
+  ///
+  /// A server decision, never this app's (rule R1). It is `'EN'` on a Writing
+  /// session at B1 and above: a learner about to write English has already
+  /// started in it, and an instruction they can read in the language they are
+  /// working in is one less translation between them and the task (ADR-088).
+  /// Below B1 the instruction is scaffolding and stays in Arabic, because an
+  /// instruction that has to be decoded turns the task into a reading test
+  /// with a writing task attached.
+  /// Rendered through `AppStrings.forInstructions`, which lives with the rest
+  /// of the copy — this layer carries the server's answer and decides nothing.
+  final String? instructionLanguage;
+
   factory SkillSession.fromJson(Map<String, dynamic> json) => SkillSession(
         id: json['id'] as String,
         skill: SkillType.fromWire(json['skill'] as String?),
@@ -454,6 +469,7 @@ class SkillSession {
         warmup: (json['warmup'] as List<dynamic>? ?? const [])
             .map((e) => WarmupWord.fromJson(e as Map<String, dynamic>))
             .toList(),
+        instructionLanguage: json['instructionLanguage'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -468,6 +484,7 @@ class SkillSession {
         'usedAiFallback': usedAiFallback,
         'isPractice': isPractice,
         'warmup': warmup.map((e) => e.toJson()).toList(),
+        'instructionLanguage': instructionLanguage,
       };
 }
 

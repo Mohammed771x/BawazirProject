@@ -142,11 +142,26 @@ public enum WordEventType
 
     /// <summary>The learner removed the word (ADR-071).</summary>
     Deleted,
+
+    /// <summary>
+    /// The learner rewrote the Arabic meaning, keeping the same English word
+    /// and the same journey (ADR-101).
+    /// </summary>
+    MeaningChanged,
 }
 
+/// <summary>How a spelling answer is given.</summary>
+/// <remarks>
+/// Only <see cref="LetterTiles"/> is ever issued now (ADR-100).
+/// <see cref="FreeTyping"/> is kept because it is a stored string in
+/// <c>user_skill_levels</c> and <c>session_items</c>, and dropping the name
+/// would make old rows unreadable — not because anything still produces it.
+/// </remarks>
 public enum SpellingInputMode
 {
     LetterTiles,
+
+    /// <summary>Retired: a phone keyboard completes the word (ADR-100).</summary>
     FreeTyping,
 }
 
@@ -254,4 +269,21 @@ public enum SessionPromptKey
 
     /// <summary>Use this word in a sentence about your own life.</summary>
     WriteASentenceAboutYourself,
+
+    /// <summary>
+    /// What did the word you just heard mean here? — Listening only.
+    /// </summary>
+    /// <remarks>
+    /// A key rather than text because the question <b>cannot name the word</b>.
+    /// Reading asks <c>What does "fan" mean here?</c> and that is correct
+    /// there: the learner is looking at the word in its sentence. Listening
+    /// shows nothing — the word arrives as sound and the learner is asked what
+    /// it meant. Printing it turns the task into reading with audio attached,
+    /// and hands over the one thing a listener is not supposed to have: how the
+    /// word is spelled (ADR-085).
+    ///
+    /// The English text that travels beside it is written the same way, so a
+    /// client that does not know this key still cannot show the word.
+    /// </remarks>
+    ListeningWordMeaning,
 }

@@ -121,6 +121,24 @@ public static class WordEndpoints
         int Attempts,
         DateTimeOffset? PassedAt);
 
+    /// <param name="Meaning">The Arabic wording the learner now wants.</param>
+    /// <param name="ReplaceWithSenseId">
+    /// Set only after the learner has been told the meaning belongs to a
+    /// <i>different</i> English word and has chosen to swap: this word is
+    /// removed and that sense is added in its place, starting from the
+    /// beginning of the pipeline (ADR-101).
+    /// </param>
+    /// <param name="AcceptAnyway">
+    /// Keep the wording even though the checker did not recognise it as a
+    /// meaning of this word (ADR-074). It has no effect on the refusal that
+    /// names another English word — there the dictionary knows whose meaning it
+    /// is, and insisting would quietly turn one word into another.
+    /// </param>
+    public sealed record ChangeMeaningRequest(
+        [property: Required, MaxLength(256)] string Meaning,
+        [property: MaxLength(64)] string? ReplaceWithSenseId = null,
+        bool AcceptAnyway = false);
+
     public sealed record WordEventResponse(
         string Type,
         string? Skill,
@@ -143,6 +161,7 @@ public static class WordEndpoints
         group.MapGet("", ListAsync);
         group.MapGet("/{id:guid}", DetailAsync);
         group.MapDelete("/{id:guid}", DeleteAsync);
+        group.MapPatch("/{id:guid}/meaning", ChangeMeaningAsync);
 
         return app;
     }
@@ -195,12 +214,12 @@ public static class WordEndpoints
         if (query.Length == 1)
         {
             return Results.Ok(await ProjectAsync(
-                db.LexiconEntries.Where(l => l.TextNormalized == query), 25, ct));
+                db.ActiveLexicon.Where(l => l.TextNormalized == query), 25, ct));
         }
 
         var matches = await ProjectAsync(
-            db.LexiconEntries.Where(l => l.TextNormalized.StartsWith(query)),
-            25, ct);
+            db.ActiveLexicon.Where(l => l.TextNormalized.StartsWith(query)),
+            25, ct, exactly: query);
 
         if (matches.Count > 0) return Results.Ok(matches);
 
@@ -210,7 +229,7 @@ public static class WordEndpoints
         foreach (var candidate in SurfaceForms.CandidatesFor(query).Skip(1))
         {
             var resolved = await ProjectAsync(
-                db.LexiconEntries.Where(l => l.TextNormalized == candidate), 25, ct);
+                db.ActiveLexicon.Where(l => l.TextNormalized == candidate), 25, ct);
 
             if (resolved.Count > 0) return Results.Ok(resolved);
         }
@@ -238,7 +257,7 @@ public static class WordEndpoints
         // are escaped so a learner typing % or _ searches for those characters.
         var contains = $"%{term.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_")}%";
 
-        return await db.LexiconEntries
+        return await db.ActiveLexicon
             .Where(l => EF.Functions.Like(l.MeaningArNormalized, contains, "\\"))
             .OrderBy(l => l.MeaningArNormalized == term ? 0
                 : l.MeaningArNormalized.StartsWith(term) ? 1 : 2)
@@ -254,12 +273,24 @@ public static class WordEndpoints
     }
 
     /// <summary>The wire shape, ordered the way autocomplete wants it.</summary>
+    /// <param name="exactly">
+    /// What the learner typed, when this is a prefix search.
+    /// </param>
+    /// <remarks>
+    /// The word somebody typed comes before anything that merely starts with
+    /// it, whatever the ranking says. Without this, typing <c>go</c> answered
+    /// <c>goodbye</c>: the authored closed-class words carry a rank of -1 so
+    /// that <c>is</c> and <c>the</c> are findable, and -1 beats every measured
+    /// frequency there is.
+    /// </remarks>
     private static Task<List<WordCandidateResponse>> ProjectAsync(
         IQueryable<LexiconEntry> query,
         int take,
-        CancellationToken ct) =>
+        CancellationToken ct,
+        string? exactly = null) =>
         query
-            .OrderBy(l => l.FrequencyRank)
+            .OrderBy(l => exactly != null && l.TextNormalized == exactly ? 0 : 1)
+            .ThenBy(l => l.FrequencyRank)
             .ThenBy(l => l.TextNormalized)
             .ThenBy(l => l.SenseId)
             .Take(take)
@@ -296,7 +327,7 @@ public static class WordEndpoints
 
         foreach (var candidate in SurfaceForms.CandidatesFor(word))
         {
-            var senses = await db.LexiconEntries
+            var senses = await db.ActiveLexicon
                 .Where(l => l.TextNormalized == candidate)
                 .OrderBy(l => l.FrequencyRank)
                 .ThenBy(l => l.SenseId)
@@ -611,6 +642,11 @@ public static class WordEndpoints
                     "BAD_SENSE", "That is not a dictionary meaning.");
             }
 
+            // `LexiconEntries`, not `ActiveLexicon`: resolution, not discovery
+            // (ADR-096). A sense id is exact and namespaced per edition, so
+            // filtering adds nothing — and a learner who opened the add sheet
+            // before the setting moved would otherwise be told their word no
+            // longer exists.
             var entry = await db.LexiconEntries
                 .FirstOrDefaultAsync(l => l.SenseId == request.SenseId, ct);
 
@@ -692,7 +728,7 @@ public static class WordEndpoints
                 "You have already added this word with this meaning.");
         }
 
-        return Results.Ok(ToResponse(word));
+        return Results.Ok(ToResponse(word, config));
     }
 
     /// <summary>
@@ -755,7 +791,7 @@ public static class WordEndpoints
     {
         foreach (var candidate in SurfaceForms.CandidatesFor(text))
         {
-            var entry = await db.LexiconEntries
+            var entry = await db.ActiveLexicon
                 .Where(l => l.TextNormalized == candidate)
                 // A row that carries a CEFR band is worth more here than a
                 // marginally commoner one that does not: the band is half of
@@ -803,7 +839,7 @@ public static class WordEndpoints
     {
         var normalized = text.Trim().ToLowerInvariant();
 
-        var rows = await db.LexiconEntries
+        var rows = await db.ActiveLexicon
             .Where(l => l.TextNormalized == normalized
                         && l.DefinitionEn != null
                         && l.DefinitionEn != "")
@@ -843,6 +879,296 @@ public static class WordEndpoints
     /// than 404, because the second call is what a retried request looks like
     /// and the learner's intent is satisfied either way.</para>
     /// </remarks>
+    /// <summary>
+    /// Rewrites the Arabic meaning of a word the learner already owns.
+    /// </summary>
+    /// <remarks>
+    /// The rule the product owner set: <i>the meaning may change, the word may
+    /// not</i>. A learner who decides <c>create</c> is better written
+    /// <c>يصنع</c> than <c>أنشأ</c> keeps every day of progress they have made
+    /// on it. A learner who types <c>يحجز</c> is not editing <c>create</c> —
+    /// that is <c>book</c>, and they are told so and offered the swap, which
+    /// starts from the beginning because it is a different word (ADR-101).
+    ///
+    /// Two authorities answer "is this still the same word", in this order:
+    ///
+    /// <list type="number">
+    /// <item>
+    /// <b>The dictionary, when it recognises the wording.</b> It can name the
+    /// English word a meaning belongs to, which is the whole difference between
+    /// "that is wrong" and "that is <c>book</c>". Its verdict is final: there
+    /// is no override, because insisting here is how one word silently becomes
+    /// another.
+    /// </item>
+    /// <item>
+    /// <b>The checker, when the dictionary has never seen the wording.</b> It
+    /// cannot name another word, only judge the pairing, so its refusal is the
+    /// softer one the learner may overrule — the same bargain ADR-074 struck
+    /// for a written meaning on the way in.
+    /// </item>
+    /// </list>
+    /// </remarks>
+    private static async Task<IResult> ChangeMeaningAsync(
+        Guid id,
+        ChangeMeaningRequest request,
+        ClaimsPrincipal principal,
+        WordOsDbContext db,
+        WordOsConfiguration config,
+        IAiContentService ai,
+        HttpContext http,
+        TimeProvider clock,
+        CancellationToken ct)
+    {
+        if (!MiniValidator.TryValidate(request, out var errors))
+            return Results.ValidationProblem(errors);
+
+        var userId = principal.UserId();
+        if (userId is null) return Results.Unauthorized();
+
+        var meaning = SearchTerm.Clean(request.Meaning);
+        if (meaning.Length == 0)
+            return Problems.BadRequest("BAD_MEANING", "Write a meaning.");
+
+        // The skills come with it: every answer this endpoint gives projects the
+        // word, and the projection reads the schedule of the skill it is on.
+        var word = await db.Words
+            .Include(w => w.Skills)
+            .FirstOrDefaultAsync(w => w.Id == id && w.UserId == userId, ct);
+
+        if (word is null)
+            return Problems.NotFound("WORD_NOT_FOUND", "Word not found.");
+
+        var now = clock.GetUtcNow();
+
+        // ── The swap the learner agreed to ──────────────────────────────────
+        if (request.ReplaceWithSenseId is { Length: > 0 } replacement)
+            return await ReplaceWordAsync(word, replacement, db, config, now, ct);
+
+        // Nothing to do, and worth saying so rather than writing an event that
+        // records no change: the learner opened the field and pressed save.
+        if (ArabicText.Normalize(meaning) == ArabicText.Normalize(word.Meaning))
+            return Results.Ok(ToResponse(word, config));
+
+        // ── What does the dictionary say this meaning belongs to? ───────────
+        var normalized = ArabicText.Normalize(meaning);
+        var textNormalized = word.Text.Trim().ToLowerInvariant();
+
+        var matches = await db.ActiveLexicon
+            .Where(l => l.MeaningArNormalized == normalized)
+            .OrderBy(l => l.TextNormalized == textNormalized ? 0 : 1)
+            .ThenBy(l => l.FrequencyRank)
+            .ThenBy(l => l.SenseId)
+            .Take(8)
+            .ToListAsync(ct);
+
+        var sameWord = matches.FirstOrDefault(
+            l => l.TextNormalized == textNormalized);
+
+        if (sameWord is null && matches.Count > 0)
+        {
+            // The meaning is real — it just belongs to somebody else. Naming
+            // the word is the point: "that is wrong" leaves the learner
+            // guessing, and they were not wrong, they were on a different word.
+            var candidates = matches
+                .GroupBy(l => l.TextNormalized)
+                .Select(g => g.First())
+                .Take(3)
+                // Shaped as an ordinary word candidate — the client already
+                // renders those, and the learner is choosing a word here just
+                // as they do in the add sheet.
+                .Select(l => new WordCandidateResponse(
+                    l.SenseId,
+                    l.Text,
+                    l.MeaningAr,
+                    l.DefinitionEn,
+                    l.PartOfSpeech,
+                    (l.CefrLevel ?? CefrLevel.B1).ToWire(),
+                    IsSpellingSuggestion: false))
+                .ToList();
+
+            return Results.Json(
+                new
+                {
+                    error = new
+                    {
+                        code = "MEANING_IS_ANOTHER_WORD",
+                        message =
+                            $"\u201c{meaning}\u201d is the meaning of "
+                            + $"\u201c{candidates[0].Text}\u201d, "
+                            + $"not of \u201c{word.Text}\u201d.",
+                        candidates,
+                    },
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        if (sameWord is not null)
+        {
+            // Another sense of the same English word. The sense id travels with
+            // the meaning so the stored English definition describes what the
+            // learner now says the word means — but only if it is free: they
+            // may already own this exact card.
+            if (sameWord.SenseId != word.SenseId)
+            {
+                var taken = await db.Words.AnyAsync(
+                    w => w.UserId == userId
+                         && w.SenseId == sameWord.SenseId
+                         && w.Id != word.Id, ct);
+
+                if (taken)
+                {
+                    return Problems.Conflict(
+                        "WORD_ALREADY_ADDED",
+                        "You already have this word with that meaning.");
+                }
+            }
+
+            word.ChangeMeaning(
+                sameWord.MeaningAr, MeaningSource.Lexicon, check: null, now,
+                senseId: sameWord.SenseId,
+                definitionEn: sameWord.DefinitionEn,
+                partOfSpeech: sameWord.PartOfSpeech);
+
+            await db.SaveChangesAsync(ct);
+            return Results.Ok(ToResponse(word, config));
+        }
+
+        // ── The dictionary has never seen this wording ──────────────────────
+        MeaningCheck verdict;
+        try
+        {
+            verdict = await ai.CheckMeaningAsync(
+                new MeaningCheckRequest(
+                    word.Text,
+                    await SensesOfAsync(word.Text, db, ct),
+                    word.PartOfSpeech,
+                    meaning,
+                    LearnerLanguage.From(http.Request),
+                    KnownWord: true),
+                ct);
+        }
+        catch (Exception e) when (e is AiServiceException
+                                      or HttpRequestException
+                                      or TaskCanceledException)
+        {
+            // Same answer as on the way in (ADR-074): "not now". The word is
+            // untouched, which is the state the learner already had.
+            return Problems.Unavailable(
+                "MEANING_CHECK_UNAVAILABLE",
+                "Could not check that meaning just now. Try again in a moment.");
+        }
+
+        if (!verdict.Matches && !request.AcceptAnyway)
+        {
+            return Results.Json(
+                new
+                {
+                    error = new
+                    {
+                        code = "MEANING_REJECTED",
+                        message = verdict.Note,
+                        suggestions = verdict.Suggestions,
+                        corrected = verdict.Corrected,
+                    },
+                },
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        word.ChangeMeaning(
+            meaning,
+            MeaningSource.Learner,
+            verdict.Matches
+                ? MeaningCheckResult.Approved
+                : MeaningCheckResult.Overridden,
+            now);
+
+        await db.SaveChangesAsync(ct);
+        return Results.Ok(ToResponse(word, config));
+    }
+
+    /// <summary>
+    /// Removes this word and adds the sense the learner meant, from the start.
+    /// </summary>
+    /// <remarks>
+    /// One transaction, because the two halves are one decision: a learner who
+    /// agreed to "this is a different word, shall I swap them" must not end up
+    /// holding both, or neither.
+    ///
+    /// The new word begins at Reading with nothing passed. That is not a
+    /// penalty — it is the truthful statement that they have never been tested
+    /// on it. The old word is soft-deleted like any other (ADR-071), so the
+    /// Owner can still see the journey it had.
+    /// </remarks>
+    private static async Task<IResult> ReplaceWordAsync(
+        Word word,
+        string senseId,
+        WordOsDbContext db,
+        WordOsConfiguration config,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        if (CustomSenses.IsCustom(senseId))
+            return Problems.BadRequest("BAD_SENSE", "That is not a dictionary meaning.");
+
+        // `LexiconEntries`, not `ActiveLexicon`, for the same reason the add
+        // path resolves that way (ADR-096): a sense id is exact, and a learner
+        // who opened the dialog before the edition moved should not be told
+        // their choice no longer exists.
+        var entry = await db.LexiconEntries
+            .FirstOrDefaultAsync(l => l.SenseId == senseId, ct);
+
+        if (entry is null)
+        {
+            return Problems.NotFound(
+                "WORD_NOT_FOUND",
+                "That word and meaning are not in the dictionary.");
+        }
+
+        var duplicate = await db.Words.AnyAsync(
+            w => w.UserId == word.UserId
+                 && w.SenseId == entry.SenseId
+                 && w.Id != word.Id, ct);
+
+        if (duplicate)
+        {
+            return Problems.Conflict(
+                "WORD_ALREADY_ADDED",
+                "You have already added this word with this meaning.");
+        }
+
+        word.Delete(now);
+
+        var replacement = Word.Add(
+            word.UserId,
+            entry.SenseId,
+            entry.Text,
+            entry.MeaningAr,
+            entry.DefinitionEn,
+            entry.PartOfSpeech,
+            entry.CefrLevel ?? CefrLevel.B1,
+            config,
+            now,
+            MeaningSource.Lexicon);
+
+        db.Words.Add(replacement);
+        db.ActivityEvents.Add(ActivityEvent.Record(
+            word.UserId, ActivityType.WordAdded, now, entityId: replacement.Id));
+
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException e)
+            when (UniqueViolation.On(e, "IX_words_UserId_SenseId"))
+        {
+            return Problems.Conflict(
+                "WORD_ALREADY_ADDED",
+                "You have already added this word with this meaning.");
+        }
+
+        return Results.Ok(ToResponse(replacement, config));
+    }
+
     private static async Task<IResult> DeleteAsync(
         Guid id,
         ClaimsPrincipal principal,
@@ -882,6 +1208,7 @@ public static class WordEndpoints
         int? pageSize,
         ClaimsPrincipal principal,
         WordOsDbContext db,
+        WordOsConfiguration config,
         CancellationToken ct)
     {
         var userId = principal.UserId();
@@ -937,7 +1264,7 @@ public static class WordEndpoints
 
         return Results.Ok(new
         {
-            items = items.Select(ToResponse).ToList(),
+            items = items.Select(w => ToResponse(w, config)).ToList(),
             total,
             page = paging.Index,
             pageSize = paging.Size,
@@ -957,6 +1284,7 @@ public static class WordEndpoints
         Guid id,
         ClaimsPrincipal principal,
         WordOsDbContext db,
+        WordOsConfiguration config,
         CancellationToken ct)
     {
         var userId = principal.UserId();
@@ -970,7 +1298,7 @@ public static class WordEndpoints
         if (word is null)
             return Problems.NotFound("WORD_NOT_FOUND", "Word not found.");
 
-        var response = ToResponse(word);
+        var response = ToResponse(word, config);
 
         return Results.Ok(new
         {
@@ -995,7 +1323,7 @@ public static class WordEndpoints
         });
     }
 
-    private static WordResponse ToResponse(Word w) =>
+    private static WordResponse ToResponse(Word w, WordOsConfiguration config) =>
         new(w.Id, w.SenseId, w.Text, w.Meaning, w.DefinitionEn, w.PartOfSpeech,
             WordForms.FormKey(w),
             w.CefrLevel.ToWire(),
@@ -1009,7 +1337,11 @@ public static class WordEndpoints
                 : w.SkillState(w.CurrentSkill.Value).AvailableAt,
             w.ExposureCount,
             w.Skills
-                .OrderBy(s => s.Skill)
+                // Pipeline order, not the enum's declaration order. The two
+                // disagreed the day Writing moved behind Spelling, and every
+                // word's journey was drawn in the old sequence while the app
+                // ran the new one (ADR-087, ADR-092).
+                .OrderBy(s => config.PipelinePosition(s.Skill))
                 .Select(s => new WordSkillResponse(
                     s.Skill.ToWire(), s.Status.ToWire(),
                     s.AvailableAt, s.Attempts, s.PassedAt))

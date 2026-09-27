@@ -13,6 +13,7 @@ class DailyReminder {
     required this.minute,
     required this.kind,
     required this.count,
+    this.message,
   });
 
   /// `MORNING` or `EVENING`. It chooses the greeting and nothing else.
@@ -35,8 +36,22 @@ class DailyReminder {
   /// does not know which language this installation reads.
   final ReminderKind kind;
 
-  /// What [kind] counts. Words due, words in the pipeline, or zero.
+  /// What the line counts, or zero when it counts nothing.
+  ///
+  /// What it is counting depends on [message] — words due, days of a streak,
+  /// days until the next word ripens — and the message says which, so no line
+  /// has to guess what number it was handed.
   final int count;
+
+  /// **Which** of the twenty lines this is (ADR-090).
+  ///
+  /// Null from a server that predates the catalogue, and null for a key this
+  /// build has never heard of — both fall back on [kind], which has only ever
+  /// had three values and is not going to grow. That fallback is the reason
+  /// both fields are sent: the server ships far more often than the phones do,
+  /// and a notification that renders as an empty string is worse than a plain
+  /// one.
+  final ReminderMessage? message;
 
   /// When this actually fires, in the device's own timezone.
   DateTime get localTime =>
@@ -51,6 +66,7 @@ class DailyReminder {
         minute: (json['minute'] as num?)?.toInt() ?? 0,
         kind: ReminderKind.fromWire(json['kind'] as String?),
         count: (json['count'] as num?)?.toInt() ?? 0,
+        message: ReminderMessage.fromWire(json['message'] as String?),
       );
 
   Map<String, dynamic> toJson() => {
@@ -61,6 +77,7 @@ class DailyReminder {
         'minute': minute,
         'kind': kind.wire,
         'count': count,
+        'message': message?.wire,
       };
 }
 
@@ -100,4 +117,48 @@ enum ReminderKind {
         'NOTHING_DUE' => ReminderKind.nothingDue,
         _ => ReminderKind.noWords,
       };
+}
+
+/// The exact line a reminder says — one of twenty (ADR-090).
+///
+/// A key chosen by the server, said here, because only the server knows the
+/// facts that make one line true and another one a lie (ADR-035). Three lines
+/// became twenty because a notification is the whole decision about whether the
+/// app gets opened today, and the same sentence twice a day for a fortnight
+/// stops being read.
+enum ReminderMessage {
+  wordsDueCount('WORDS_DUE_COUNT'),
+  wordsDueOne('WORDS_DUE_ONE'),
+  wordsDueFiveMinutes('WORDS_DUE_FIVE_MINUTES'),
+  wordsDueMorning('WORDS_DUE_MORNING'),
+  wordsDueEvening('WORDS_DUE_EVENING'),
+  wordsDueStreak('WORDS_DUE_STREAK'),
+  wordsDueStreakAtRisk('WORDS_DUE_STREAK_AT_RISK'),
+  wordsDueAfterGoodDay('WORDS_DUE_AFTER_GOOD_DAY'),
+  wordsDueWelcomeBack('WORDS_DUE_WELCOME_BACK'),
+  wordsDueLevelRose('WORDS_DUE_LEVEL_ROSE'),
+  wordsDueAlmostActive('WORDS_DUE_ALMOST_ACTIVE'),
+  nothingDueResting('NOTHING_DUE_RESTING'),
+  nothingDueAddOne('NOTHING_DUE_ADD_ONE'),
+  nothingDueActiveCount('NOTHING_DUE_ACTIVE_COUNT'),
+  nothingDueNextOpens('NOTHING_DUE_NEXT_OPENS'),
+  noWordsFirst('NO_WORDS_FIRST'),
+  noWordsOneADay('NO_WORDS_ONE_A_DAY'),
+  reviewReady('REVIEW_READY'),
+  reviewMoreWaiting('REVIEW_MORE_WAITING'),
+  openTheApp('OPEN_THE_APP');
+
+  const ReminderMessage(this.wire);
+
+  final String wire;
+
+  /// Null rather than a guess for anything unrecognised — the caller then falls
+  /// back on the kind, which is a true sentence rather than an invented one.
+  static ReminderMessage? fromWire(String? wire) {
+    if (wire == null || wire.isEmpty) return null;
+    for (final value in ReminderMessage.values) {
+      if (value.wire == wire) return value;
+    }
+    return null;
+  }
 }

@@ -56,6 +56,20 @@ public static class Inflections
     };
 
     /// <summary>
+    /// Spellings no learner should be handed, whatever a source lists.
+    /// </summary>
+    /// <remarks>
+    /// <c>costed</c> is the case: it is real English for costing a project, and
+    /// Wiktionary lists it without a marker — but the verb a learner meets is
+    /// "to be priced at", whose past is <c>cost</c>. Offering both teaches the
+    /// wrong one half the time.
+    /// </remarks>
+    private static readonly HashSet<string> NeverOffered = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "costed", "broadcasted", "forecasted",
+    };
+
+    /// <summary>
     /// Verbs whose single listed form is the participle, the past being the
     /// word itself: <c>beat / beat / beaten</c>.
     /// </summary>
@@ -144,6 +158,7 @@ public static class Inflections
             if (candidate.Length == 0) return;
             if (string.Equals(candidate, word, StringComparison.OrdinalIgnoreCase)) return;
             if (AlreadyAuthored.Contains(candidate)) return;
+            if (NeverOffered.Contains(candidate)) return;
             // Keyed on the form as well as the spelling: `walked` is both the
             // past and the participle, and the learner is entitled to practise
             // either (ADR-046).

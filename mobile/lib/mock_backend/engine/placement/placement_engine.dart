@@ -161,9 +161,19 @@ class PlacementEngine {
       return pool.first;
     }
 
-    final theta = responses.isEmpty
+    // A skill with one question to spend has no ladder to climb: its opening
+    // item is also its closing one. Rather than the population prior, it is
+    // pitched at what the skills before it already showed — which is why
+    // Speaking and Writing are asked last (ADR-098).
+    final evidence = responses.isNotEmpty
+        ? responses
+        : limits.maxItems == 1
+            ? run.allResponses
+            : const <ScoredResponse>[];
+
+    final theta = evidence.isEmpty
         ? config.scale.priorMean
-        : AbilityEstimator(scale: config.scale).estimate(responses).theta;
+        : AbilityEstimator(scale: config.scale).estimate(evidence).theta;
 
     // Maximum Fisher information for a Rasch item is at difficulty == ability,
     // so "closest difficulty" *is* the optimal choice under this model. Ties are
@@ -235,8 +245,22 @@ class PlacementEngine {
         continue;
       }
 
+      // A skill measured from a single answer cannot be placed from that
+      // answer alone: the population prior dominates it, so every learner
+      // lands within a band or two of the middle whatever they wrote. So its
+      // band is estimated against a prior centred on what the rest of the test
+      // showed, while its confidence still comes from its own one answer and
+      // stays near zero (ADR-098).
       final estimate = estimator.estimate(responses);
-      final level = config.scale.levelFor(estimate.theta);
+      final band = responses.length > 1
+          ? estimate
+          : AbilityEstimator(
+              scale: config.scale.centredOn(
+                estimator.estimate(run.allResponses).theta,
+              ),
+            ).estimate(responses);
+
+      final level = config.scale.levelFor(band.theta);
       levels.add(
         SkillLevel(
           skill: skill,
@@ -281,22 +305,24 @@ class PlacementEngine {
 class PlacementConfig {
   const PlacementConfig({
     this.scale = const AbilityScale(),
+    // Spelling left the test (ADR-098): four questions that produced no
+    // level, only the choice between letter tiles and free typing — which the
+    // first real spelling session settles anyway.
     this.skillOrder = const [
       SkillType.reading,
       SkillType.listening,
       SkillType.speaking,
       SkillType.writing,
-      SkillType.spelling,
     ],
     this.cefrLimits = const SkillLimits(
       minItems: 3,
-      maxItems: 6,
-      targetStandardError: 0.40,
+      maxItems: 3,
+      targetStandardError: 0,
     ),
     this.productionLimits = const SkillLimits(
-      minItems: 2,
-      maxItems: 3,
-      targetStandardError: 0.55,
+      minItems: 1,
+      maxItems: 1,
+      targetStandardError: 0,
     ),
     this.spellingLimits = const SkillLimits(
       minItems: 4,
@@ -305,20 +331,21 @@ class PlacementConfig {
     ),
     this.defaultDailyTarget = 10,
     this.freeTypingThreshold = 0.75,
-    this.estimatedTotalItems = 20,
+    this.estimatedTotalItems = 8,
   });
 
   final AbilityScale scale;
   final List<SkillType> skillOrder;
 
-  /// Receptive skills — cheap items, so we can afford precision.
+  /// Receptive skills: three questions each, no early stop (ADR-098).
   final SkillLimits cefrLimits;
 
-  /// Productive skills. Each item costs the learner a written or spoken answer
-  /// and an AI evaluation, so the caps are tighter and the SE target looser;
-  /// the level engine refines these from real sessions afterwards.
+  /// Productive skills: one question each. Each costs the learner a written or
+  /// spoken answer and an AI evaluation, and three of them were where the old
+  /// test lost people.
   final SkillLimits productionLimits;
 
+  /// Unused while Spelling is out of [skillOrder].
   final SkillLimits spellingLimits;
 
   final int defaultDailyTarget;
@@ -326,8 +353,8 @@ class PlacementConfig {
   /// Spelling accuracy at or above which the learner starts on free typing.
   final double freeTypingThreshold;
 
-  /// Shown to the learner as "about N questions" — an adaptive test has no
-  /// fixed length.
+  /// How many questions the test asks: 3 + 3 + 1 + 1 (ADR-098). Exact now
+  /// rather than an estimate — nothing stops early any more.
   final int estimatedTotalItems;
 
   SkillLimits limitsFor(SkillType skill) => switch (skill) {
@@ -369,6 +396,10 @@ class PlacementRun {
 
   List<ScoredResponse> responsesFor(SkillType skill) =>
       _responses[skill] ?? const [];
+
+  /// Everything answered so far, whatever skill it was filed under.
+  List<ScoredResponse> get allResponses =>
+      _responses.values.expand((list) => list).toList();
 
   int get totalAnswered =>
       _responses.values.fold(0, (sum, list) => sum + list.length);

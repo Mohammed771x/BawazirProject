@@ -60,8 +60,11 @@ class MockEngine {
       SkillType.reading,
       SkillType.listening,
       SkillType.speaking,
-      SkillType.writing,
+      // Spelling before Writing (ADR-087): Writing is the one skill that asks
+      // for the written word unaided, so it comes after the spelling of it is
+      // no longer in question.
       SkillType.spelling,
+      SkillType.writing,
     ],
     weeklyReviewPeriodDays: 7,
   );
@@ -78,11 +81,30 @@ class MockEngine {
     return user.levels[SkillType.reading]?.userSelectedLevel ?? CefrLevel.b1;
   }
 
-  SkillType? _nextSkillAfter(SkillType skill) {
-    final order = configuration.skillsOrder;
-    final index = order.indexOf(skill);
-    if (index < 0 || index >= order.length - 1) return null;
-    return order[index + 1];
+  /// The next skill a word still owes, in pipeline order — not the one after
+  /// the skill it just passed.
+  ///
+  /// Mirrors `Word.NextPendingSkill` on the backend (ADR-087). Advancing by
+  /// position breaks every word that was already in flight when the order
+  /// changed: one standing on the old last skill passes it, the index says
+  /// nothing follows, and the word matures without ever being asked the skill
+  /// the new order put at the end.
+  /// The language a session's own task instructions are given in, or null for
+  /// the learner's.
+  ///
+  /// English on a Writing session from B1 up (ADR-088), mirroring the real
+  /// backend, which derives the same answer from the same two stored facts.
+  static String? _instructionLanguage(SkillType skill, CefrLevel level) =>
+      skill == SkillType.writing && level.index >= CefrLevel.b1.index
+          ? 'EN'
+          : null;
+
+  SkillType? _nextPendingSkill(MockWord word) {
+    for (final skill in configuration.skillsOrder) {
+      final state = word.skills[skill];
+      if (state == null || state.status != SkillStatus.passed) return skill;
+    }
+    return null;
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -804,28 +826,112 @@ class MockEngine {
                 !(w.skills[w.currentSkill]?.availableAt ?? at).isAfter(at))
             .length;
 
+        // Never having started and having nothing due are different things
+        // to say to somebody, so they are different keys.
+        final kind = user.words.isEmpty
+            ? ReminderKind.noWords
+            : due > 0
+                ? ReminderKind.wordsDue
+                : ReminderKind.nothingDue;
+
+        final ripe = user.words
+            .where((w) =>
+                w.reviewPassedAt == null && !_ripensAt(w).isAfter(at))
+            .length;
+
+        final (message, count) = _reminderLine(
+          user: user,
+          kind: kind,
+          due: due,
+          ripe: ripe,
+          morning: slot == ReminderSlot.morning,
+          isToday: day == 0,
+          index: reminders.length,
+          announcedReview: reminders.any(
+              (r) => r.message == ReminderMessage.reviewReady),
+        );
+
         reminders.add(DailyReminder(
           slot: slot,
           date: date,
           hour: hour,
           minute: 0,
-          // Never having started and having nothing due are different things
-          // to say to somebody, so they are different keys.
-          kind: user.words.isEmpty
-              ? ReminderKind.noWords
-              : due > 0
-                  ? ReminderKind.wordsDue
-                  : ReminderKind.nothingDue,
-          count: user.words.isEmpty
-              ? 0
-              : due > 0
-                  ? due
-                  : user.words.length,
+          kind: kind,
+          count: count,
+          message: message,
         ));
       }
     }
 
     return reminders;
+  }
+
+  /// Which of the twenty lines this reminder says (ADR-090).
+  ///
+  /// A compact stand-in for `ReminderComposer` on the real service, and it
+  /// keeps the two properties that matter to anything built against it: no line
+  /// repeats immediately, and nothing that looks backwards is ever scheduled
+  /// beyond today — because the phone fires these with no network, and a fact
+  /// about yesterday is a guess by Thursday.
+  (ReminderMessage, int) _reminderLine({
+    required MockUser user,
+    required ReminderKind kind,
+    required int due,
+    required int ripe,
+    required bool morning,
+    required bool isToday,
+    required int index,
+    required bool announcedReview,
+  }) {
+    // The challenge opening outranks everything, and is said once.
+    if (ripe > 0 && !announcedReview) {
+      return (ReminderMessage.reviewReady, 0);
+    }
+
+    final options = <(ReminderMessage, int)>[];
+
+    switch (kind) {
+      case ReminderKind.noWords:
+        options.addAll([
+          (ReminderMessage.noWordsFirst, 0),
+          (ReminderMessage.noWordsOneADay, 0),
+        ]);
+      case ReminderKind.wordsDue:
+        if (isToday && user.lastWeeklyReviewAt != null) {
+          options.add((ReminderMessage.wordsDueAfterGoodDay, 0));
+        }
+        final almost = user.words
+            .where((w) =>
+                w.state == WordState.learning &&
+                w.currentSkill == configuration.skillsOrder.last)
+            .length;
+        if (almost > 0) {
+          options.add((ReminderMessage.wordsDueAlmostActive, almost));
+        }
+        if (due == 1) options.add((ReminderMessage.wordsDueOne, 1));
+        options.addAll([
+          (
+            morning
+                ? ReminderMessage.wordsDueMorning
+                : ReminderMessage.wordsDueEvening,
+            0
+          ),
+          (ReminderMessage.wordsDueFiveMinutes, 0),
+          (ReminderMessage.wordsDueCount, due),
+        ]);
+      case ReminderKind.nothingDue:
+        final active =
+            user.words.where((w) => w.state == WordState.active).length;
+        if (active > 0) {
+          options.add((ReminderMessage.nothingDueActiveCount, active));
+        }
+        options.addAll([
+          (ReminderMessage.nothingDueAddOne, 0),
+          (ReminderMessage.nothingDueResting, user.words.length),
+        ]);
+    }
+
+    return options[index % options.length];
   }
 
   /// Removes a word from the learner's vocabulary (ADR-071).
@@ -850,6 +956,131 @@ class MockEngine {
       skill: null,
       createdAt: now,
     ));
+  }
+
+  /// Rewrites a word's Arabic meaning, leaving its journey alone (ADR-101).
+  ///
+  /// Mirrors `WordEndpoints.ChangeMeaningAsync`: the dictionary answers first
+  /// because it is the only thing that can name the English word a meaning
+  /// belongs to, and only a wording it has never seen goes to the checker.
+  Word changeWordMeaning(
+    MockUser user,
+    String wordId, {
+    required String meaning,
+    bool acceptAnyway = false,
+  }) {
+    final word = user.words.where((w) => w.id == wordId).firstOrNull;
+    if (word == null) {
+      throw const ApiException(
+        'WORD_NOT_FOUND', 'Word not found.', statusCode: 404);
+    }
+
+    final wanted = meaning.trim();
+    if (wanted.isEmpty) {
+      throw const ApiException(
+        'BAD_MEANING', 'Write a meaning.', statusCode: 400);
+    }
+
+    // Opened the field and pressed save: nothing to check, nothing to record.
+    if (wanted == word.meaning.trim()) return _wordModel(word);
+
+    final matches = MockDictionary.byMeaning(wanted);
+    final sameWord = matches
+        .where((c) => c.text.toLowerCase() == word.text.toLowerCase())
+        .firstOrNull;
+
+    if (sameWord == null && matches.isNotEmpty) {
+      throw MeaningIsAnotherWordException(
+        message: '“$wanted” is the meaning of “${matches.first.text}”, '
+            'not of “${word.text}”.',
+        candidates: matches.take(3).toList(),
+        statusCode: 409,
+      );
+    }
+
+    if (sameWord == null) {
+      // Every skill marks answers against this string, so an English one makes
+      // its own questions unanswerable.
+      if (!_arabic.hasMatch(wanted)) {
+        throw const ApiException(
+          'MEANING_NOT_ARABIC',
+          'Write the meaning in Arabic.',
+          statusCode: 400,
+        );
+      }
+
+      // The stand-in for the checker (ADR-074), the same one `addWordWithMeaning`
+      // uses: it cannot judge Arabic, so it accepts what the dictionary lists
+      // for this word and rejects the rest. Since the wording is not listed for
+      // *any* word here, a word the dictionary knows means this is a refusal —
+      // and the learner may overrule it, because nothing can name another owner.
+      final known = MockDictionary.define(word.text).senses;
+      if (known.isNotEmpty && !acceptAnyway) {
+        throw MeaningRejectedException(
+          message: 'المعنى "$wanted" ليس من معاني كلمة "${word.text}".',
+          suggestions:
+              known.map((sense) => sense.meaning.trim()).take(3).toList(),
+          statusCode: 409,
+        );
+      }
+
+      word.checkOverridden = known.isNotEmpty;
+    } else {
+      word.definitionEn = sameWord.definitionEn;
+      word.partOfSpeech = sameWord.partOfSpeech;
+      word.checkOverridden = false;
+    }
+
+    // Everything else is deliberately untouched: state, current skill, every
+    // skill's status, attempts and schedule, exposures, addedAt.
+    word.meaning = sameWord?.meaning ?? wanted;
+    word.events.add(WordEvent(
+      type: WordEventType.meaningChanged,
+      skill: null,
+      createdAt: now,
+    ));
+
+    return _wordModel(word);
+  }
+
+  /// Swaps a word for the sense the learner actually meant (ADR-101).
+  ///
+  /// One call, because it is one decision: they must not end up holding both
+  /// words, or neither. The new one starts from Reading with nothing passed.
+  Word replaceWord(
+    MockUser user,
+    String wordId, {
+    required String senseId,
+  }) {
+    final word = user.words.where((w) => w.id == wordId).firstOrNull;
+    if (word == null) {
+      throw const ApiException(
+        'WORD_NOT_FOUND', 'Word not found.', statusCode: 404);
+    }
+
+    final candidate = MockDictionary.bySenseId(senseId);
+
+    if (candidate == null) {
+      throw const ApiException(
+        'WORD_NOT_FOUND',
+        'That word and meaning are not in the dictionary.',
+        statusCode: 404,
+      );
+    }
+
+    // Removed first, so the duplicate check inside `_createWord` sees the
+    // vocabulary the learner is about to have rather than the one they had.
+    deleteWord(user, wordId);
+
+    return _createWord(
+      user,
+      text: candidate.text,
+      meaning: candidate.meaning,
+      definitionEn: candidate.definitionEn,
+      partOfSpeech: candidate.partOfSpeech,
+      form: MockDictionary.formOf(candidate.senseId),
+      level: candidate.suggestedLevel,
+    );
   }
 
   /// Anything Arabic at all. Not a spelling check — a language check.
@@ -1034,12 +1265,13 @@ class MockEngine {
       );
     }
 
-    final periodWords = _weeklyReviewWords(user);
-    final lastReview = user.lastWeeklyReviewAt;
-    final reviewReady = periodWords.isNotEmpty &&
-        (lastReview == null ||
-            now.difference(lastReview).inDays >=
-                configuration.weeklyReviewPeriodDays);
+    // Ripeness alone decides now (ADR-089): a word that has had its week and
+    // has not been asked about. The old rule — "a week since your last review"
+    // — locked out a learner who reviewed on Monday and added ten words on
+    // Tuesday, and let one through who had nothing ripe at all.
+    final ripe = _ripeForReview(user);
+    final periodWords = ripe.take(reviewMaxWords).toList();
+    final reviewReady = periodWords.isNotEmpty;
 
     return HubState(
       dailyProgress: DailyProgress(
@@ -1050,12 +1282,15 @@ class MockEngine {
       weeklyReview: WeeklyReviewStatus(
         available: reviewReady,
         wordCount: periodWords.length,
-        periodStart:
-            now.subtract(Duration(days: configuration.weeklyReviewPeriodDays)),
-        nextAvailableAt: reviewReady || lastReview == null
-            ? null
-            : lastReview.add(
-                Duration(days: configuration.weeklyReviewPeriodDays)),
+        periodStart: periodWords.isEmpty
+            ? now.subtract(
+                Duration(days: configuration.weeklyReviewPeriodDays))
+            : periodWords.first.addedAt,
+        // The date the first words ripen, so a learner in their first week is
+        // told *when* rather than only that they cannot start.
+        nextAvailableAt: reviewReady ? null : _reviewOpensAt(user),
+        wordsWaitingAfterThis:
+            (ripe.length - periodWords.length).clamp(0, ripe.length),
       ),
       vocabulary: VocabularyCounts(
         learning:
@@ -1119,6 +1354,7 @@ class MockEngine {
           definitions: definitions,
           interests: user.interests,
           listening: false,
+          level: level,
         );
       case SkillType.listening:
         generated = _content.buildComprehension(
@@ -1126,6 +1362,7 @@ class MockEngine {
           definitions: definitions,
           interests: user.interests,
           listening: true,
+          level: level,
         );
       case SkillType.writing:
         generated = _content.buildWriting(
@@ -1137,7 +1374,6 @@ class MockEngine {
           words: targetWords,
           definitions: definitions,
           level: level,
-          preferredMode: user.spellingDiagnostic?.supportMode,
         );
       case SkillType.speaking:
         generated = GeneratedSession(
@@ -1180,6 +1416,7 @@ class MockEngine {
       id: session.id,
       skill: skill,
       levelUsed: level,
+      instructionLanguage: _instructionLanguage(skill, level),
       content: generated.content,
       targetWords: targetWords,
       items: generated.items,
@@ -1256,6 +1493,7 @@ class MockEngine {
         id: snapshot.id,
         skill: snapshot.skill,
         levelUsed: level,
+        instructionLanguage: _instructionLanguage(snapshot.skill, level),
         content: snapshot.content,
         targetWords: snapshot.targetWords,
         items: snapshot.items,
@@ -1287,6 +1525,9 @@ class MockEngine {
       definitions: definitions,
       interests: user.interests,
       listening: snapshot.skill == SkillType.listening,
+      // The band they are moving *to*: re-telling regenerates the questions,
+      // so the options move with the text (ADR-088).
+      level: level,
     );
 
     session.replaceItems(generated.items, generated.correctAnswers);
@@ -1295,6 +1536,7 @@ class MockEngine {
       id: snapshot.id,
       skill: snapshot.skill,
       levelUsed: level,
+      instructionLanguage: _instructionLanguage(snapshot.skill, level),
       content: generated.content,
       targetWords: snapshot.targetWords,
       items: generated.items,
@@ -1325,6 +1567,21 @@ class MockEngine {
     );
   }
 
+  /// The answer key for one item — the mock's equivalent of reading
+  /// `session_items.correct_answer` out of the database.
+  ///
+  /// Never sent to the client: an option list that carried its own answer would
+  /// be a session anyone could pass with the developer tools open. It is here
+  /// for tests and for the Developer Dashboard, which are the two callers that
+  /// stand *behind* the server rather than in front of it.
+  ///
+  /// It earns its place now that the correct option is no longer always the
+  /// word's Arabic meaning (ADR-088): a test that hard-codes `word.meaning`
+  /// silently stops answering correctly the moment the learner's band changes,
+  /// and what it reports is a broken pipeline rather than a stale assumption.
+  String? correctAnswerFor(MockUser user, String sessionId, String itemId) =>
+      _requireSession(user, sessionId).correctAnswers[itemId];
+
   SkillSession resumeSession(MockUser user, String sessionId) {
     final session = _requireSession(user, sessionId);
     final snapshot = session.snapshot;
@@ -1336,6 +1593,7 @@ class MockEngine {
       id: snapshot.id,
       skill: snapshot.skill,
       levelUsed: snapshot.levelUsed,
+      instructionLanguage: snapshot.instructionLanguage,
       content: snapshot.content,
       targetWords: snapshot.targetWords,
       items: snapshot.items,
@@ -1710,7 +1968,7 @@ class MockEngine {
           createdAt: now,
         ));
 
-        nextSkill = _nextSkillAfter(skill);
+        nextSkill = _nextPendingSkill(word);
         if (nextSkill == null) {
           // All five skills passed → Mature → Active (Word Life Cycle §22).
           word.state = WordState.active;
@@ -1914,20 +2172,60 @@ class MockEngine {
   }
 
   // ── Weekly review ─────────────────────────────────────────────────────────
-  List<MockWord> _weeklyReviewWords(MockUser user) {
-    final start =
-        now.subtract(Duration(days: configuration.weeklyReviewPeriodDays));
-    return user.words.where((w) => w.addedAt.isAfter(start)).toList();
+
+  /// Days a word must sit before the challenge may ask about it (ADR-089).
+  ///
+  /// A word tested the day it was added is not being reviewed, it is being
+  /// taught again — the learner still has it in mind, answers correctly, and
+  /// the score says nothing about retention, which is the only thing rule R9
+  /// lets this measure.
+  static const int reviewMaturityDays = 7;
+
+  /// The most words one sitting may ask about. Past this the rest carry over.
+  static const int reviewMaxWords = 50;
+
+  /// A week after the word was last put in front of the learner (ADR-099).
+  DateTime _ripensAt(MockWord word) => (word.lastReviewedAt ?? word.addedAt)
+      .add(const Duration(days: reviewMaturityDays));
+
+  /// Every word still owed a review and old enough for one, oldest first.
+  ///
+  /// Owed means never recalled correctly — being asked is not what retires a
+  /// word, getting it right is (ADR-099).
+  List<MockWord> _ripeForReview(MockUser user) => user.words
+      .where((w) =>
+          w.reviewPassedAt == null && !_ripensAt(w).isAfter(now))
+      .toList()
+    ..sort((a, b) => a.addedAt.compareTo(b.addedAt));
+
+  /// What one sitting asks about — the backlog, capped.
+  List<MockWord> _weeklyReviewWords(MockUser user) =>
+      _ripeForReview(user).take(reviewMaxWords).toList();
+
+  /// When the first word ripens, for a learner with none ripe yet.
+  DateTime? _reviewOpensAt(MockUser user) {
+    final pending = user.words.where((w) => w.reviewPassedAt == null).toList();
+    if (pending.isEmpty) return null;
+    return pending.map(_ripensAt).reduce((a, b) => a.isBefore(b) ? a : b);
   }
 
   WeeklyReviewSession startWeeklyReview(MockUser user) {
     final words = _weeklyReviewWords(user);
     if (words.isEmpty) {
-      throw const ApiException(
-        'NO_REVIEW_WORDS',
-        'No words were added during this period.',
-        statusCode: 409,
-      );
+      // Two different situations, and telling them apart is the value of the
+      // message: a learner in their first week has a date to be given, and one
+      // who has cleared everything has nothing to do and should be told so.
+      throw _reviewOpensAt(user) == null
+          ? const ApiException(
+              'REVIEW_NOTHING_TO_REVIEW',
+              'Every word you have added has already been reviewed.',
+              statusCode: 409,
+            )
+          : const ApiException(
+              'REVIEW_NOT_READY',
+              'Your words need a week to settle before the challenge opens.',
+              statusCode: 409,
+            );
     }
     final allMeanings = words.map((w) => w.meaning).toList();
     final review = _MockReview(
@@ -1977,6 +2275,19 @@ class MockEngine {
 
     final isCorrect = answer == correct;
     final isFirstAttempt = !review.attempted.contains(itemId);
+
+    // Recalling the word is what takes it out of the pool — being asked is
+    // not (ADR-099). A word missed here ripens again a week from now and comes
+    // back; a word named right on the first attempt is finished with.
+    final asked = review.queue.where((i) => i.id == itemId).firstOrNull;
+    if (asked != null) {
+      for (final w in user.words) {
+        if (w.id != asked.wordId) continue;
+        w.lastReviewedAt = now;
+        if (isCorrect && isFirstAttempt) w.reviewPassedAt ??= now;
+      }
+    }
+
     review.attempted.add(itemId);
     review.totalAttempts += 1;
     if (isCorrect && isFirstAttempt) review.firstPassCorrect += 1;
@@ -2085,6 +2396,16 @@ class MockEngine {
       SkillType.listening,
     ]);
     _seedWord(demo, 'hardware', addedDaysAgo: 5, passed: [SkillType.reading]);
+    // One word standing at the end of the pipeline, so Writing — now the last
+    // skill (ADR-087) — is reachable on first run instead of four spaced gaps
+    // away. Everything before it is passed, which is exactly what Writing
+    // being last is supposed to mean: the spelling is no longer in question.
+    _seedWord(demo, 'environment', addedDaysAgo: 12, passed: [
+      SkillType.reading,
+      SkillType.listening,
+      SkillType.speaking,
+      SkillType.spelling,
+    ]);
     _seedWord(demo, 'software',
         addedDaysAgo: 4, passed: [SkillType.reading], failed: SkillType.listening);
     _seedWord(demo, 'research', addedDaysAgo: 1, passed: const []);
@@ -2273,9 +2594,14 @@ class MockWord {
 
   final String id;
   final String text;
-  final String meaning;
-  final String definitionEn;
-  final String partOfSpeech;
+
+  // Mutable because the learner may rewrite the meaning of a word they own,
+  // and the English definition and part of speech follow it when the new
+  // wording is another sense of the same word (ADR-101). The *word* never
+  // changes: a different word is a different row.
+  String meaning;
+  String definitionEn;
+  String partOfSpeech;
 
   /// `past`, `pastParticiple`, `ing`, `plural` — or null for the plain word.
   /// The server reads this off the sense id (ADR-045); the mock dictionary
@@ -2286,12 +2612,23 @@ class MockWord {
   /// Whether the learner saved this meaning over the checker's objection
   /// (ADR-074). Never shown to them; kept because "the checker said no and the
   /// learner said yes" is what explains a word failing later.
-  final bool checkOverridden;
+  bool checkOverridden;
   final DateTime addedAt;
   SkillType? currentSkill;
   final Map<SkillType, MockSkillState> skills;
   WordState state;
   int exposureCount;
+
+  /// When the weekly challenge last asked about this word (ADR-089).
+  ///
+  /// Null means it is still owed one. It is what makes a word leave the
+  /// challenge pool after it has been asked, and what lets an unanswered word
+  /// carry over to the following week instead of expiring.
+  DateTime? lastReviewedAt;
+
+  /// When the learner first recalled this word in a weekly challenge — after
+  /// which it is never asked about again (ADR-099).
+  DateTime? reviewPassedAt;
   DateTime? archivedAt;
   final List<WordEvent> events = [];
 }

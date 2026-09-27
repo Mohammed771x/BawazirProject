@@ -6,18 +6,21 @@ import 'package:intl/intl.dart';
 
 import '../../app/router.dart';
 import '../../core/api/api_providers.dart';
+import '../../core/api/server_revision.dart';
 import '../../core/api/wordos_api.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/theme/skill_visuals.dart';
-import '../hub/hub_screen.dart';
 import '../../core/widgets/app_widgets.dart';
 import 'developer_widgets.dart';
 
 final adminUserDetailProvider = FutureProvider.autoDispose
     .family<AdminUserDetail, String>(
-      (ref, userId) => ref.watch(wordOsApiProvider).adminUserDetail(userId),
+      (ref, userId) {
+        refetchWhenServerChanges(ref);
+        return ref.watch(wordOsApiProvider).adminUserDetail(userId);
+      },
     );
 
 /// One learner's complete journey (`MVP Core.txt` §58–59, Core Components §23).
@@ -37,10 +40,9 @@ class DeveloperUserScreen extends ConsumerWidget {
       ),
       body: detail.when(
         loading: () => BusyView(message: s.loading),
-        error: (e, _) => ErrorView(
-          message: s.apiError(
-              ApiException.from(e).code, ApiException.from(e).message),
-          retryLabel: s.retry,
+        error: (e, _) => ErrorView.from(
+          e,
+          s,
           onRetry: () => ref.invalidate(adminUserDetailProvider(userId)),
         ),
         data: (data) => _Body(detail: data),
@@ -574,10 +576,6 @@ class _SkipDaysCardState extends ConsumerState<_SkipDaysCard> {
           .read(wordOsApiProvider)
           .adminAdvanceSchedule(widget.userId, days: 2);
 
-      // The learner's page and the hub both read schedules, so both are stale
-      // the moment this returns.
-      ref.invalidate(adminUserDetailProvider(widget.userId));
-      ref.invalidate(hubProvider);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(

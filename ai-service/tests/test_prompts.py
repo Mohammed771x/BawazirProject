@@ -300,7 +300,7 @@ def test_listening_and_reading_ask_for_different_things():
 
 def test_the_prompt_version_is_stated_and_stable():
     """It is recorded against every session, so it must not drift silently."""
-    assert prompts.READING_PROMPT_VERSION == "reading-v4"
+    assert prompts.READING_PROMPT_VERSION == "reading-v6"
     assert prompts.WRITING_PROMPT_VERSION == "writing-eval-v1"
 
 
@@ -309,3 +309,93 @@ def test_the_schema_constrains_the_answer():
     assert prompts.READING_SCHEMA["type"] == "object"
     assert "sentences" in prompts.READING_SCHEMA["properties"]
     assert "comprehension" in prompts.READING_SCHEMA["properties"]
+
+
+# ── The register the options are written in (ADR-088) ────────────────────────
+#
+# One question, three bands. An A2 learner choosing between four English
+# definitions is being tested on the definitions; a C1 learner choosing between
+# four Arabic words is being asked to translate, which is easier than the word
+# is. So the options change register and the question does not.
+
+
+def _target_props(style: str) -> dict:
+    schema = prompts.reading_schema(inline_glossary=True, option_style=style)
+    return schema["properties"]["targets"]["items"]
+
+
+def test_the_arabic_bands_ask_for_arabic_and_nothing_else():
+    item = _target_props(prompts.ARABIC_MEANING)
+
+    assert "wrong_meanings_ar" in item["required"]
+    # Not merely absent from `required` — absent from the schema. A field the
+    # model can see is a field it spends tokens filling, and nothing reads
+    # these at this band.
+    assert "meaning_here_en" not in item["properties"]
+    assert "wrong_meanings_en" not in item["properties"]
+
+
+def test_the_plain_english_band_asks_for_the_correct_answer_too():
+    """B1–B2 is the one band whose correct option the model writes."""
+    item = _target_props(prompts.SIMPLE_DEFINITION)
+
+    assert "meaning_here_en" in item["required"]
+    assert "wrong_meanings_en" in item["required"]
+    assert "wrong_meanings_ar" not in item["properties"]
+
+
+def test_the_dictionary_band_writes_only_the_wrong_answers():
+    """The correct option is the lexicon's own gloss, which the backend holds."""
+    item = _target_props(prompts.DICTIONARY_DEFINITION)
+
+    assert "wrong_meanings_en" in item["required"]
+    assert "meaning_here_en" not in item["properties"]
+    assert "wrong_meanings_ar" not in item["properties"]
+
+
+def test_an_unrecognised_register_falls_back_to_arabic():
+    """A caller this service does not understand gets what every caller used to."""
+    item = _target_props("SOMETHING_ELSE")
+
+    assert "wrong_meanings_ar" in item["required"]
+
+
+def test_each_register_asks_for_options_in_its_own_language():
+    common = dict(level="B1", interests=["technology"], listening=False,
+                  comprehension_count=5,
+                  words=[{"text": "garden", "meaning": "بستان",
+                          "definition": "a plot of ground", "part_of_speech": "n"}])
+
+    arabic = prompts.reading_prompt(option_style=prompts.ARABIC_MEANING, **common)
+    simple = prompts.reading_prompt(option_style=prompts.SIMPLE_DEFINITION, **common)
+    dictionary = prompts.reading_prompt(
+        option_style=prompts.DICTIONARY_DEFINITION, **common)
+
+    assert "wrong_meanings_ar" in arabic
+    assert "wrong_meanings_en" not in arabic
+
+    assert "meaning_here_en" in simple
+    assert "plain English" in simple
+
+    assert "AS A DICTIONARY WOULD" in dictionary
+    assert "meaning_here_en" not in dictionary
+
+    # The correct answer is named in each — the wrong ones have to be written
+    # to match it, or the odd one out is identifiable by its style alone and
+    # the question can be passed without knowing the word (ADR-084).
+    assert "بستان" in arabic
+    assert "بستان" not in simple
+    assert "بستان" not in dictionary
+
+
+def test_relevelling_keeps_the_register_of_the_session_it_belongs_to():
+    """A learner who asks for an easier text is not asking for other options."""
+    common = dict(text="She walked through the garden.", from_level="B2",
+                  to_level="B1", comprehension_count=5,
+                  words=[{"text": "garden", "meaning": "بستان",
+                          "definition": "a plot of ground", "part_of_speech": "n"}])
+
+    assert "wrong_meanings_en" in prompts.relevel_prompt(
+        option_style=prompts.SIMPLE_DEFINITION, **common)
+    assert "wrong_meanings_ar" in prompts.relevel_prompt(
+        option_style=prompts.ARABIC_MEANING, **common)

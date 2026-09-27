@@ -156,20 +156,49 @@ public sealed record AiTargetWord(
 /// Whether they were actually used is decided by the server afterwards, by
 /// reading the returned text.
 /// </param>
+/// <param name="OptionStyle">
+/// The register the answer options must be written in, taken from the
+/// learner's band (ADR-088). The generator writes the wrong answers — and at
+/// one band the correct one — so it has to be told which language it is
+/// answering in before it writes anything.
+/// </param>
 public sealed record ContentRequest(
     CefrLevel Level,
     IReadOnlyList<string> Interests,
     IReadOnlyList<AiTargetWord> Words,
     bool Listening,
     int ComprehensionCount,
-    IReadOnlyList<AiTargetWord> ReuseWords);
+    IReadOnlyList<AiTargetWord> ReuseWords,
+    MeaningOptionStyle OptionStyle = MeaningOptionStyle.ArabicMeaning);
 
 /// <summary>Three sentences around a target word, for inference from context.</summary>
+/// <param name="WrongMeanings">
+/// The wrong answers to <i>what does this word mean here?</i> in Arabic,
+/// written from the sentence the word lives in.
+/// </param>
+/// <param name="SimpleDefinition">
+/// What the word means here, in plain English — the <b>correct</b> option at
+/// the B1–B2 band, and the one place the generator writes an answer rather
+/// than a wrong answer (ADR-088). Null at every other band, and null when the
+/// model skipped it.
+/// </param>
+/// <param name="WrongDefinitions">
+/// The wrong answers in English, in whichever English register was asked for.
+/// </param>
+/// <remarks>
+/// All three are empty when the generator produced nothing usable — an AI
+/// outage, or a model that skipped the field. The builder then falls back to
+/// the old scheme, which is worse but never leaves a question with fewer than
+/// four options (ADR-084).
+/// </remarks>
 public sealed record GeneratedWordContext(
     string Word,
     string? Before,
     string Sentence,
-    string? After);
+    string? After,
+    IReadOnlyList<string>? WrongMeanings = null,
+    string? SimpleDefinition = null,
+    IReadOnlyList<string>? WrongDefinitions = null);
 
 public sealed record GeneratedQuestion(
     string Prompt,
@@ -211,7 +240,11 @@ public sealed record RelevelRequest(
     CefrLevel FromLevel,
     CefrLevel ToLevel,
     IReadOnlyList<AiTargetWord> Words,
-    int ComprehensionCount);
+    int ComprehensionCount,
+    // Re-telling a passage regenerates its questions, so it has to be told the
+    // register too — a learner who asked for an easier text did not ask for
+    // options in another language (ADR-088).
+    MeaningOptionStyle OptionStyle = MeaningOptionStyle.ArabicMeaning);
 
 public sealed record WritingEvaluationRequest(
     string Word,

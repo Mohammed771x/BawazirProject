@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/router.dart';
 import '../../core/api/api_providers.dart';
+import '../../core/api/server_revision.dart';
 import '../../core/api/wordos_api.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
@@ -19,6 +20,7 @@ final wordsProvider = FutureProvider.autoDispose.family<WordPage, String>((
   ref,
   query,
 ) {
+  refetchWhenServerChanges(ref);
   return ref.watch(wordOsApiProvider).words(query: query);
 });
 
@@ -101,10 +103,6 @@ class _VocabularyScreenState extends ConsumerState<VocabularyScreen> {
       await ref.read(wordOsApiProvider).deleteWord(word.id);
       if (!mounted) return false;
 
-      // Refetched rather than removed locally: the count in the header is the
-      // server's, and so is the page this row came from (rule R1).
-      ref.invalidate(wordsProvider(_query));
-
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(s.deleteWordDone)));
       return true;
@@ -153,9 +151,9 @@ class _VocabularyScreenState extends ConsumerState<VocabularyScreen> {
           Expanded(
             child: words.when(
               loading: () => BusyView(message: s.loading),
-              error: (e, _) => ErrorView(
-                message: s.somethingWentWrong,
-                retryLabel: s.retry,
+              error: (e, _) => ErrorView.from(
+                e,
+                s,
                 onRetry: () => ref.invalidate(wordsProvider(_query)),
               ),
               data: (page) => _list(s, page),
@@ -219,10 +217,7 @@ class _VocabularyScreenState extends ConsumerState<VocabularyScreen> {
               // own screen can delete it, and a list that still shows a word the
               // learner has just watched themselves delete is the worst of the
               // available outcomes.
-              onTap: () async {
-                await context.push(Routes.word(word.id));
-                if (mounted) ref.invalidate(wordsProvider(_query));
-              },
+              onTap: () => context.push(Routes.word(word.id)),
             ),
           );
         },

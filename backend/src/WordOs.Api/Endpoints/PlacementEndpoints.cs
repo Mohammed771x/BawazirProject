@@ -203,15 +203,20 @@ public static class PlacementEndpoints
             var level = user.LevelFor(result.Skill);
             level.ApplyPlacement(result.Level, result.Confidence, result.Accuracy);
 
-            if (result.Skill == SkillType.Spelling)
-                level.SetSpellingSupportMode(outcome.SpellingSupportMode);
-
             var change = LevelChangeRecord.Create(
                 user.Id, result.Skill, null, result.Level,
                 LevelChangeType.Placement, now,
                 reason: "placement", accuracy: result.Accuracy);
             db.LevelChanges.Add(change);
         }
+
+        // The placement no longer asks spelling items (ADR-098), so nothing
+        // here measures the support mode — the outcome reports the cautious
+        // one, letter tiles, and the first real spelling session promotes a
+        // learner who does not need them. Set explicitly rather than left
+        // null, because null downstream reads as "not placed yet".
+        user.LevelFor(SkillType.Spelling)
+            .SetSpellingSupportMode(outcome.SpellingSupportMode);
 
         user.AdvanceOnboarding(OnboardingStage.Complete);
         session.Complete(now);
@@ -223,11 +228,10 @@ public static class PlacementEndpoints
 
         return Results.Ok(new
         {
-            // The four the learner sees. Spelling is measured and stored — its
-            // row still exists and still drives the hint strategy — but it is
-            // not a fifth primary skill and must not appear beside the others
-            // (§13, §20, §21). Grammar likewise: it shaped Speaking and Writing
-            // above rather than becoming a level of its own.
+            // The four the learner sees. Spelling is no longer among them at
+            // all (ADR-098); the filter stays because the outcome follows
+            // SkillOrder, and Spelling returning to it must not put a fifth
+            // row on a screen that shows four (§13, §20, §21).
             levels = outcome.Levels
                 .Where(l => l.Skill != SkillType.Spelling)
                 .Select(l => new
@@ -238,8 +242,10 @@ public static class PlacementEndpoints
                     confidence = l.Confidence,
                     rollingAccuracy = l.Accuracy,
                 }).ToList(),
-            // Kept in the payload for the internal diagnostic it feeds — the
-            // spelling hint strategy — not as a level to display.
+            // Zeroes now, and kept in the payload on purpose: the field is
+            // part of the published contract, and a client that drew a
+            // "spelling measured" row reads 0 of 0 rather than crashing on a
+            // missing object (ADR-098).
             spelling = new
             {
                 itemsAnswered = outcome.SpellingItemsAnswered,
@@ -252,13 +258,17 @@ public static class PlacementEndpoints
             // were matched against a key. Saying so is honest, and explains why
             // a band may move once real sessions start.
             productiveScoredByAi = aiScored,
+            // Eight questions cannot place anybody precisely and the copy must
+            // not pretend otherwise — the learner is told this is a first
+            // estimate they can change, here and on the result screen.
             summary = outcome.HasLowConfidence
-                ? "A couple of these are still rough — the test was short, and "
-                  + "WordOS will settle them from your first two weeks of real "
-                  + "sessions."
-                : "Estimated per skill from a short test. WordOS keeps "
+                ? "A first estimate from eight questions — rough in places, and "
+                  + "WordOS will settle it from your first two weeks of real "
+                  + "sessions. You can change any of these in Settings."
+                : "A first estimate from eight questions. WordOS keeps "
                   + "measuring your real performance and adjusts as it learns "
-                  + "more about you.",
+                  + "more about you, and you can change any of these in "
+                  + "Settings.",
         });
     }
 
@@ -330,11 +340,16 @@ public static class PlacementEndpoints
             progress = new
             {
                 answered,
-                // An estimate on purpose: an adaptive test stops as soon as it
-                // is confident, so the real total is not known in advance.
+                // Since ADR-098 the length is fixed, so this is the real total
+                // rather than a guess. Still clamped upwards: a run started
+                // under an older, longer version of the test must not report
+                // more answered than there are questions.
                 estimatedTotal = Math.Max(answered, engine.Config.EstimatedTotalItems),
-                currentSkill = (item?.Skill ?? SkillType.Spelling)
-                    .ToWire(),
+                // Nothing is current once the test is over; naming the last
+                // skill of the run keeps the field non-null for clients that
+                // draw a per-skill progress bar from it.
+                currentSkill =
+                    (item?.Skill ?? engine.Config.SkillOrder[^1]).ToWire(),
                 skillCount = engine.Config.SkillOrder.Count,
             },
         };

@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using WordOs.Domain.Common;
+using WordOs.Domain.Review;
 using WordOs.Infrastructure.Persistence;
 
 namespace WordOs.Api.Endpoints;
@@ -134,9 +135,35 @@ public static class HubEndpoints
         var addedToday = await db.Words
             .CountAsync(w => w.UserId == userId && w.AddedAt >= todayStart, ct);
 
+        // The challenge asks about words that have had a week to settle and
+        // have not been recalled correctly yet, oldest first and capped at one
+        // sitting (ADR-089, ADR-099). Loaded rather than counted in SQL because
+        // ripeness is a domain rule and belongs in one place.
+        var reviewable = await db.Words
+            .Where(w => w.UserId == userId && w.ReviewPassedAt == null)
+            .Select(w => new { w.AddedAt, w.State, w.LastReviewedAt })
+            .ToListAsync(ct);
+
+        var ripe = reviewable.Count(w =>
+            w.State != WordState.Deleted &&
+            WeeklyReviewPolicy.RipensAt(
+                w.LastReviewedAt ?? w.AddedAt, config) <= now);
+
+        var reviewWordCount = Math.Min(ripe, config.WeeklyReviewMaxWords);
+
+        // When the next one ripens, for a learner with none ripe yet — the
+        // first week has no challenge in it, and a card that only says
+        // "unavailable" does not tell them it is coming (ADR-089).
+        var opensAt = ripe > 0
+            ? (DateTimeOffset?)null
+            : reviewable
+                .Where(w => w.State != WordState.Deleted)
+                .Select(w => (DateTimeOffset?)WeeklyReviewPolicy.RipensAt(
+                    w.LastReviewedAt ?? w.AddedAt, config))
+                .OrderBy(at => at)
+                .FirstOrDefault();
+
         var periodStart = now.AddDays(-config.WeeklyReviewPeriodDays);
-        var reviewWordCount = await db.Words
-            .CountAsync(w => w.UserId == userId && w.AddedAt >= periodStart, ct);
 
         return Results.Ok(new
         {
@@ -153,7 +180,14 @@ public static class HubEndpoints
                 available = reviewWordCount > 0,
                 wordCount = reviewWordCount,
                 periodStart,
-                nextAvailableAt = (DateTimeOffset?)null,
+                // No longer always null: it is the date the first words ripen,
+                // so a learner in their first week is told when rather than
+                // only that they cannot start.
+                nextAvailableAt = opensAt,
+                // Behind the cap of fifty. The card can then say that finishing
+                // this sitting is not the end of it (ADR-089).
+                wordsWaitingAfterThis = Math.Max(
+                    0, ripe - config.WeeklyReviewMaxWords),
             },
             vocabulary = new
             {

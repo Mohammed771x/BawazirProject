@@ -5,6 +5,7 @@ import '../../mock_backend/mock_wordos_api.dart';
 import '../storage/preferences_providers.dart';
 import '../storage/token_store.dart';
 import 'http_wordos_api.dart';
+import 'server_revision.dart';
 import 'wordos_api.dart';
 
 /// Which backend the app talks to.
@@ -126,8 +127,15 @@ final sessionExpiredProvider = Provider<ValueNotifier<int>>((ref) {
 final wordOsApiProvider = Provider<WordOsApi>((ref) {
   final env = ref.watch(appEnvironmentProvider);
   final tokens = ref.watch(tokenStoreProvider);
+  // Announced on every write, whichever backend is behind it, so a screen can
+  // never be showing something the learner has already changed (ADR-094).
+  void announceChange() => ref.read(serverRevisionProvider.notifier).bump();
+
   if (env.useMockBackend) {
-    return MockWordOsApi(tokenReader: () => tokens.token);
+    return MockWordOsApi(
+      tokenReader: () => tokens.token,
+      onChanged: announceChange,
+    );
   }
   env.assertTransportIsSafe();
   return HttpWordOsApi(
@@ -153,6 +161,7 @@ final wordOsApiProvider = Provider<WordOsApi>((ref) {
       tokens.clear();
       ref.read(sessionExpiredProvider).value++;
     },
+    onChanged: announceChange,
   );
 });
 

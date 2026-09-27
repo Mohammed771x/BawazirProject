@@ -9,6 +9,8 @@ using WordOs.Application.Abstractions;
 using WordOs.Infrastructure.Ai;
 using WordOs.Infrastructure.Persistence;
 
+using WordOs.Domain.Lexicon;
+
 namespace WordOs.Api.Tests;
 
 /// <summary>
@@ -34,6 +36,17 @@ public sealed class ApiFactory(string connectionString)
         builder.UseSetting("ConnectionStrings:WordOs", connectionString);
         // A test-only key, generated per run and meaningless outside this
         // process. Real keys never live in source.
+        // Pinned, not left to the shipped default (ADR-096). Two dictionaries
+        // live in one table and the setting says which is served; these tests
+        // seed their own fixtures with `LexiconEntry.Create`, whose rows carry
+        // the first edition. Following the shipped value would mean every
+        // dictionary fixture in the suite went invisible the day the setting
+        // moved — which is exactly what happened when it did.
+        //
+        // The setting itself is covered by `LexiconEditionTests`, which seeds
+        // both editions and asserts that only the named one is searched.
+        builder.UseSetting("WordOs:LexiconEdition", LexiconEditions.OewnAwn);
+
         builder.UseSetting("Jwt:SigningKey", TestSigningKey);
         builder.UseSetting("Jwt:Issuer", "wordos-test");
         builder.UseSetting("Jwt:Audience", "wordos-test");

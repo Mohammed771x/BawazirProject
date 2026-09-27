@@ -25,12 +25,12 @@ In plain terms:
    learner's ability and take its mean (EAP) as the current estimate.
 4. The next question asked is the unused one whose difficulty sits closest to
    that estimate — which, under this model, is exactly the most informative one.
-5. We stop as soon as the estimate is precise enough, or when the item cap for
-   that skill is reached.
+5. We stop when the item count for that skill is reached — three for Reading
+   and Listening, one for Speaking and Writing (ADR-098).
 6. The final ability is mapped to the nearest CEFR band.
 
 Reading, Listening, Speaking and Writing each run this loop separately and
-produce their own level. **Spelling does not** — see §6.
+produce their own level. **Spelling is not part of the test at all** — see §6.
 
 ## 2. Why this method and not another
 
@@ -87,26 +87,38 @@ rule under this model — it is not a heuristic. Exact ties are broken at random
 which gives basic exposure control so two learners of the same level do not
 always see an identical test.
 
-**Stopping.** Per skill, stop when **either**:
+**Two rules protect a learner who is struggling.** The next item is never more
+than one band above the current estimate, and never harder than a question just
+missed. Without the second, "closest remaining difficulty" walks a learner
+*upwards* from the floor: one missed A1 item leaves the estimate above A1, so
+the nearest item left is A2 (ADR-098). Each receptive skill has three A1 items
+so that the cap can hold and the test still asks its three questions.
 
-- the posterior standard error has dropped to the target, **and** the minimum
-  item count has been met; or
-- the item cap for that skill has been reached.
+**Stopping.** Per skill, at the item count. There is no early stop: at three
+items a stopping rule could only ever cost a question, and a test whose length
+varies between learners is harder to describe honestly before they start it.
 
-| Skill group | Min items | Max items | Target SE |
-|---|---|---|---|
-| Reading, Listening | 3 | 6 | 0.40 |
-| Speaking, Writing | 2 | 3 | 0.55 |
-| Spelling | 4 | 4 | n/a (fixed ladder) |
+| Skill group | Items |
+|---|---|
+| Reading, Listening | 3 |
+| Speaking, Writing | 1 |
 
-Receptive items are cheap, so we buy precision. Each productive item costs the
-learner a written or spoken answer *and* an AI evaluation, so the caps are
-tighter and the SE target is looser; the level engine refines those two skills
-from real sessions afterwards (rule R6).
+A whole test is **exactly eight questions** (ADR-098). The UI shows "n of 8".
 
-A whole test is therefore roughly **12–22 questions** and never more than 24.
-The UI shows this as "about N", not a countdown, because an adaptive test has no
-fixed length.
+**The two one-question skills.** Each productive item costs the learner a
+written or spoken answer *and* an AI evaluation, and three of them were where
+the old twenty-question test lost people. One answer cannot place a skill on its
+own: measured, the population prior dominated it and every learner alive landed
+between A2+ and B2 on Writing whatever they wrote. So Speaking and Writing are
+asked **last**, their single item is pitched at what Reading and Listening
+already showed rather than at the floor, and their band is estimated against a
+prior re-centred on that estimate — borrowing its *location*, not its
+*certainty*. The prior keeps its usual width, the produced answer still moves
+the band about as far as one answer should, and the reported **confidence** is
+computed from that one answer alone, so it stays near zero and the UI shows the
+row as provisional. This is the one place skills are not measured separately;
+Reading and Listening are untouched. The level engine refines all four from real
+sessions afterwards (rule R6).
 
 ## 5. How each skill is evaluated
 
@@ -136,19 +148,18 @@ that an AI outage **degrades** placement rather than breaking it, and the backen
 records that the fallback was used so analytics can show how many placements ran
 without AI.
 
-## 6. Spelling — measured, never levelled
+## 6. Spelling — never levelled, and no longer asked about
 
 **A CEFR band is not a meaningful description of orthographic accuracy**, so
 Spelling is never assigned one. `Spelling A1` / `Spelling B2` do not exist
 anywhere in the model, the API or the UI.
 
-What Spelling placement produces instead:
-
-- a short fixed ladder of four items (fixed, not adaptive, so the accuracy
-  figure is comparable between learners);
-- an **accuracy** figure, stored as `rollingAccuracy` on the spelling row;
-- a **starting input mode**: `LETTER_TILES` below 75 % accuracy, `FREE_TYPING`
-  at or above it.
+Since ADR-098 it is not in the placement test either. Its four items only ever
+chose the **starting input mode**, and the first real spelling session settles
+that anyway — so every learner starts on `LETTER_TILES`, the supported mode, and
+is promoted from there. The six items stay in the bank and the `spelling` object
+stays in the API payload, reading 0 of 0: restoring the ladder is
+`PlacementConfig.SkillOrder` plus its limits, not re-authoring six questions.
 
 `SkillLevel.userSelectedLevel` and `systemAssessedLevel` are **null** for
 Spelling. `SkillLevel.carriesCefrLevel` is the check call sites use; attempting

@@ -91,6 +91,91 @@ void main() {
     await speech.speak('listen:1', 'research', rate: SpeechRate.slow);
     expect(provider.lastRate, SpeechRate.slow);
   });
+
+  // ── Telling a cancelled utterance from a finished one (ADR-080) ──────────
+  //
+  // Text-to-speech reports both through the same callback, so a caller that
+  // speaks a *sequence* — the Listening clip, sentence by sentence — cannot
+  // tell "that line ended, start the next" from "somebody stopped me". It read
+  // on over the questions it was about to be tested on. [interruptions] is the
+  // one fact that separates them.
+
+  test('a sentence allowed to finish is not counted as an interruption',
+      () async {
+    final before = speech.interruptions;
+
+    await speech.speak('clip:1', 'The shop opens at nine.');
+    provider.finish();
+    // The next line in the sequence, started once the previous one ended.
+    await speech.speak('clip:1', 'It closes at five.');
+
+    expect(speech.interruptions, before,
+        reason: 'a clip playing straight through must look uninterrupted');
+  });
+
+  test('being stopped from outside is counted', () async {
+    await speech.speak('clip:1', 'The shop opens at nine.');
+    final before = speech.interruptions;
+
+    // The learner left the passage: some other part of the app silenced it.
+    await speech.stop();
+
+    expect(speech.interruptions, before + 1);
+  });
+
+  test('another utterance taking the voice is counted', () async {
+    await speech.speak('clip:1', 'The shop opens at nine.');
+    final before = speech.interruptions;
+
+    await speech.speak('word:1', 'research');
+
+    expect(speech.interruptions, before + 1,
+        reason: 'being replaced is being cut short');
+  });
+
+  test('stopping nothing counts nothing', () async {
+    final before = speech.interruptions;
+    await speech.stop();
+    expect(speech.interruptions, before,
+        reason: 'a no-op stop must not look like somebody cutting a clip off');
+  });
+
+  // ── Teardown (ADR-080) ──────────────────────────────────────────────────
+  //
+  // The screen that silences the voice on its way out is doing exactly the
+  // right thing, and its stop lands after the scope holding this service has
+  // gone. That must not read as a fault in the screen.
+
+  test('a stop that lands after disposal is harmless', () async {
+    final late = SpeechService(provider: _RecordingProvider());
+    await late.speak('clip:1', 'The shop opens at nine.');
+
+    final pending = late.stop();
+    late.dispose();
+
+    await expectLater(pending, completes);
+    expect(late.isSpeaking, isFalse);
+  });
+
+  test('nothing speaks after disposal', () async {
+    final late = SpeechService(provider: provider);
+    late.dispose();
+
+    expect(await late.speak('clip:1', 'anything at all'), isFalse);
+    expect(late.isSpeaking, isFalse);
+  });
+
+  test('a caller waiting on the voice is released by disposal, not stranded',
+      () async {
+    final late = SpeechService(provider: _RecordingProvider());
+    final pending = late.speakToCompletion('tutor:1', 'Hello there.');
+
+    late.dispose();
+
+    // Left hanging, this future never completes and whatever awaited it —
+    // a conversation waiting to open the microphone — waits for ever.
+    await expectLater(pending, completes);
+  });
 }
 
 /// A provider that records what it was asked to do and reports completion only
@@ -110,6 +195,17 @@ class _RecordingProvider implements SpeechProvider {
 
   @override
   set onComplete(VoidCallback? callback) => _onComplete = callback;
+
+  /// Word-by-word progress, which a fake voice reports only when a test asks
+  /// it to — see [speakWord] where one does.
+  @override
+  set onWordBoundary(void Function(int start)? callback) =>
+      _onWordBoundary = callback;
+
+  void Function(int start)? _onWordBoundary;
+
+  /// Pretends the engine reached a word at [offset] in the current utterance.
+  void speakWord(int offset) => _onWordBoundary?.call(offset);
 
   @override
   Future<void> initialise() async {}

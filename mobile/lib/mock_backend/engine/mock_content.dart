@@ -3,6 +3,37 @@ import 'dart:math';
 import '../../core/models/models.dart';
 import 'mock_dictionary.dart';
 
+/// The register a word question's four options are written in.
+///
+/// Mirrors `MeaningOptionStyle` and `LevelBands` on the real backend
+/// (ADR-088). It lives here and not in `core/models` deliberately: the style
+/// never crosses the wire and the app never decides it — the server sends four
+/// strings and the client renders them. Putting it in the shared models would
+/// invite a screen to start reasoning about bands, which is rule R1 going
+/// quietly wrong.
+enum MeaningOptionStyle {
+  /// Arabic, A1–A2+.
+  arabicMeaning,
+
+  /// Plain English, B1–B2.
+  simpleDefinition,
+
+  /// The dictionary's own words, B2+ and above.
+  dictionaryDefinition,
+}
+
+/// The band this level answers in — the same cuts the backend uses.
+MeaningOptionStyle meaningOptionStyleFor(CefrLevel level) {
+  if (level.index >= CefrLevel.b2Plus.index) {
+    return MeaningOptionStyle.dictionaryDefinition;
+  }
+  if (level.index >= CefrLevel.b1.index) {
+    return MeaningOptionStyle.simpleDefinition;
+  }
+  return MeaningOptionStyle.arabicMeaning;
+}
+
+
 /// Simulates the Python AI service's content generation (Phase 6 replaces this).
 ///
 /// It produces the same *shape* the real service must return, so swapping in the
@@ -68,6 +99,86 @@ class MockContentGenerator {
     return options;
   }
 
+  /// Four options for one target word, **without** using any other target
+  /// word's meaning.
+  ///
+  /// The real generator writes these against the sentence the word appears in
+  /// (ADR-084). This stand-in cannot do that — it has no model — so it does the
+  /// one thing that matters for the simulation: it keeps each word's options
+  /// disjoint from every other word's answer, and gives each word its own
+  /// three so no two questions share a wrong option either.
+  ///
+  /// Why it matters even here: the old version drew the wrong answers from the
+  /// session's other target meanings, so every question answered correctly
+  /// removed an option from the questions still to come. A demo run of the
+  /// mock showed exactly the leak the real backend had.
+  /// The answer to one word's question, in the register its band reads.
+  ///
+  /// The real service takes the plain-English line from the generator; this
+  /// stand-in has no model, so it shortens the dictionary definition the same
+  /// way a person would — enough for the app to be built and demonstrated
+  /// against a B1 session without a server behind it.
+  String _answerFor(
+    SessionTargetWord word,
+    List<String> definitions,
+    int index,
+    MeaningOptionStyle style,
+  ) {
+    if (style == MeaningOptionStyle.arabicMeaning) return _meaningOf(word);
+
+    final definition =
+        index < definitions.length ? definitions[index].trim() : '';
+    if (definition.isEmpty) return _meaningOf(word);
+
+    if (style == MeaningOptionStyle.dictionaryDefinition) return definition;
+
+    // Plain English: the first clause only, which is where a dictionary puts
+    // the sense and after which it starts elaborating.
+    final cut = definition.indexOf(RegExp(r'[;,(]'));
+    final simple = cut > 12 ? definition.substring(0, cut).trim() : definition;
+    return simple.isEmpty ? definition : simple;
+  }
+
+  List<String> _wordOptions({
+    required String correct,
+    required Set<String> answers,
+    required Set<String> alreadyUsed,
+    MeaningOptionStyle style = MeaningOptionStyle.arabicMeaning,
+  }) {
+    // One language per question. An English question topped up from the Arabic
+    // pool would give its answer away by script alone.
+    final source = style == MeaningOptionStyle.arabicMeaning
+        ? MockDictionary.distractorMeanings
+        : MockDictionary.distractorDefinitions;
+
+    final pool = source
+        .where((m) => m != correct)
+        // Never another word's answer: that is the elimination this exists to
+        // stop.
+        .where((m) => !answers.contains(m))
+        // And not one this session has already offered elsewhere, so the sets
+        // look written rather than dealt from one deck.
+        .where((m) => !alreadyUsed.contains(m))
+        .toList()
+      ..shuffle(_random);
+
+    // A pool too small to keep both promises breaks the second one first: a
+    // repeated wrong option is untidy, a question with two options is broken.
+    final fallback = source
+        .where((m) => m != correct && !answers.contains(m))
+        .toList()
+      ..shuffle(_random);
+
+    final chosen = <String>{...pool.take(3)};
+    for (final m in fallback) {
+      if (chosen.length >= 3) break;
+      chosen.add(m);
+    }
+
+    alreadyUsed.addAll(chosen);
+    return [correct, ...chosen]..shuffle(_random);
+  }
+
   // ── Reading & Listening ────────────────────────────────────────────────────
 
   /// Builds the passage (or audio script) plus five comprehension questions and
@@ -83,6 +194,7 @@ class MockContentGenerator {
     required List<String> definitions,
     required List<String> interests,
     required bool listening,
+    required CefrLevel level,
   }) {
     final learner = _learners[_random.nextInt(_learners.length)];
     final topic = _topicFor(interests);
@@ -195,9 +307,23 @@ class MockContentGenerator {
     assert(items.length == comprehensionQuestionCount);
 
     // One context question per target word.
-    for (final word in words) {
-      final meaning = _meaningOf(word);
-      final others = words.map(_meaningOf).where((m) => m != meaning).toList();
+    //
+    // Every word's answer, so no word's wrong options can be another's right
+    // one (ADR-084), and a running set so two questions do not share a wrong
+    // one either.
+    // Which register this learner answers in (ADR-088). The real backend takes
+    // the same decision from the same ladder; this mirrors it so the app can be
+    // developed against every band without a server.
+    final style = meaningOptionStyleFor(level);
+    final answers = <String>{
+      for (var i = 0; i < words.length; i++)
+        _answerFor(words[i], definitions, i, style),
+    };
+    final usedDistractors = <String>{};
+
+    for (var w = 0; w < words.length; w++) {
+      final word = words[w];
+      final meaning = _answerFor(word, definitions, w, style);
       final index = sentenceIndexOfWord[word.wordId];
       final sentence = index == null ? '' : sentences[index];
       final before = index == null || index == 0 ? null : sentences[index - 1];
@@ -213,8 +339,23 @@ class MockContentGenerator {
           wordId: word.wordId,
           // The question is about *this* use of the word, not the dictionary
           // entry — the learner is practising inference, not recall.
-          prompt: 'What does "${word.text}" mean here?',
-          options: _optionsFor(meaning, others),
+          //
+          // Listening's question may not name the word: the learner hears it
+          // and never sees it, and printing it hands over the spelling
+          // (ADR-085). It travels as a key so the client says it in the
+          // learner's language, and the English beside the key is written the
+          // same way so a client that ignores the key is still safe.
+          prompt: listening
+              ? 'What does the word you just heard mean here?'
+              : 'What does "${word.text}" mean here?',
+          promptKey:
+              listening ? SessionPromptKey.listeningWordMeaning : null,
+          options: _wordOptions(
+            correct: meaning,
+            answers: answers,
+            alreadyUsed: usedDistractors,
+            style: style,
+          ),
           context: listening
               ? null
               : WordContext(before: before, sentence: sentence, after: after),
@@ -334,17 +475,16 @@ class MockContentGenerator {
     return [...letters, ...available.take(decoyCount)]..shuffle(_random);
   }
 
+  /// One spelling item per word — always assembled from letters (ADR-100).
+  ///
+  /// B2 and above used to type the word into a text field, which on a phone
+  /// raises a keyboard that autocorrects, predicts and completes it. The
+  /// difficulty lives in the hint ladder instead.
   GeneratedSession buildSpelling({
     required List<SessionTargetWord> words,
     required List<String> definitions,
     required CefrLevel level,
-    required SpellingInputMode? preferredMode,
   }) {
-    final advanced = level.rank >= CefrLevel.b2.rank;
-    // Placement measures whether the learner needs letter support; it can only
-    // make the task *easier* than the level implies, never harder (ADR-008).
-    final useTiles = preferredMode == SpellingInputMode.letterTiles || !advanced;
-
     final items = <SessionItem>[];
     final correct = <String, String>{};
 
@@ -371,10 +511,11 @@ class MockContentGenerator {
           clue: ladder.first.text,
           clueKind: ladder.first.kind,
           hints: ladder,
-          letters: useTiles ? letters : const [],
-          inputMode: useTiles
-              ? SpellingInputMode.letterTiles
-              : SpellingInputMode.freeTyping,
+          // Always letters, never a text field: a phone keyboard completes
+          // the word, so a typed spelling test measures the keyboard
+          // (ADR-100).
+          letters: letters,
+          inputMode: SpellingInputMode.letterTiles,
         ),
       );
       correct[id] = word.text;

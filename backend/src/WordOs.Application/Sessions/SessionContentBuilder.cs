@@ -27,8 +27,9 @@ namespace WordOs.Application.Sessions;
 /// by turn (§35–39).</item>
 /// </list>
 ///
-/// Distractors are drawn from the learner's own other words first: a plausible
-/// wrong answer teaches more than an absurd one.
+/// A target word's wrong answers come from the generator, written against the
+/// sentence that word lives in (ADR-084). Only when it produced none does this
+/// fall back to the learner's other words.
 /// </remarks>
 public static class SessionContentBuilder
 {
@@ -37,7 +38,8 @@ public static class SessionContentBuilder
         GeneratedContent content,
         IReadOnlyList<Word> words,
         bool listening,
-        Random random)
+        Random random,
+        MeaningOptionStyle optionStyle = MeaningOptionStyle.ArabicMeaning)
     {
         foreach (var question in content.Comprehension)
         {
@@ -49,22 +51,54 @@ public static class SessionContentBuilder
                 question.Prompt, options, question.Correct));
         }
 
+        // Both fallback pools, because which one is reached depends on the
+        // band and, for a single word in a session, on whether it has an
+        // English definition at all.
         var meanings = words.Select(w => w.Meaning).ToList();
+        var definitions = words.Select(w => w.DefinitionEn).ToList();
 
         foreach (var word in words)
         {
             var context = content.Contexts.FirstOrDefault(c =>
                 string.Equals(c.Word, word.Text, StringComparison.OrdinalIgnoreCase));
 
-            var options = BuildMeaningOptions(word.Meaning, meanings, random);
+            // Written for *this* word, against the sentence it appears in.
+            //
+            // The alternative, which this replaced, was to build every word's
+            // wrong answers out of the other target words' meanings. That made
+            // a session solvable by bookkeeping rather than by knowing the
+            // words: five words share five meanings, so each question answered
+            // correctly removed an option from every question still to come,
+            // and by the last word there was nothing left to choose (ADR-084).
+            // What the learner is choosing between, in the register their band
+            // reads (ADR-088). The question is identical at every band; only
+            // the four lines under it change language.
+            var key = AnswerKey(
+                word, context, optionStyle, meanings, definitions);
+
+            var options = BuildMeaningOptions(
+                key.Correct, key.Written, key.Pool, key.Fillers, random);
 
             session.AddItem(SessionItem.TargetWord(
                 wordId: word.Id,
                 // About *this* use of the word, not the dictionary entry — the
                 // learner is practising inference.
-                prompt: $"What does \"{word.Text}\" mean here?",
+                //
+                // Listening's question may not name the word. The whole task is
+                // that the learner never sees it: they hear it inside a
+                // sentence and say what it meant, and a question that prints it
+                // hands over the spelling and turns the exercise into reading
+                // with audio attached (ADR-085). The text below is the fallback
+                // for a client that does not know the key, so it is written the
+                // same way rather than relying on the key being understood.
+                prompt: listening
+                    ? "What does the word you just heard mean here?"
+                    : $"What does \"{word.Text}\" mean here?",
+                promptKey: listening
+                    ? SessionPromptKey.ListeningWordMeaning
+                    : null,
                 options: options,
-                correct: word.Meaning,
+                correct: key.Correct,
                 // Reading shows the sentences; Listening hears them.
                 context: listening || context is null
                     ? null
@@ -98,22 +132,22 @@ public static class SessionContentBuilder
         }
     }
 
+    /// <summary>Builds one spelling item per word — always letter tiles.</summary>
+    /// <remarks>
+    /// B2 and above used to type the word into a text field. On a phone that is
+    /// not a spelling test: the keyboard autocorrects, predicts and completes,
+    /// so the learner taps a suggestion and the exercise measures the keyboard
+    /// (ADR-100). Every learner now assembles the word from letters, and the
+    /// difficulty lives where it always belonged — in the hint ladder, which is
+    /// already entered at the rung that suits the level.
+    /// </remarks>
     public static void BuildSpellingItems(
         SkillSession session,
         IReadOnlyList<Word> words,
         CefrLevel level,
-        SpellingInputMode? preferredMode,
         Random random,
         IReadOnlyDictionary<Guid, string>? synonyms = null)
     {
-        // B2 and above type freely; lower levels get letter tiles
-        // (MVP Core §33–34).
-        var advanced = level.Rank() >= CefrLevel.B2.Rank();
-
-        // Placement can only make the task *easier* than the level implies,
-        // never harder (ADR-008).
-        var useTiles = preferredMode == SpellingInputMode.LetterTiles || !advanced;
-
         foreach (var word in words)
         {
             var ladder = BuildHintLadder(
@@ -126,10 +160,8 @@ public static class SessionContentBuilder
                 clue: ladder[0].Text,
                 clueKind: ladder[0].Kind,
                 hints: ladder,
-                letters: useTiles ? LetterPool(word.Text, random) : null,
-                inputMode: useTiles
-                    ? SpellingInputMode.LetterTiles
-                    : SpellingInputMode.FreeTyping,
+                letters: LetterPool(word.Text, random),
+                inputMode: SpellingInputMode.LetterTiles,
                 word: word.Text));
         }
     }
@@ -294,30 +326,120 @@ public static class SessionContentBuilder
             .Select(w => (
                 w.Id,
                 w.Text,
-                BuildMeaningOptions(w.Meaning, meanings, random)))
+                // The warm-up keeps the old scheme deliberately. It measures
+                // nothing — no attempt, no event, no level moves (rule R9) —
+                // so elimination costs the learner nothing, and it runs before
+                // any passage exists to write context-aware options from.
+                BuildMeaningOptions(
+                    w.Meaning, null, meanings, ArabicFillers, random)))
             .ToList();
     }
 
+    /// <summary>
+    /// Four options for one word: the correct meaning and three wrong ones.
+    /// </summary>
+    /// <param name="written">
+    /// Wrong meanings the generator wrote for this word from its own sentence,
+    /// or null when it produced none (ADR-084).
+    /// </param>
+    /// <param name="otherMeanings">
+    /// The fallback pool — the learner's other words in this session. Reached
+    /// only when <paramref name="written"/> comes up short, because drawing
+    /// from it lets a learner eliminate options across questions.
+    /// </param>
+    /// <summary>
+    /// The answer to one word's question, in the register its band reads.
+    /// </summary>
+    /// <remarks>
+    /// The correct option comes from <b>this service</b> at two of the three
+    /// bands — the learner's own Arabic meaning, or the lexicon's gloss — and
+    /// from the generator at only one, where a plain-English paraphrase has no
+    /// other source. That is the narrowest place to let a model write an answer
+    /// key, and it is still a model writing one: the prompt asks it to simplify
+    /// the definition it was handed, not to state the meaning itself (ADR-088).
+    ///
+    /// <para>The English bands fall back to Arabic for any word with no English
+    /// definition to show. A word added when the lexicon had never heard of it
+    /// always has one (ADR-075), so this is a guard rather than a path — but an
+    /// empty correct option is a question with no right answer, and that is
+    /// worse than one word of a session reading in the other language.</para>
+    /// </remarks>
+    private static AnswerKeyParts AnswerKey(
+        Word word,
+        GeneratedWordContext? context,
+        MeaningOptionStyle style,
+        IReadOnlyList<string> meanings,
+        IReadOnlyList<string> definitions)
+    {
+        var arabic = new AnswerKeyParts(
+            word.Meaning, context?.WrongMeanings, meanings, ArabicFillers);
+
+        if (style == MeaningOptionStyle.ArabicMeaning) return arabic;
+
+        var correct = style == MeaningOptionStyle.SimpleDefinition
+            // The generator's plain-English line, or the dictionary's own when
+            // it wrote none — harder than intended, never wrong.
+            ? Trimmed(context?.SimpleDefinition) ?? Trimmed(word.DefinitionEn)
+            : Trimmed(word.DefinitionEn);
+
+        if (correct is null) return arabic;
+
+        return new AnswerKeyParts(
+            correct, context?.WrongDefinitions, definitions, EnglishFillers);
+    }
+
+    private static string? Trimmed(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private readonly record struct AnswerKeyParts(
+        string Correct,
+        IReadOnlyList<string>? Written,
+        IReadOnlyList<string> Pool,
+        IReadOnlyList<string> Fillers);
+
     private static List<string> BuildMeaningOptions(
         string correct,
+        IReadOnlyList<string>? written,
         IReadOnlyList<string> otherMeanings,
+        IReadOnlyList<string> fillers,
         Random random)
     {
-        // The learner's own other words make the best distractors: they are
-        // real meanings the learner is currently studying, so a guess based on
-        // vague familiarity does not work.
+        var options = new List<string> { correct };
+
+        // What the generator wrote, filtered against the answer. A model that
+        // repeats the correct meaning as a wrong one would otherwise produce a
+        // question with two right answers — the one failure mode here that a
+        // learner cannot recover from.
+        if (written is not null)
+        {
+            foreach (var wrong in written)
+            {
+                if (options.Count >= 4) break;
+                var text = wrong?.Trim();
+                if (string.IsNullOrEmpty(text)) continue;
+                if (options.Contains(text, StringComparer.Ordinal)) continue;
+                options.Add(text);
+            }
+        }
+
+        // Still short: top up the old way rather than ask a question with two
+        // options. Worse, and bounded — it only ever fills what is missing.
         var pool = otherMeanings
             .Where(m => !string.Equals(m, correct, StringComparison.Ordinal))
             .Distinct(StringComparer.Ordinal)
             .ToList();
         Shuffle(pool, random);
 
-        var options = new List<string> { correct };
-        options.AddRange(pool.Take(3));
+        foreach (var meaning in pool)
+        {
+            if (options.Count >= 4) break;
+            if (!options.Contains(meaning, StringComparer.Ordinal))
+                options.Add(meaning);
+        }
 
         // Not enough of the learner's own words yet — top up from a fixed pool
         // rather than showing a question with two options.
-        foreach (var filler in FillerMeanings)
+        foreach (var filler in fillers)
         {
             if (options.Count >= 4) break;
             if (!options.Contains(filler, StringComparer.Ordinal))
@@ -328,10 +450,29 @@ public static class SessionContentBuilder
         return options;
     }
 
-    private static readonly string[] FillerMeanings =
+    private static readonly string[] ArabicFillers =
     [
         "لوحة مفاتيح", "شبكة الإنترنت", "قاعدة بيانات", "متصفح",
         "مكتبة عامة", "مطار دولي", "وجبة خفيفة", "ملعب رياضي",
+    ];
+
+    /// <summary>The same last resort, for the bands that answer in English.</summary>
+    /// <remarks>
+    /// Reached only when the generator wrote nothing and the learner has too
+    /// few other words to fill four options — a first session with the AI down.
+    /// Written as definitions rather than as bare nouns, so they sit beside a
+    /// real one without being identifiable by shape alone.
+    /// </remarks>
+    private static readonly string[] EnglishFillers =
+    [
+        "a set of keys for typing",
+        "a network that connects computers",
+        "a place where books are kept and lent",
+        "a building where aircraft arrive and leave",
+        "a small amount of food eaten between meals",
+        "an area of ground marked out for a sport",
+        "a program for looking at pages on the internet",
+        "an organised collection of stored information",
     ];
 
     private static string? JoinContext(GeneratedWordContext? context) =>

@@ -17,6 +17,7 @@ class HttpWordOsApi implements WordOsApi {
     this.languageReader,
     this.onRefreshed,
     this.onUnauthorized,
+    this.onChanged,
     Dio? dio,
   }) : _dio = dio ??
             Dio(
@@ -79,12 +80,37 @@ class HttpWordOsApi implements WordOsApi {
           final alreadyRetried =
               error.requestOptions.extra['wordos.retried'] == true;
 
-          if (isRefreshCall || alreadyRetried || !await _refresh()) {
-            // The refresh token is gone, expired or revoked. Drop everything
-            // and let the session controller route back to sign-in.
+          if (isRefreshCall || alreadyRetried) {
             onUnauthorized?.call();
             handler.next(error);
             return;
+          }
+
+          switch (await _refresh()) {
+            case _Refresh.renewed:
+              break;
+
+            // The server rejected the refresh token: it is gone, expired or
+            // revoked. Drop everything and let the session controller route
+            // back to sign-in.
+            case _Refresh.rejected:
+              onUnauthorized?.call();
+              handler.next(error);
+              return;
+
+            // **Nobody rejected anything.** The request did not arrive: no
+            // network, a timeout, a server still waking up. Signing the learner
+            // out here is the bug behind "it asks me to sign in again and I do
+            // not know why" — their credentials were deleted because a train
+            // went into a tunnel.
+            //
+            // So the tokens are left exactly where they are and the error is
+            // reported as what it is. The access token is still expired, so the
+            // next request will 401 again and try the refresh again — which is
+            // right, because by then the connection may be back.
+            case _Refresh.unavailable:
+              handler.next(error);
+              return;
           }
 
           try {
@@ -120,18 +146,27 @@ class HttpWordOsApi implements WordOsApi {
   /// Invoked when the session cannot be recovered at all.
   final void Function()? onUnauthorized;
 
+  /// Called after every request that changed something on the server.
+  ///
+  /// The app uses it to refetch whatever is on screen, so a learner never sees
+  /// a screen that disagrees with what they just did (ADR-094).
+  final void Function()? onChanged;
+
   /// Serialises concurrent refreshes: several requests failing at once must
   /// exchange the (single-use) refresh token exactly once between them.
-  Future<bool>? _refreshInFlight;
+  Future<_Refresh>? _refreshInFlight;
 
-  Future<bool> _refresh() {
+  Future<_Refresh> _refresh() {
     return _refreshInFlight ??= _performRefresh()
       ..whenComplete(() => _refreshInFlight = null);
   }
 
-  Future<bool> _performRefresh() async {
+  Future<_Refresh> _performRefresh() async {
     final refresh = refreshTokenReader?.call();
-    if (refresh == null || refresh.isEmpty) return false;
+
+    // Nothing to exchange. Not a network problem — there is genuinely no
+    // session to recover.
+    if (refresh == null || refresh.isEmpty) return _Refresh.rejected;
 
     try {
       // A bare Dio: the interceptor above must not fire for this call.
@@ -143,12 +178,23 @@ class HttpWordOsApi implements WordOsApi {
 
       final body = (response.data as Map?)?.cast<String, dynamic>();
       final token = body?['token'] as String?;
-      if (token == null || token.isEmpty) return false;
+
+      // A 200 with no token in it. The server answered and the answer is
+      // useless, which is not something waiting will fix.
+      if (token == null || token.isEmpty) return _Refresh.rejected;
 
       onRefreshed?.call(token, body?['refreshToken'] as String?);
-      return true;
-    } on DioException {
-      return false;
+      return _Refresh.renewed;
+    } on DioException catch (e) {
+      // The distinction this whole enum exists for: did the *server* refuse
+      // the token, or did the request never get an answer?
+      final status = e.response?.statusCode;
+
+      if (status == 401 || status == 403) return _Refresh.rejected;
+
+      // 5xx, a timeout, a dead socket, DNS, a server still cold-starting.
+      // Nobody has said this session is over.
+      return _Refresh.unavailable;
     }
   }
 
@@ -158,8 +204,19 @@ class HttpWordOsApi implements WordOsApi {
     return _asMap(res);
   }
 
+  /// Announced to the app because it changed something on the server.
+  ///
+  /// The HTTP verb *is* the classification, which is why this lives here rather
+  /// than in a list of endpoints somebody has to keep up to date: a method
+  /// added tomorrow that goes through [_post] is announced without anyone
+  /// deciding that it should be (ADR-094).
+  ///
+  /// Only on success. A write that failed changed nothing, and telling every
+  /// screen to refetch because a request was refused turns one error into a
+  /// burst of requests.
   Future<Map<String, dynamic>> _post(String path, [Object? body]) async {
     final res = await _guard(() => _dio.post<dynamic>(path, data: body));
+    onChanged?.call();
     return _asMap(res);
   }
 
@@ -170,15 +227,18 @@ class HttpWordOsApi implements WordOsApi {
   /// would report success for a response it never actually looked at.
   Future<void> _delete(String path) async {
     await _guard(() => _dio.delete<dynamic>(path));
+    onChanged?.call();
   }
 
   Future<Map<String, dynamic>> _patch(String path, [Object? body]) async {
     final res = await _guard(() => _dio.patch<dynamic>(path, data: body));
+    onChanged?.call();
     return _asMap(res);
   }
 
   Future<Map<String, dynamic>> _put(String path, [Object? body]) async {
     final res = await _guard(() => _dio.put<dynamic>(path, data: body));
+    onChanged?.call();
     return _asMap(res);
   }
 
@@ -218,6 +278,20 @@ class HttpWordOsApi implements WordOsApi {
                 .whereType<String>()
                 .toList(),
             corrected: error['corrected'] as String?,
+            statusCode: status,
+          );
+        }
+
+        // A meaning that belongs to another word carries the words it does
+        // belong to (ADR-101), because the useful answer is not "no" — it is
+        // "that is `book`; shall I swap them?".
+        if (code == 'MEANING_IS_ANOTHER_WORD') {
+          throw MeaningIsAnotherWordException(
+            message: message,
+            candidates: (error['candidates'] as List<dynamic>? ?? const [])
+                .whereType<Map<String, dynamic>>()
+                .map(WordCandidate.fromJson)
+                .toList(),
             statusCode: status,
           );
         }
@@ -460,6 +534,28 @@ class HttpWordOsApi implements WordOsApi {
       }));
 
   @override
+  Future<Word> changeWordMeaning({
+    required String wordId,
+    required String meaning,
+    bool acceptAnyway = false,
+  }) async =>
+      Word.fromJson(await _patch('/words/$wordId/meaning', {
+        'meaning': meaning,
+        'acceptAnyway': acceptAnyway,
+      }));
+
+  @override
+  Future<Word> replaceWord({
+    required String wordId,
+    required String meaning,
+    required String senseId,
+  }) async =>
+      Word.fromJson(await _patch('/words/$wordId/meaning', {
+        'meaning': meaning,
+        'replaceWithSenseId': senseId,
+      }));
+
+  @override
   Future<void> deleteWord(String wordId) => _delete('/words/$wordId');
 
   @override
@@ -688,4 +784,21 @@ class HttpWordOsApi implements WordOsApi {
   Future<PlacementEvidence> adminPlacementEvidence(String userId) async =>
       PlacementEvidence.fromJson(
           await _get('/admin/users/$userId/placement'));
+}
+
+/// What came back when the app tried to renew an expired access token.
+///
+/// Three outcomes, not two, and the third is the whole point. Treating *any*
+/// failed refresh as a dead session signs a learner out because their
+/// connection dropped — which is the bug behind "after a while it asks me to
+/// sign in again and I do not know why" (ADR-093).
+enum _Refresh {
+  /// A new access token is in hand; replay the original request.
+  renewed,
+
+  /// The server refused the refresh token. The session really is over.
+  rejected,
+
+  /// Nobody answered. The session is untouched and worth trying again.
+  unavailable,
 }

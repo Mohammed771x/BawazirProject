@@ -420,12 +420,17 @@ public class SessionItem
         IReadOnlyList<string> options,
         string correct,
         object? context,
-        string? audioText) =>
+        string? audioText,
+        // Listening asks a fixed question, because its question may not name
+        // the word (ADR-085). Reading's is written for the passage and has no
+        // key, exactly as ADR-035 describes.
+        SessionPromptKey? promptKey = null) =>
         new()
         {
             Type = SessionItemType.TargetWord,
             WordId = wordId,
             Prompt = prompt,
+            PromptKey = promptKey,
             OptionsJson = System.Text.Json.JsonSerializer.Serialize(options),
             CorrectAnswer = correct,
             // camelCase because this JSON is stored verbatim and re-emitted

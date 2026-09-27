@@ -173,25 +173,25 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      s.reviewDoesNotChange,
-                      style: context.text.bodySmall?.copyWith(
-                        color: context.colors.onSurface.withValues(alpha: 0.6),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: AppSpacing.xs),
-                  StatusPill(
-                    label: '${s.reviewRemaining} $_remaining',
-                    color: color,
-                  ),
-                ],
+              Text(
+                s.reviewDoesNotChange,
+                style: context.text.bodySmall?.copyWith(
+                  color: context.colors.onSurface.withValues(alpha: 0.6),
+                ),
               ),
               const SizedBox(height: AppSpacing.sm),
-              StepProgressBar(value: total == 0 ? 0 : done / total),
+              // The bar, and no number beside it (ADR-091).
+              //
+              // "3 of 50" is an honest count and a discouraging one: it tells a
+              // learner who has just started that they have forty-seven to go,
+              // at the exact moment they are deciding whether to continue. The
+              // bar says the same thing without doing the arithmetic for them,
+              // and it moves — which a number does not.
+              StepProgressBar(
+                value: challengeProgress(done, total),
+                animate: true,
+                height: 10,
+              ),
             ],
           ),
         ),
@@ -221,7 +221,7 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
                           ),
                         ),
                         // Hearing the word is part of recalling it (§13).
-                        SpeakerButton(
+                        WordSpeakerButtons(
                           id: 'review:${item.id}',
                           text: item.prompt,
                           size: 22,

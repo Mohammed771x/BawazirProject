@@ -219,15 +219,78 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
         var rotatedBody = await rotated.Content.ReadFromJsonAsync<JsonElement>();
         var second = rotatedBody.GetProperty("refreshToken").GetString()!;
 
-        // Presenting the spent token is evidence it leaked.
+        // The real leak signature: the legitimate client has *used* the
+        // replacement, so whoever is presenting the spent one is not them
+        // (ADR-093).
+        var third = await Client.PostAsJsonAsync("/api/auth/refresh",
+            new { refreshToken = second });
+        third.EnsureSuccessStatusCode();
+        var thirdToken = (await third.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("refreshToken").GetString()!;
+
         var replay = await Client.PostAsJsonAsync("/api/auth/refresh",
             new { refreshToken = first });
         Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
 
-        // …so the replacement is revoked too, rather than left live.
-        var afterBreach = await Client.PostAsJsonAsync("/api/auth/refresh",
-            new { refreshToken = second });
-        Assert.Equal(HttpStatusCode.Unauthorized, afterBreach.StatusCode);
+        // …and the whole family goes with it, rather than the live one being
+        // left usable by whoever has it.
+        foreach (var leaked in new[] { second, thirdToken })
+        {
+            var afterBreach = await Client.PostAsJsonAsync("/api/auth/refresh",
+                new { refreshToken = leaked });
+            Assert.Equal(HttpStatusCode.Unauthorized, afterBreach.StatusCode);
+        }
+    }
+
+    [SkippableFact]
+    public async Task A_refresh_whose_reply_was_lost_does_not_end_the_session()
+    {
+        // The reported bug (ADR-093). The exchange succeeded on the server and
+        // the reply never arrived — on a phone that is not rare — so the app
+        // retries with the only token it has. Treating that as a leak revokes
+        // the family and signs somebody out *permanently* for being in a
+        // tunnel.
+        //
+        // The tell is that the replacement has never been used: nobody
+        // received it. The test above covers the case where somebody did.
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        var register = await Client.PostAsJsonAsync("/api/auth/register", new
+        {
+            email = Unique("lostreply"),
+            password = "correct-horse-battery",
+            displayName = "L",
+            phoneCountryCode = "967",
+            phoneNumber = "770000016",
+        });
+        var body = await register.Content.ReadFromJsonAsync<JsonElement>();
+        var first = body.GetProperty("refreshToken").GetString()!;
+
+        var rotated = await Client.PostAsJsonAsync("/api/auth/refresh",
+            new { refreshToken = first });
+        rotated.EnsureSuccessStatusCode();
+        var lost = (await rotated.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("refreshToken").GetString()!;
+
+        // The client never saw `lost`, so it asks again with what it has.
+        var retry = await Client.PostAsJsonAsync("/api/auth/refresh",
+            new { refreshToken = first });
+
+        retry.EnsureSuccessStatusCode();
+        var recovered = (await retry.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("refreshToken").GetString()!;
+
+        Assert.NotEqual(lost, recovered);
+
+        // The pair nobody received is retired rather than left live.
+        var orphan = await Client.PostAsJsonAsync("/api/auth/refresh",
+            new { refreshToken = lost });
+        Assert.Equal(HttpStatusCode.Unauthorized, orphan.StatusCode);
+
+        // And the session the learner actually holds still works.
+        var again = await Client.PostAsJsonAsync("/api/auth/refresh",
+            new { refreshToken = recovered });
+        again.EnsureSuccessStatusCode();
     }
 
     // ── Authorization: /admin/* ──────────────────────────────────────────────

@@ -433,6 +433,111 @@ right setting on a server you own, where uptime is already paid for.
 
 ---
 
+## 4½ · Switching production to the Wiktionary dictionary
+
+The rebuilt dictionary (ADR-096, ADR-097) lives in the **same table** as the
+old one, told apart by `Edition`, and search reads only the edition named by
+`WordOs:LexiconEdition`. That design makes the switch — and the rollback — one
+setting. It also makes the **order** of the steps the whole difficulty, because
+the code's default is `wiktionary` and production has none of those rows until
+they are loaded:
+
+| If this happens first… | …the learner sees |
+|---|---|
+| code pushed before the migrations | every lexicon and word query fails — the columns it reads do not exist yet |
+| code pushed before the data, default setting | **every word search returns nothing** |
+| data loaded before the code | the *old* code does not filter by edition, so both dictionaries appear mixed in one result list |
+
+The order below is the one where every intermediate state is the old app
+behaving exactly as it did.
+
+**When:** after the monthly compute allowance resets. Loading 200 k rows and
+their indexes lets Neon autoscale past 0.25 CU for a few minutes — affordable on
+a fresh month, pointless to risk at the end of one (ADR-077).
+
+**Size:** the dictionary adds about 160 MB; production goes from ~120 MB to
+~280–300 MB of the 512 MB allowance.
+
+### 1 · Migrate (additive — the live service is unaffected)
+
+Two migrations, both **add a column** and create no table — so the grant step of
+ADR-079 §5 does not apply this time. Run them as `wordos_migrator`, over the
+**direct** host, exactly as §1 describes:
+
+```bash
+psql "$NEON_URL" -c "GRANT wordos_migrator TO neondb_owner WITH INHERIT TRUE, SET TRUE;"
+
+cd backend && ConnectionStrings__WordOsMigrations="Host=ep-….neon.tech;Database=wordos;Username=neondb_owner;Password=…;SSL Mode=VerifyFull;Channel Binding=Require;Options=-c role=wordos_migrator" \
+  dotnet ef database update --project src/WordOs.Infrastructure --startup-project src/WordOs.Api
+
+psql "$NEON_URL" -c "REVOKE wordos_migrator FROM neondb_owner GRANTED BY neondb_owner;"
+```
+
+Expect `20260917141502_LexiconEditions` and `20260917184736_WeeklyReviewRetiresOnRecall`,
+then `Done.` — two migrations, not twenty-three. The running (old) code never
+reads these columns, so learners notice nothing.
+
+```bash
+psql "$NEON_URL" -tAc 'select "Edition", count(*) from lexicon_entries group by 1;'
+# oewn-awn|234359        ← every existing row, labelled by the column default
+```
+
+### 2 · Deploy the code
+
+Nothing to pin: since ADR-103 the code's default *is* `oewn-awn`, and only local
+development asks for the new edition. So the new code, once pushed, searches
+exactly the dictionary production already has. (If `WordOs__LexiconEdition` was
+ever set in Render, make sure it is absent or `oewn-awn` before this step.)
+
+### 3 · Load the Wiktionary rows
+
+Export from the local database, which holds the built edition. An explicit
+column list on both ends, so a column-order difference cannot shift data into
+the wrong field:
+
+```bash
+COLS='"SenseId","Text","TextNormalized","Lemma","PartOfSpeech","DefinitionEn","MeaningAr","CefrLevel","FrequencyRank","SourceFlags","UpdatedAt","MeaningArNormalized","Edition"'
+
+psql -h 127.0.0.1 -U wordos_migrator -d wordos_dev \
+  -c "\copy (select $COLS from lexicon_entries where \"Edition\"='wiktionary') to 'wiktionary.csv' csv header"
+
+psql "$NEON_URL" -c "SET ROLE wordos_migrator;" \
+  -c "\copy lexicon_entries ($COLS) from 'wiktionary.csv' csv header"
+```
+
+(`SET ROLE` needs the temporary grant from step 1 — take it again and hand it
+back afterwards the same way.)
+
+Sense ids are prefixed `wikt:`, so they cannot collide with the old edition's.
+
+```bash
+psql "$NEON_URL" -tAc 'select "Edition", count(*) from lexicon_entries group by 1 order by 1;'
+# oewn-awn|234359
+# wiktionary|200369      ← must be exactly this
+```
+
+### 4 · Switch
+
+Render → Environment → **add** `WordOs__LexiconEdition` = **`wiktionary`** → save. The service
+restarts and search reads the new dictionary. Check it with a **registered**
+account (ADR-079 — a probe that stops short of the thing you changed proves
+nothing): search `sell`, expect **يَبِيعُ**, not أَقْنَعَ بِـ.
+
+**Rollback** is deleting that variable (or setting it to `oewn-awn`). Nothing is deleted, and
+words learners added under either edition keep resolving under both, because
+reading a word they already own is deliberately edition-blind.
+
+### 5 · Only then, publish the app
+
+The backend must be fully switched first. The new app is compatible with the
+new backend; the **old** app on learners' phones is compatible with it too — the
+contract changes were additive or kept the old fields (`spelling` stays at 0 of
+0, `kind` is still sent beside `message`), checked 2026-09-28 against the
+committed client. Bump `version:` in `mobile/pubspec.yaml` before building, so a
+bug report says which build it came from.
+
+---
+
 ## 5 · Point the app at it
 
 In `mobile/ios/Flutter/Debug.xcconfig`, the `DART_DEFINES` line carries the

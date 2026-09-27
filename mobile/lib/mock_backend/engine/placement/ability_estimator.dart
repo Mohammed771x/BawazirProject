@@ -187,6 +187,23 @@ class AbilityScale {
   double difficultyOf(CefrLevel level) =>
       (level.rank - centre.rank) * stepLogits;
 
+  /// The same scale with the prior re-centred, keeping its width.
+  ///
+  /// Used for a skill measured from a single answer, which borrows the
+  /// *location* of what the rest of the test showed without borrowing its
+  /// certainty (ADR-098).
+  AbilityScale centredOn(double mean) => AbilityScale(
+        centre: centre,
+        stepLogits: stepLogits,
+        priorMean: mean,
+        priorSd: priorSd,
+        gridMin: gridMin,
+        gridMax: gridMax,
+        gridStep: gridStep,
+        confidentStandardError: confidentStandardError,
+        uninformativeStandardError: uninformativeStandardError,
+      );
+
   /// The CEFR band whose anchor point is nearest to [theta].
   ///
   /// Deliberately a nearest-anchor rule rather than a table of cut scores: with

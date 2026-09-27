@@ -161,7 +161,7 @@ public class PlacementAlgorithmTests
     }
 
     [Fact]
-    public void The_test_asks_between_12_and_22_questions()
+    public void The_test_asks_exactly_eight_questions()
     {
         var random = new Random(3);
         var responses = new List<PlacementResponse>();
@@ -178,9 +178,61 @@ public class PlacementAlgorithmTests
                 Engine.ScoreAnswer(item, CorrectFor(item))));
         }
 
-        // The documented bound (docs/06-PLACEMENT-ALGORITHM.md §4).
-        Assert.InRange(responses.Count, 12, 22);
+        // Three Reading, three Listening, one Speaking, one Writing — fixed,
+        // not a range, since nothing stops early any more (ADR-098,
+        // docs/06-PLACEMENT-ALGORITHM.md §4).
+        Assert.Equal(8, responses.Count);
+        Assert.Equal(3, responses.Count(r => r.Skill == SkillType.Reading));
+        Assert.Equal(3, responses.Count(r => r.Skill == SkillType.Listening));
+        Assert.Equal(1, responses.Count(r => r.Skill == SkillType.Speaking));
+        Assert.Equal(1, responses.Count(r => r.Skill == SkillType.Writing));
     }
+
+    [Fact]
+    public void It_is_still_eight_questions_for_a_learner_who_gets_none_right()
+    {
+        // The one who most needs the test not to give up on them. It used to
+        // stop at six: the ladder refuses to go above a question just missed,
+        // and the bank had only two floor items per receptive skill to offer.
+        var random = new Random(3);
+        var responses = new List<PlacementResponse>();
+
+        while (true)
+        {
+            var item = Engine.NextItem(responses, random);
+            if (item is null) break;
+            Assert.True(responses.Count < 200, "the queue must terminate");
+
+            responses.Add(new PlacementResponse(
+                item.Id, item.Skill,
+                Config.Scale.DifficultyOf(item.Level),
+                Engine.ScoreAnswer(item, WrongFor(item))));
+        }
+
+        Assert.Equal(8, responses.Count);
+    }
+
+    [Fact]
+    public void Spelling_is_not_part_of_the_test_any_more()
+    {
+        // Four questions that produced no level — only the choice between
+        // letter tiles and free typing, which the first real spelling session
+        // settles anyway (ADR-098).
+        Assert.DoesNotContain(SkillType.Spelling, Config.SkillOrder);
+
+        var outcome = RunPlacement(CorrectFor);
+
+        Assert.DoesNotContain(outcome.Levels, l => l.Skill == SkillType.Spelling);
+        Assert.Equal(0, outcome.SpellingItemsAnswered);
+
+        // Nothing measured it, so everyone starts on the supported mode.
+        Assert.Equal(SpellingInputMode.LetterTiles, outcome.SpellingSupportMode);
+
+        // The items stay in the bank: putting the ladder back is SkillOrder
+        // plus its limits, not re-authoring six questions.
+        Assert.NotEmpty(PlacementItemBank.ForSkill(SkillType.Spelling));
+    }
+
 
     [Fact]
     public void No_question_is_ever_asked_twice()
@@ -226,28 +278,42 @@ public class PlacementAlgorithmTests
         }
     }
 
-    // ── Spelling ─────────────────────────────────────────────────────────────
+    // ── The one-question skills ──────────────────────────────────────────────
 
     [Fact]
-    public void Spelling_is_measured_but_never_assigned_a_CEFR_level()
+    public void One_question_still_separates_a_strong_writer_from_a_weak_one()
     {
-        var outcome = RunPlacement(CorrectFor);
-        var spelling = outcome.Levels.Single(l => l.Skill == SkillType.Spelling);
+        // The reason the band of a single-response skill is estimated against
+        // what the rest of the test showed rather than the population mean
+        // (ADR-098). Measured against the old rule, every learner alive landed
+        // between A2+ and B2 whatever they wrote.
+        var strong = RunPlacement(CorrectFor);
+        var weak = RunPlacement(item =>
+            item.Skill is SkillType.Speaking or SkillType.Writing
+                ? WrongFor(item)
+                : CorrectFor(item));
 
-        Assert.Null(spelling.Level);
-        Assert.True(outcome.SpellingItemsAnswered > 0);
+        Assert.True(
+            LevelOf(strong, SkillType.Writing)!.Value.Rank()
+            > LevelOf(weak, SkillType.Writing)!.Value.Rank(),
+            "the written answer must change the band it produces");
     }
 
     [Fact]
-    public void A_strong_speller_starts_on_free_typing_and_a_weak_one_on_tiles()
+    public void A_one_question_skill_is_never_reported_as_confident()
     {
-        var strong = RunPlacement(CorrectFor);
-        var weak = RunPlacement(WrongFor);
+        // Borrowing the location of the estimate must not borrow its
+        // certainty: confidence comes from the skill's own single answer.
+        var outcome = RunPlacement(CorrectFor);
 
-        Assert.Equal(SpellingInputMode.FreeTyping, strong.SpellingSupportMode);
-        Assert.Equal(SpellingInputMode.LetterTiles, weak.SpellingSupportMode);
-        Assert.Equal(strong.SpellingItemsAnswered, strong.SpellingCorrect);
-        Assert.Equal(0, weak.SpellingCorrect);
+        foreach (var skill in new[] { SkillType.Speaking, SkillType.Writing })
+        {
+            var level = outcome.Levels.Single(l => l.Skill == skill);
+            Assert.True(level.Confidence < 0.5,
+                $"{skill} was placed from one answer at {level.Confidence:F2}");
+        }
+
+        Assert.True(outcome.HasLowConfidence);
     }
 
     // ── Uncertainty ──────────────────────────────────────────────────────────
@@ -338,11 +404,22 @@ public class PlacementAlgorithmTests
     [Fact]
     public void The_item_bank_matches_the_specification()
     {
-        // Drift shows up here. 44 = the original 35 plus nine grammar items
-        // added in placement v2.
-        Assert.Equal(44, PlacementItemBank.All.Count);
-        Assert.Equal(10, PlacementItemBank.ForSkill(SkillType.Reading).Count);
+        // Drift shows up here. 46 = the original 35, plus nine grammar items
+        // added in placement v2, plus one floor item each for Reading and
+        // Listening in v3 (ADR-098).
+        Assert.Equal(46, PlacementItemBank.All.Count);
+        Assert.Equal(11, PlacementItemBank.ForSkill(SkillType.Reading).Count);
         Assert.Equal(6, PlacementItemBank.ForSkill(SkillType.Spelling).Count);
+
+        // Three at the floor of each receptive skill, because the test asks
+        // three questions and never one harder than a question just missed.
+        foreach (var skill in new[] { SkillType.Reading, SkillType.Listening })
+        {
+            Assert.True(
+                PlacementItemBank.ForSkill(skill)
+                    .Count(i => i.Level == CefrLevel.A1) >= 3,
+                $"{skill} needs three A1 items to fill a beginner's test");
+        }
 
         // ── Grammar (§19) ───────────────────────────────────────────────────
         var grammar = PlacementItemBank.All
@@ -414,7 +491,7 @@ public class PlacementAlgorithmTests
     // ── How the ladder opens and climbs ──────────────────────────────────────
 
     [Fact]
-    public void Every_skill_opens_with_its_easiest_question()
+    public void Every_skill_with_a_ladder_opens_with_its_easiest_question()
     {
         var engine = new PlacementEngine();
         var responses = new List<PlacementResponse>();
@@ -434,7 +511,18 @@ public class PlacementAlgorithmTests
 
         // A beginner meeting a B1 question first is how a placement test loses
         // someone before it has started.
-        Assert.All(opened, entry => Assert.Equal(CefrLevel.A1, entry.Value));
+        //
+        // Speaking and Writing are exempt and must be: each has one question,
+        // so its opening item is also its closing one, and pitching that at
+        // the floor would measure every learner alive at the floor (ADR-098).
+        foreach (var (skill, level) in opened)
+        {
+            if (skill is SkillType.Speaking or SkillType.Writing) continue;
+            Assert.Equal(CefrLevel.A1, level);
+        }
+
+        Assert.Contains(SkillType.Reading, opened.Keys);
+        Assert.Contains(SkillType.Listening, opened.Keys);
     }
 
     [Fact]

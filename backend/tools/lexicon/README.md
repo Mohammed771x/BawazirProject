@@ -2,6 +2,33 @@
 
 Builds the vocabulary source WordOS validates against.
 
+**There are two editions, and they live in the same table** (ADR-096).
+`WordOsConfiguration.LexiconEdition` says which one the app searches, so going
+back is a setting rather than a re-import.
+
+| edition | built from | what it is |
+|---|---|---|
+| `oewn-awn` | Open English WordNet + Arabic WordNet | the first build — kept as the way back |
+| `wiktionary` | English + Arabic Wiktionary, via wiktextract | the rebuild |
+
+The first edition put `تُوُفِّيَ` at the top of `go`, cited every verb in the
+past so `sell` read as `باع`, and gave all thirty senses of `go` the same A1
+band. ADR-096 has the evidence and the three rules that answer it.
+
+```bash
+# the rebuild
+dotnet run --project tools/lexicon/importer -- tools/lexicon/data \
+  --edition wiktionary --dry-run     # report only, writes nothing
+dotnet run --project tools/lexicon/importer -- tools/lexicon/data \
+  --edition wiktionary
+
+# is it better? — numbers, not an impression
+psql -d wordos_dev -f tools/lexicon/compare-editions.sql
+```
+
+Importing one edition never touches the other: the prune at the end of the run
+is scoped to the edition being built, because the other one is the way back.
+
 ```
 English word ──▶ synset ──┬─▶ definition (Open English WordNet)
                           ├─▶ Arabic meaning (Arabic WordNet 4.0)
@@ -55,9 +82,17 @@ consecutive runs both end at 175,611 rows.
 | [Open English WordNet](https://en-word.net/) | 2025 | Senses, synsets, definitions | CC BY 4.0 |
 | [Arabic WordNet](https://github.com/Salah-Sal/arabic-wordnet-v4) | 4.0/4.1 | Arabic meaning per synset | CC BY 4.0 |
 | `importer/FunctionWords.cs` | — | The 167 closed-class words WordNet has no entries for | Written here |
+| [English Wiktionary](https://kaikki.org/dictionary/English/) (wiktextract) | current export | Senses, learner definitions, examples, Arabic per sense | CC BY-SA 4.0 — **attribution required** |
+| [Arabic Wiktionary](https://kaikki.org/dictionary/Arabic/) (wiktextract) | current export | The verb paradigm: `يبيع`, the مصدر, the participle | CC BY-SA 4.0 — **attribution required** |
+| [FrequencyWords](https://github.com/hermitdave/FrequencyWords) | 2018 en_50k | Real word frequency, for ordering | MIT |
 | `importer/Inflections.cs` | — | The forms of a word — `went`, `going`, `mice` — from WordNet's `form` lists, rules, and two short authored lists | Written here |
 
-Versions are **pinned**, not `latest`: a silent upstream change would alter
+The two Wiktionary exports are the exception to pinning: kaikki publishes one
+current file, not tagged releases. `data/MANIFEST.json` records the SHA-256 of
+the bytes actually used, which is what makes a build reproducible — and the
+CC BY-SA licence means a release carrying this edition must credit Wiktionary.
+
+Versions are otherwise **pinned**, not `latest`: a silent upstream change would alter
 learners' vocabulary levels, and the lexicon must be rebuildable byte-for-byte.
 `data/MANIFEST.json` records the URL, version and SHA-256 of every artefact
 actually used.

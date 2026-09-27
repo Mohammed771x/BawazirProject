@@ -3636,3 +3636,1512 @@ Naming the target. Four failures, and the single line added in §1 would have
 made three of them obvious within a second of running the command. The fourth
 — the silent absence of a grant — is why §5 is written as a checklist item
 rather than a caution: nothing announces it until a learner hits it.
+
+---
+
+## ADR-080 — The Listening clip waits to be asked, and the control says what the next tap does
+
+**Context.** Three complaints about the Listening player, from a learner's walk-through,
+that turned out to be one complaint and one genuine bug underneath it.
+
+### 1. It started talking before anyone asked
+
+The clip auto-played from a post-frame callback the moment the screen appeared
+(the old §22 reading: "a listening exercise whose first action is *press play*
+spends the learner's first interaction on something the screen already knew it had
+to do").
+
+That argument is right about the tap and wrong about the moment. The learner does not
+arrive on a finished screen — they arrive on a spinner, wait for the passage to be
+written, and are then talked at. The passage **title**, added in ADR-066 precisely so a
+listening clip is named before it is heard, goes past unread; the first thing they
+actually do is hunt for the control that makes it stop. An exam prints the title above
+the listening section and then waits for the invigilator. So does this.
+
+**Decided:** no auto-play. The title is the pause, and the clip begins when the learner
+says so.
+
+Note what this changes downstream: a device with no speech engine is no longer
+discovered on arrival but on the first press. That is the honest moment to discover it —
+but it means the "audio is unavailable, here is the transcript" fallback has to survive
+the press rather than be waiting on arrival, which is now pinned by a test.
+
+### 2. Pausing offered to replay
+
+`_played` — "has this clip ever been started" — drove the button's face, so the moment
+the learner stopped it the control showed a **replay** icon. The behaviour underneath
+was already right: the next tap continued from the sentence that was interrupted. The
+icon promised the opposite. A learner who paused to think about a line was being told
+the only way back was from the top.
+
+**Decided:** three faces, each stating what the *next* tap does.
+
+| State | Icon | Word | Next tap |
+|-------|------|------|----------|
+| playing | `pause_rounded` | Pause | suspends it where it stands |
+| paused mid-clip | `play_arrow_rounded` | Continue | resumes from the interrupted sentence |
+| finished | `replay_rounded` | Play again | starts the clip from the top |
+
+Replay survives only in the third row, where it is the honest promise: there is nothing
+left to continue.
+
+"Continue" is sentence-granular, not sample-granular. Text-to-speech has no playhead
+inside an utterance (ADR-068) — it is handed a string and it talks. The interrupted
+sentence therefore starts again from its beginning. That is the closest thing to
+resuming this engine can do, and it is the same granularity the scrubber and the
+normal/slow switch already work at, so the player is consistent with itself.
+
+### 3. The bug under the icons: a stopped clip read on
+
+Found while fixing the above, and worse than either of them.
+
+`SpeechService` reports a **cancelled** utterance and a **finished** one through the
+same callback — `flutter_tts` wires `setCancelHandler` and `setCompletionHandler` to
+the same place, and nothing downstream could tell them apart. The Listening clip is a
+loop that awaits one sentence and then starts the next. So when the learner pressed
+*I finished listening*, the screen called `stop()` — and the loop heard "that sentence
+ended", advanced, and **started reading the next line out over the questions**.
+
+The window is a single frame, which is why it was never seen in a test: `stop()`
+suspends on a platform call, the loop's continuation runs as a microtask, and the
+widget is not disposed until the next build. The microtask wins. For Listening this is
+not untidiness — the transcript is the answer key.
+
+**Decided:** `SpeechService.interruptions` — a count of the times playback was cut short
+rather than allowed to end. A sequence reads it once the voice is its own and compares
+after every sentence; a change means the clip is no longer its to continue. The one
+place stopping *is* the end of an utterance — the completion timeout, which exists to
+paper over a platform that never reports back — passes `interrupting: false`, so a
+broken report does not halt a clip that should carry on.
+
+And, separately, `dispose` now actually silences the voice instead of only abandoning
+the loop. The old comment there claimed it did.
+
+### 4. What that exposed at teardown
+
+A screen that silences the voice on its way out is doing the right thing, and its
+`stop()` lands *after* the provider scope holding the service has gone. `ChangeNotifier`
+asserts on a notify after disposal, so the correct behaviour surfaced as a crash in the
+screen that performed it.
+
+**Decided:** `SpeechService` refuses work once disposed rather than asserting — it
+cannot speak, and it notifies nobody. One exception: anything **awaiting** the voice is
+completed on the way down rather than left hanging, because a stranded
+`speakToCompletion` is a conversation waiting for a microphone that will never open.
+
+Two smaller notes, for whoever holds a service reference in a widget:
+
+* capture it in `initState`, not with a `late final` initialiser. A lazy initialiser
+  runs on first use, and the first use is inside `dispose` — where `ref.read` throws.
+* this applies to the Listening player specifically; every other caller reaches the
+  service through `ref.watch` during build, which is safe.
+
+### 5. One engine, because there were three
+
+The rules above are not properties of the Listening screen; they are properties of
+*playing English aloud with a place in it*. There were three copies of that — the
+Listening clip, the sentence beside a question, the recording handed back with the
+result — each with its own flags, and they had already drifted: the clip walked
+sentence by sentence and could be scrubbed, the sentence card spoke its three lines as
+one utterance with a second button for "slow" that always restarted it, and only one of
+the three carried the bug in §3.
+
+**Decided:** `ClipPlayback` (`mobile/lib/features/session/clip_playback.dart`) owns the
+sentence splitting, the place, the speed and the loop, and has **no opinion about how it
+is drawn** — each player keeps its own layout. It also has no auto-play option at all,
+so that decision cannot be re-opened one call site at a time.
+
+The sentence beside a Listening question therefore gained everything the clip has: it
+waits to be asked, it pauses and continues, it reports which of its three lines it is
+on, it can be sent back to the first, and **speed is a mode rather than a second play
+button** — previously "slow" was its own button, so there was no way to be playing
+slowly *and* pause.
+
+`ReplayPlayer`, the recording handed back on the result screen, is deliberately left on
+its own implementation for now: it already does not auto-play, and it is study material
+rather than part of the test. It is the obvious next thing to fold in.
+
+### Consequences
+
+* §22 of the requirement documents is superseded on the auto-play point, deliberately,
+  and now for **both** players. The requirement behind it — *the learner should not have
+  to work to hear the audio* — is met by a single obvious control, not by talking first.
+* The tests that pinned the old behaviour were rewritten, not deleted; the files now
+  state the replaced readings so the next change does not restore them by accident.
+
+---
+
+## ADR-081 — A Listening word question offers the word aloud, at both speeds
+
+**Context.** Every session ends with one question per target word — *what does this word
+mean here?* Reading shows the word spelled out in its three neighbouring sentences.
+Listening deliberately shows nothing: the same three sentences are spoken and never
+written, because showing them would turn a listening task into a reading task
+(demo review §34).
+
+That is right about the **sentences** and wrong about the **word**. Listening is the
+only skill where a target word never arrives on its own: it is buried mid-sentence, at
+speaking speed, once. A learner who did not catch it is not being tested on meaning at
+that point — they are being tested on whether they heard it, which the comprehension
+questions already measure. The word is printed in the question either way; only its
+sound is missing.
+
+**Decided.** On target-word questions in Listening, the word can be heard **on its own,
+at normal speed and slowly**, as a separate control under the question.
+
+Scope, narrowly:
+
+* **Listening only.** Reading already spells the word out in front of the learner.
+* **Target-word questions only.** Comprehension questions carry no word of their own —
+  and a control there would be answering the question it sits under.
+* **The word only, never the sentence around it.** That sentence is the test. The
+  sentence player above it is unchanged and keeps its own speed control; the two are
+  separate cards with separate labels for that reason.
+
+Nothing here can leak an answer: these questions ask what the word *means*, and the
+options are meanings.
+
+The control is `WordPronunciation` in `session_widgets.dart` rather than logic in the
+screen, so enabling it elsewhere later is a call-site decision — one condition, not a
+second implementation.
+
+---
+
+## ADR-082 — A real playhead: the clip is positioned at the word, not the sentence
+
+**Context.** ADR-068 cut the clip into sentences and made those the seek points, because
+text-to-speech has no playhead: it is handed a string and it talks. ADR-080 then made
+pause continue rather than restart — but only from the start of the interrupted
+sentence, and the position was printed as *"Sentence 2 of 11"*.
+
+Neither is how anyone listens to a recording. A learner pauses eleven words into a long
+sentence and wants those eleven words to stay behind them; and *"Sentence 2 of 11"* is
+not a position, it is a diagnostic.
+
+### What was rejected first
+
+**Cutting the clip into words and speaking them one at a time.** It gives an exact
+playhead in one line of code, and it destroys the thing being practised: every word
+becomes its own utterance with the engine's inter-utterance gap after it, so the clip
+stops being English spoken and becomes English dictated. A listening exercise whose
+audio does not sound like speech is not a listening exercise. This was the obvious
+implementation of what was asked for, and it is the wrong one.
+
+### What is done instead
+
+`flutter_tts` reports progress as each word begins — iOS through
+`willSpeakRangeOfSpeechString`, Android through `onRangeStart` — with the character
+offset into the text it was handed. That is a real playhead, and it costs the audio
+nothing.
+
+* **Sentences stay whole while playing.** Natural audio, unchanged.
+* **The engine reports where it is**, word by word, through
+  `SpeechProvider.onWordBoundary` → `SpeechService.spokenOffset`.
+* **Resuming enters a sentence part-way.** `ClipPlayback.playAt(chars)` speaks
+  `sentence.substring(wordStart)` and then the following sentences whole. So the audio
+  is a contiguous phrase, not a stitched-together list of words, and the learner picks
+  up at the word they stopped on.
+* **A resumed word is never cut in half.** The offset is snapped back to a word start,
+  because a dragged scrubber lands anywhere and half a word is worse than the sentence
+  jump this replaced.
+
+Reported progress is treated as an *at least*, never as the whole truth. A platform that
+reports nothing leaves the offset where playback started — still true, just as coarse as
+before — so nothing depends on the callback arriving.
+
+### The clock
+
+Text-to-speech has no file and no duration to ask for, so **the clock is the playhead in
+another unit**: `elapsed = position / rate`, `total = totalChars / rate`. Because both
+are the same number read two ways, the clock and the bar cannot disagree with each other
+— which is the failure a separately-run stopwatch would have produced the moment anyone
+scrubbed.
+
+The rate is **measured while the clip plays** rather than assumed: a constant to begin
+with, corrected by each finished sentence, smoothed so the total does not visibly jump,
+and guarded — a measurement outside half to twice the current estimate is evidence about
+the platform, not about the voice, and is discarded. The total is therefore an estimate
+that improves; it is honest about being one, and it is bounded.
+
+The sentence-counter is gone. `clipPosition` remains in the strings for now but nothing
+renders it.
+
+### Two smaller things in the same player
+
+**The words under the control name the state, not the next tap.** They used to name the
+action, so a learner who had just pressed pause read *"Continue"* and understood the
+clip to be running. The icon is the verb — pause, play, replay — and the line beneath it
+says *Playing*, *Paused* or *Finished*.
+
+**The track is drawn in a new token, `trackRest`.** At the theme's default strength the
+unplayed part of the bar disappeared into the card, so the clip appeared to have no end
+and there was no reading of how far through it the learner was. Near-white on the dark
+theme, as asked; a mid grey on the light one, because white on a white card is the same
+invisibility with the opposite colour.
+
+### Found by running it, not by reading it
+
+Two things only the simulator showed, on the screen this ADR is about:
+
+* **The total fell from 1:59 to 1:40 in the first fifteen seconds.** The opening rate
+  constant was a guess, 19% below what an iOS voice actually produces, so the first
+  measured sentence corrected it in one visible step. The constant is now the measured
+  16 chars/sec and the first correction is smoothed like every later one. A clock that
+  rewrites itself that far is worse than a slightly wrong one.
+* **`What does "fan" mean here?` rendered as `?What does "fan" mean here`.** An English
+  sentence inheriting the Arabic paragraph direction loses its trailing punctuation to
+  the front, because a neutral character at the end of an RTL paragraph belongs to the
+  paragraph rather than to the words. It has presumably always done this; it is visible
+  the moment anyone looks at the question screen.
+
+  Fixed with `AutoDirectionText`, which pins direction from the first strongly-directional
+  character. It is used where the content **may be either language and the call site does
+  not know which** — a comprehension option is English, a word-question option is Arabic,
+  and `OptionTile` renders both. `EnglishText` remains correct wherever the content is
+  known to be English, because it states that fact rather than inferring it. Other
+  screens have not been swept for the same fault.
+
+### Consequences
+
+* The sentence beside a question gained a track of its own. Without one a learner can
+  pause and continue but cannot go *back* a few words, which is what a sentence heard
+  once is most often paused for.
+* `SpeechService` gained one field and no new ownership: word boundaries arrive as a
+  notification rather than a callback, because a single callback field on an app-wide
+  service belongs to whichever player registered last — which is not necessarily the one
+  speaking.
+
+---
+
+## ADR-083 — Both speeds, everywhere a word can be heard
+
+**Context.** The slow voice existed on the placement screen and, after ADR-081, beside a
+Listening word question. Everywhere else — the learner's own word list, a word's detail
+page, the weekly review, the tap-a-word lookup sheet, the Speaking warm-up — a word could
+be heard at one speed only.
+
+The slow voice is not a secondary feature. It is the one a learner reaches for when they
+did not catch the word, which is the whole reason they tapped the speaker. A learner who
+finds it on one screen and not on the next has not learned that the app has two speeds;
+they have learned that this screen is missing something.
+
+**Decided.** `WordSpeakerButtons` — the pair — replaces the lone `SpeakerButton` at every
+site where the thing being spoken is a **word**. Two ids, one derived from the other, so
+the two controls can never light up together and a caller cannot forget to make them
+differ. The slow one draws a distinct face and names itself, so it is not a second
+identical button.
+
+Left alone deliberately: `SpeechPlayButton` and the passage players, which speak
+*sentences* and already carry their own speed control.
+
+---
+
+## ADR-084 — A word's wrong answers come from its own sentence, not from the other words
+
+**Context.** Every Reading and Listening session ends with one question per target word:
+*what does "sell" mean here?*, four options, one correct. The wrong options were built
+in `SessionContentBuilder.BuildMeaningOptions` from `words.Select(w => w.Meaning)` — the
+**other target words' meanings** of the same session.
+
+The reasoning was sound as far as it went: a learner's own words make plausible
+distractors, better than absurd ones. What it missed is that the five questions then
+share one set of five answers between them.
+
+Walk a session as a learner does. Question one offers يبيع / يأكل / يشرب / يحمل; they
+answer يبيع and are told it is right. Question two offers four of the same five, and
+يبيع is now known to belong elsewhere. By the last word there is one option left that has
+not already been claimed, and it can be chosen **without reading the question at all**.
+The back half of every session was solvable by bookkeeping rather than by knowing the
+words — which is the one thing this question exists to measure.
+
+**Decided.** The generator writes each word's wrong meanings itself, from the sentence
+that word appears in.
+
+* **`prompts.py`** — `READING_SCHEMA.targets[].wrong_meanings_ar`, three per word, with
+  `DISTRACTOR_RULE` saying what makes one good: drawn from *that sentence*, rulable-out
+  by a learner who understood it and worth considering by one who did not; another
+  reading of the same sentence, the word's own other senses, a near-neighbour, something
+  that fits the grammar of the slot but not its sense. Never absurd, never arguably also
+  correct, and never shared between two words. Applied to re-telling as well, which
+  regenerates the questions. `reading-v4` → `v5`, `relevel-v2` → `v3`.
+* **The correct Arabic meaning is sent with the word**, and the rule requires the wrong
+  ones to **match its shape** — same register, roughly the same length, the same kind of
+  phrase. Without this the model writes its own style of gloss and the learner's own
+  stored meaning stands out by *looking different*, which is passing the question
+  without knowing the word by a different route.
+* **`main.py`** — `_clean_distractors` is all-or-nothing: three usable wrong meanings or
+  none. A word that came back with one would otherwise be asked with two options, and
+  "some" is the one answer the backend cannot act on.
+* **`SessionContentBuilder`** — uses what was written, filters out anything equal to the
+  correct answer (a model that repeats it would create a question with two right answers
+  and one of them marked), and tops up from the old pool only to reach four. A question
+  with two options is worse than a question with a weak distractor.
+
+### What is deliberately unchanged
+
+* **The AI fallback** leaves the field empty and gets the old pool. Its content is
+  already announced as degraded (`usedAiFallback`), and the alternative is inventing
+  Arabic meanings in C#.
+* **The Speaking warm-up** keeps the old scheme. It measures nothing — no attempt, no
+  event, no level moves (rule R9) — so elimination costs the learner nothing there, and
+  it runs before any passage exists to write context-aware options from.
+* **Comprehension questions** were already per-question, from the model. Untouched.
+
+### Verified, not assumed
+
+Pinned on both sides — `backend/tests/WordOs.Domain.Tests/SessionOptionsTests.cs` and the
+`the options on a word question` group in `mobile/test/learning_loop_test.dart` — and
+both were run against the old implementation first to confirm they fail on it. The
+central test walks a session striking off every meaning already shown to be an answer
+and requires all four options to survive at every question.
+
+---
+
+## ADR-085 — In Listening the word is heard and never seen
+
+**Context.** Every Reading and Listening session ends with one question per target word.
+The question was written once, for both:
+
+```csharp
+prompt: $"What does \"{word.Text}\" mean here?"
+```
+
+For Reading that is correct. The learner is looking at the word, underlined, inside its
+three sentences; naming it in the question is how they know which word is being asked
+about.
+
+For Listening it destroys the exercise. The whole task is that the learner **never sees
+the word**: it arrives as sound, buried in a spoken sentence, and they say what it meant
+in that sentence. Printing it hands over the one thing a listener is not supposed to
+have — how the word is spelled — and what is left is reading with audio attached.
+
+This had been true since the questions were first built, and ADR-081 made it worse
+without noticing: the "hear the word" control added there used the word itself as its
+button label, so the screen said it twice.
+
+**Decided.** In Listening, the word appears nowhere on the question screen.
+
+* **The question is a key, not text.** `SessionPromptKey.ListeningWordMeaning` →
+  *"What does the word you just heard mean here?"* / *«ما معنى الكلمة التي سمعتها في هذه
+  الجملة؟»*, rendered client-side in the learner's own language (ADR-035). The English
+  that travels beside the key is **written the same way**, so a client that does not
+  recognise the key still cannot show the word. Belt and braces, because this is content
+  the learner must not see rather than a formatting preference.
+* **`WordPronunciation` does not draw the word.** The button reads *Play audio*, not
+  `fan`. The word is still passed in — the device has to be given something to say — and
+  is simply never rendered.
+* **Nor does a tooltip.** A tooltip is part of the screen: a screen reader speaks it and
+  a long press shows it. `revealSpelling` gates both the label and the tooltips together,
+  so they cannot drift apart.
+* **`revealSpelling` defaults to false.** Listening is the only caller today. The flag
+  exists so a future Reading use — where the word is on screen anyway — has to *say* it
+  is showing the word, rather than the rule quietly lapsing.
+
+Reading is unchanged, deliberately. A per-skill rule, not a global one: refusing to name
+the word in Reading would answer a problem Reading does not have.
+
+### Where the word still appears in a Listening session, and why
+
+The rule is *never seen **while it is being tested***, not *never seen*.
+
+* **The explanation after an answer** — `"fan" means مُحِبّ. a person who admires…` — is
+  shown once the item has been answered and the correct meaning already revealed
+  (demo review §28). The measurement is over, and it is the moment the learner finally
+  gets to see the word they have been hearing. Left as it is.
+* **The result screen** lists every word of the session, as does the transcript revealed
+  with it. The test is finished.
+
+Both are judgement calls rather than consequences of the rule, and either could be gated
+behind the same flag if the product owner wants the spelling withheld until Reading or
+Spelling introduces it.
+
+### Verified
+
+`A_listening_question_never_names_the_word` and `A_reading_question_still_names_it` in
+`SessionOptionsTests.cs`; `the word behind a question can be heard but never seen` and
+`Reading still names the word it is asking about` in `listening_section_test.dart`. The
+client test checks the button label, every tooltip, and the whole screen's text — and
+was confirmed to fail against the old prompt.
+
+---
+
+## ADR-086 — A player belongs to the question it is on, not to the screen
+
+**Status:** accepted · **Date:** 2026-09-17
+
+Reported: on a Listening word question, the sentence player spoke the *previous*
+question's sentence. Reproduced, and it is not an audio bug at all.
+
+### What actually happened
+
+Moving to the next question does not build a new player. `SentencePlayer` sits at the
+same position in the tree, has the same type and carries no key, so Flutter keeps the
+existing `State` and hands it a new `text`. The controller was built once, in
+`initState`, from the `text` that happened to be there first:
+
+```dart
+late final ClipPlayback _clip;   // built in initState, never again
+```
+
+So the card drew question two's sentence while the voice read question one's. On a
+listening test that is worse than a stale label: the audio *is* the evidence, and the
+learner was answering about a sentence they could not hear.
+
+Confirmed by the failing test before the fix:
+
+```
+Expected: '…is the programs that run on a computer. Ahmed asked a question about it…'
+  Which: does not contain 'Last week Ahmed joined a small study group at her university.'
+```
+
+The backend was never at fault. `SessionContentBuilder` gives every target-word item its
+own `audioText`, joined from that word's own context sentences.
+
+### Decision
+
+Both players — `SentencePlayer` and the passage's `_ListeningPlayer` — rebuild their
+`ClipPlayback` in `didUpdateWidget` when the text changes. Disposing the old controller
+silences it on the way out, so nothing follows the learner forward.
+
+**Not** fixed with a `ValueKey(text)` at the call site, which would also work. A key is a
+promise every future caller has to remember to keep, and it is invisible at the place
+where it matters — the widget that owns the text is the one that can be sure. `_clip`
+stops being `final`, and that is the whole cost.
+
+`_ListeningPlayer` gets the same treatment although its text changes far more rarely:
+only when the learner changes the level and the passage is written again. Rarely is not
+never, and the failure mode there is the same one.
+
+### Verified
+
+`each question speaks its own sentence, not the last one's` in
+`listening_section_test.dart` — it reads the sentence the question is carrying, plays it,
+and asserts the voice spoke text from *that* sentence. Confirmed failing before the fix
+and passing after. Full suite: 432 client tests.
+
+---
+
+## ADR-087 — Writing moves behind Spelling, and the pipeline stops advancing by position
+
+**Status:** accepted · **Date:** 2026-09-17 · **Supersedes the order in ADR-001**
+
+```
+Reading ─2d→ Listening ─2d→ Speaking ─2d→ Spelling ─2d→ Writing
+```
+
+### Why
+
+Writing is the only skill that asks the learner to **produce the written word
+unaided**. Everything before it either shows the word (Reading), speaks it
+(Listening), or accepts it spoken (Speaking); Spelling asks for the letters with
+a clue and a hint ladder behind them. So a learner who cannot yet spell a word is
+marked on two things at once in Writing, and the one they fail is not the one it
+measures.
+
+Put Spelling first and by the time a sentence is asked for the spelling is no
+longer in question. What Writing then measures is *use*, which is what it is for.
+
+The product owner asked for this on 2026-09-17. ADR-001 recorded that the order
+is configuration precisely so it could be changed on evidence; this is that
+happening, and `SkillsOrder` is the only place the new order is written.
+
+### The part that is not a configuration change
+
+Every word already in the pipeline was standing somewhere in the **old** order
+when it changed. Advancement was positional:
+
+```csharp
+var next = config.NextSkillAfter(skill);   // index + 1
+if (next is null) { /* mature */ }
+```
+
+A word sitting at Writing — the old last skill — would pass it, find nothing
+after Writing in the new order, and **mature having never been asked to spell
+it**. Silently, for every such word, with no error and nothing in the data to
+say it had happened.
+
+So advancement now asks what the word still owes:
+
+```csharp
+public SkillType? NextPendingSkill(WordOsConfiguration config) =>
+    config.SkillsOrder.FirstOrDefault(s => SkillState(s)?.Status != Passed);
+```
+
+Correct under any order, needs no migration, and takes nothing from anyone: a
+word mid-flight finishes in the order it started, and the skill it has not done
+yet is still waiting afterwards. It is also the honest reading of what the
+pipeline means — five skills, each demonstrated once, in a preferred order
+(rule R5). `NextSkillAfter` survives for callers asking about the *order* rather
+than about a word.
+
+`ApplySessionResult` also seeds a missing `WordSkillState` rather than
+`Single`-ing on it, so an order that gains an entry later cannot throw at the
+moment a learner passes something.
+
+### Verified
+
+`A_word_in_flight_when_the_order_changes_still_owes_every_skill` builds a word
+under the old order, changes the order underneath it, and asserts it goes to
+Spelling rather than to Active — **confirmed failing** against the positional
+version. Mirrored in the mock as `a word that is already in flight does not skip
+the skill it has left`. The API suite's `AdvanceTo…` helpers were rewritten
+around the new order, and `Passing_spelling_matures_the_word` became
+`Passing_the_last_skill_matures_the_word`, which is what it was always testing.
+
+The mock now seeds a word standing at Writing, because with Writing last nothing
+in the demo data reached it.
+
+---
+
+## ADR-088 — The options, and the instruction, are written at the learner's level
+
+**Status:** accepted · **Date:** 2026-09-17
+
+Two rules from the product owner, one ladder.
+
+### The options on a word question
+
+*What does this word mean here?* had exactly one kind of answer — the Arabic
+meaning — at every level from A1 to C2. That is the right answer at one end of
+the ladder and the wrong one at the other:
+
+* An **A2** learner shown four English definitions is being tested on the
+  definitions. The word is not what stands between them and the answer.
+* A **C1** learner shown four Arabic words is being asked to translate, which is
+  easier than the word is, and is not what the pipeline claims to measure.
+
+So the register follows the band:
+
+| Band | Options are |
+|---|---|
+| A1, A1+, A2, A2+ | the Arabic meaning |
+| B1, B1+, B2 | a **plain-English** definition, written for this sentence |
+| B2+, C1, C1+, C2 | the **dictionary's** definition, as written |
+
+Reading and Listening only — the two skills that ask this question.
+
+**Where the correct answer comes from matters more than where the wrong ones
+do.** At two of the three bands it comes from this service: the learner's own
+Arabic meaning, or the lexicon's gloss. Only the middle band has no other source
+for a plain-English line, so the generator writes it — and the prompt asks it to
+*simplify the definition it was handed*, not to state the meaning itself. That is
+the narrowest place to let a model write an answer key, and it is still a model
+writing one; it is flagged here rather than buried.
+
+The wrong answers are the generator's at every band, written from the sentence
+(ADR-084), and now written in the band's register: at B2+ the correct option is a
+real dictionary line, so three conversational explanations beside it would make
+the answer identifiable by its style alone. The prompt says so in those words.
+
+**One language per question, always.** A single Arabic option among three English
+ones gives itself away by script. So the fallbacks are paired: the top-up pool is
+the learner's other words' *definitions* on an English band and their *meanings*
+on the Arabic one, and there are two filler pools rather than one. A word with no
+English definition at all falls back to Arabic for that word — a guard, not a
+path, since a word added outside the lexicon still gets a definition from the
+meaning checker (ADR-075), but an empty correct option is a question with no
+right answer.
+
+Re-telling a passage at another level moves the options with it. A learner who
+dropped to A2 because the text was too hard did not ask to keep answering in
+English.
+
+### The instruction on a Writing task
+
+Same ladder, one cut: **B1 and above is set in English.**
+
+Below it the instruction is scaffolding — it has to be understood instantly or
+the task becomes a reading test with a writing task attached. At B1 a learner
+about to write English has already started in it, and an instruction in the
+language of the work is one less translation between them and the task.
+
+The decision is the **server's**: the session carries `instructionLanguage`,
+derived from two facts already stored, so there is nothing to migrate and nothing
+that can fall out of step with the level the session was built at. The client
+renders what it is handed (rule R1) and applies it to the instruction **only** —
+the buttons, headings and errors around it are the app talking, and the app keeps
+speaking the learner's language. A value this build does not recognise leaves the
+learner's language alone, because an instruction in the wrong language is worse
+than a plain one.
+
+### Which level
+
+The **session's own** level — for Reading and Listening the learner's standing in
+that skill, for Writing theirs in Writing. The product owner said "the person's
+level" and then, for Writing, "their level in writing"; the per-skill level is the
+narrower reading and the one already driving content difficulty, so a learner
+strong at reading and weak at writing is met correctly in both.
+
+### Verified
+
+* `Every_rung_of_the_ladder_lands_in_a_band` names all eleven levels
+  individually — a ladder read with `>` instead of `>=` moves exactly one band
+  and nothing else would catch it.
+* `The_easier_bands_answer_in_Arabic`, `…_the_generators_plain_English`,
+  `…_the_dictionarys_own_words`, plus the two fallbacks:
+  `A_word_with_no_English_definition_falls_back_to_Arabic` and
+  `An_English_band_with_no_generated_options_still_asks_four`.
+* AI service: the schema carries only the fields its band will use, each prompt
+  asks for its own register, and the English options are all-or-nothing exactly
+  as the Arabic ones are.
+* Client: `the easier bands answer in Arabic` / `from B1 up the options are
+  English, and all four of them are`; `the writing task is set in English in the
+  Arabic app` — **confirmed failing** with the wiring removed — and `everything
+  around the task still speaks Arabic`, which is the half that would be easy to
+  get wrong.
+* Live against Gemini, all three registers: `river` at B1 came back as
+  *"a large natural stream of water"* against *a paved road / a mountain range /
+  a thick forest*; at B2+ the wrong answers were full dictionary lines
+  (*"a paved path used by pedestrians in a city center"*) and no plain-English
+  answer was written at all, because the lexicon supplies it.
+
+---
+
+## ADR-089 — A word ripens before the challenge may ask about it
+
+**Status:** accepted · **Date:** 2026-09-17
+
+The weekly review asked about *everything added in the last seven days*. A word
+added this morning was tested this evening.
+
+That is not a review. The learner still has the word in mind, answers correctly,
+and the score — the only thing this feature produces, because rule R9 forbids it
+from touching anything else — says nothing about retention. It was measuring
+short-term memory and reporting it as learning.
+
+### The rule
+
+* A word becomes reviewable **`WeeklyReviewMaturityDays` (7) after it was
+  added**, not before. A learner's first week therefore has no challenge in it,
+  and the first one opens on a date that can be named in advance.
+* A word **leaves** the pool once the challenge has asked about it — right or
+  wrong. A word the learner got wrong is not owed another challenge; it is owed
+  the skill it is still standing on.
+* Unreviewed words **carry over** instead of expiring. Somebody who skipped last
+  week finds last week's words waiting beside this week's, because the
+  alternative is a feature that silently forgets the words of anyone who was
+  busy — and those are exactly the words worth asking about.
+* Carrying over needs a ceiling or it becomes a punishment for missing a week.
+  **`WeeklyReviewMaxWords` (50)** caps one sitting; the rest stay ripe and are
+  offered again. Fifty is the product owner's number and lives in configuration,
+  because the right ceiling is a judgement about people rather than about
+  software (rule R3).
+
+The pool is ordered **oldest first**. A word that has been waiting a fortnight is
+the one most likely to have been forgotten, and it is the one the cap must not
+keep pushing to the back week after week.
+
+Ripeness is deliberately not a question about the word's *pipeline* state. A word
+still on Reading counts exactly as much as one that matured: what is being
+measured is what the learner remembers, not how far the word travelled.
+
+### What the learner sees
+
+The hub card is shown **while the challenge is still coming**, muted, with the
+day on it — not hidden until it opens. A card that simply is not there teaches a
+learner in their first week that the feature does not exist.
+
+When more than one sitting is ripe, the card says so *before* they start, rather
+than letting a second group arrive as a surprise after they finish what they
+thought was everything.
+
+`nextAvailableAt` on the hub stopped being always-null and became the date the
+first word ripens. `NO_WORDS_IN_PERIOD` became two codes, because "not yet" and
+"you have reviewed everything" are different situations and only one of them has
+a date to wait for.
+
+### Verified
+
+`WeeklyReviewPolicyTests` — twelve cases covering ripening on the exact day,
+leaving the pool for good, deleted words, carry-over across a skipped fortnight,
+oldest-first ordering, the ceiling at fifty, the ceiling as configuration, and
+the three answers to "when does it open". Mirrored in the mock and covered from
+the client in `weekly_challenge_test.dart`.
+
+---
+
+## ADR-090 — Twenty notifications, and a rule about what may be said in one
+
+**Status:** accepted · **Date:** 2026-09-17 · **Extends ADR-076**
+
+There were three reminders, each a single fixed sentence, each stating a count:
+*"4 words are ready to practise."* Twice a day, for ever.
+
+A notification is the whole decision about whether the app is opened today. The
+same sentence twice a day for a fortnight stops being read — and it stops being
+*read* before it stops being *noticed*, which is worse, because the learner keeps
+receiving it and has learned that it never says anything.
+
+So there are now twenty lines, each gated on a fact.
+
+### The rule that shapes everything
+
+These are **local** notifications (ADR-076). The phone fires them with no
+network, usually with the app closed, up to a week after the server handed them
+over. Nothing can be corrected once scheduled.
+
+**So a line may only rest on a fact that will still be true when it fires.**
+
+"You practised yesterday" is knowable for this evening and a guess by Thursday. A
+streak of four is a streak of four today and unknown after that. Every message
+that looks backwards is therefore restricted to **today's slots**, and the days
+beyond are filled only from facts the schedule itself projects: what will be due,
+what will have ripened, what the learner owns. A phone re-fetches on every app
+open, so the learner who opens the app keeps getting the good ones, and the one
+who does not is never lied to.
+
+A reminder that lies is worse than a dull one. Somebody told they are on a
+five-day streak on their third day away has learned that the app does not know
+them, and no better sentence next week recovers that.
+
+### The catalogue
+
+Eleven for words being due — the plain count, the single word, the five-minute
+framing, morning and evening, a streak, a streak about to end tonight, the day
+after a good one, a welcome back, a level that rose, words one skill from
+finishing. Four for a quiet day, two for an empty vocabulary, two for the weekly
+challenge, and one placeholder that is never reached.
+
+How they are written:
+
+* **Never a reproach.** "You haven't practised in 4 days" is accurate and it
+  makes the app a thing to avoid. The same fact says *"your words are exactly
+  where you left them."*
+* **Name the size of the ask, not the size of the backlog.** "Five minutes" is a
+  decision somebody can make at a bus stop; "23 words waiting" is a decision to
+  postpone.
+* **The number is a guest, not the host.** Most lines carry none. The count is
+  still there, in the one line that is about it.
+* **The two challenge lines carry no number at all**, by instruction: how many
+  words ripened is the product's bookkeeping, and a count would make a quiet week
+  look like a failure.
+
+### Choosing
+
+Candidates are ranked by what the learner most needs to hear at that moment; the
+best one not used in the last four picks wins; ties break on a hash of the
+learner and the date, so two people do not read the same script. Deterministic
+throughout — the same facts compose the same week, so a refresh does not
+reshuffle what the phone already holds.
+
+**Two exceptions are pinned and never rotated**, because rotation must not
+swallow a message whose whole value is the moment it arrives: the day the
+challenge opens, and the evening a run of days is about to end. A test caught the
+second of those being traded for *"you are on a five-day streak"* — the same fact
+with the urgency removed.
+
+The challenge is announced **twice at most**: once when it opens, and once the
+next day if more than one sitting is waiting. Not daily. A test caught it saying
+"your challenge is ready" four times in a week, which is how a learner learns to
+swipe a notification away without reading it — and they do not learn that for one
+message only.
+
+`kind` survives beside the new `message` on purpose. A client that has never
+heard of a key still says something true from the kind alone, and the server
+ships far more often than the phones do.
+
+### Verified
+
+`ReminderComposerTests` — fifteen cases, including the staleness rule across a
+whole week, the two pinned messages, the announcement cap, determinism under
+refresh, and that a week contains more than two distinct lines. Client side:
+every line renders non-empty in both languages with no unsubstituted
+placeholders, the challenge lines never contain a number, and an unknown key
+falls back to the kind. One defect was found by these tests rather than by
+reading: with one word due the no-repeat window exhausted the list and an
+ordinary Saturday morning said *"open the app"*.
+
+---
+
+## ADR-091 — The challenge shows a bar, not a position
+
+**Status:** accepted · **Date:** 2026-09-17
+
+The weekly challenge showed `Remaining: 47` beside a linear progress bar.
+
+Both are honest and both are discouraging. "3 of 50" tells a learner who has just
+started that they have forty-seven to go, at the exact moment they are deciding
+whether to continue — and a linear bar answers their first question by moving two
+per cent, which reads as *nothing happened*.
+
+### The decision
+
+The count is gone. The bar stays, it animates, and it is **front-loaded**: the
+first five words are worth the opening 35% of it, and the remainder is shared
+evenly across everything after them.
+
+```dart
+if (done <= 5)  return 0.35 * (done / 5);
+return 0.35 + 0.65 * ((done - 5) / (total - 5));
+```
+
+The learner most likely to give up is the one who has answered three questions
+and cannot see that they have. That is the moment the curve is for.
+
+### The limits on it
+
+* It **never overstates the end**: at `done == total` it is exactly 1, so the bar
+  arrives full at the same moment the challenge does. The flattery is all in the
+  middle, where it costs nothing.
+* A **short** challenge stays linear. With five words the "opening stretch" would
+  be the whole thing and the second answer would nearly fill the bar — the same
+  lie in the other direction.
+* It is **presentation only**. The score, the queue, the requeue and the result
+  are counted honestly and are not touched by it (rule R9). What is bent here is
+  the width of a rectangle.
+
+### Verified
+
+`weekly_challenge_test.dart` — starts at zero, arrives at exactly one, moves
+monotonically for every length, gives the opening five more than twice the middle
+five, stays linear when short, and divides by nothing. The screen is pinned by
+`learner_journey_test.dart`, which now asserts the bar is present *and* that no
+"Remaining" count is.
+
+---
+
+## ADR-092 — Pipeline order is asked for, never assumed from the enum
+
+**Status:** accepted · **Date:** 2026-09-17
+
+ADR-087 moved Writing behind Spelling. The hub obeyed immediately, because it
+builds its cards from `config.SkillsOrder`. Every *word* went on being drawn in
+the old sequence, because its skills were sent like this:
+
+```csharp
+w.Skills.OrderBy(s => s.Skill)      // the enum's declaration order
+```
+
+`SkillType` still declares `… Writing, Spelling`, so My Words, the word detail
+journey and the Owner's dashboard all showed a pipeline the app no longer ran.
+The hub said one thing and the word said another, and nothing failed.
+
+### The decision
+
+Order by `config.PipelinePosition(skill)`. The enum keeps its declaration —
+renumbering it would hard-code into a language construct the very thing ADR-001
+made configurable, and it would be wrong again next time.
+
+The three sites were `WordEndpoints` (a word's skills) and two in
+`AdminEndpoints`. A skill missing from the order sorts last rather than
+throwing: a misconfigured list should mis-sort a row, not fail a request.
+
+### Why it was invisible
+
+The failure mode of an ordering bug is a screen that looks fine. Both tests
+added here compare against `SkillsOrder` itself rather than against a literal,
+so they cannot drift with it — and the word one was confirmed failing before the
+fix.
+
+---
+
+## ADR-093 — Nobody is signed out except by signing out
+
+**Status:** accepted · **Date:** 2026-09-17
+
+Android learners were being asked to sign in again "after a while", with nothing
+to explain it. There were **two** causes, and both are about a network rather
+than about a session.
+
+### 1. A failed refresh is not a refused refresh
+
+Access tokens last fifteen minutes, so the refresh exchange runs several times a
+day for anybody who uses the app. It was written like this:
+
+```dart
+} on DioException {
+  return false;          // → onUnauthorized() → tokens deleted
+}
+```
+
+`DioException` is *every* failure: a timeout, a dead socket, DNS, a 502, a server
+still cold-starting. So opening the app on a weak connection more than fifteen
+minutes after last using it **deleted the learner's credentials**. Nobody had
+refused anything.
+
+It now answers in three, not two — `renewed`, `rejected`, `unavailable` — and
+only `rejected` (a 401 or 403 from the server, or no refresh token at all) ends
+the session. Everything else leaves the tokens exactly where they are and
+reports a network error. The access token is still expired, so the next request
+tries again — which is right, because by then the connection may be back.
+
+### 2. A lost reply is not a leak
+
+Refresh tokens rotate, and presenting a used one means it leaked, so the whole
+family is revoked (`docs/07-SECURITY.md` §2). There is exactly one honest way a
+learner's own app does that: **the exchange succeeded here and the reply never
+arrived.** The app still holds the old token and retries with it.
+
+On a phone that is not rare, and the consequence was a *permanent* sign-out —
+the family is revoked, so waiting does not help either.
+
+The server now honours that retry when, and only when, the replacement token has
+**never been used**: nobody received it, which is the tell. It retires the orphan
+and issues a pair the client will actually get. A replay after the real client
+has used the replacement, or later than `RefreshReplayGraceSeconds` (60), still
+revokes the family.
+
+> **This is a deliberate loosening of a security property and the product owner
+> should know it.** Inside that minute, a refresh token stolen *in transit*
+> could be redeemed without tripping the revocation. Against that: the token
+> travels over TLS, the realistic theft vector is a compromised device or backup
+> — where the attacker redeems at an arbitrary later time and is still caught —
+> and the strict rule was permanently signing out real learners who did nothing
+> wrong. Setting the window to `0` restores the old behaviour exactly, with no
+> deploy.
+
+The existing test was rewritten rather than deleted: it now replays *after* the
+successor has been used, which is the real leak signature, and still asserts the
+whole family dies.
+
+### What was not the cause
+
+Checked and cleared: the refresh token's expiry **slides** — each exchange issues
+thirty fresh days — so an active learner never ages out. The keystore write is
+non-fatal by design, which is right: a session that works for this run is better
+than one refused because storage hiccuped.
+
+---
+
+## ADR-094 — The screen keeps up with the server, and nobody has to remember
+
+**Status:** accepted · **Date:** 2026-09-17
+
+Two complaints with one shape: *the app knows, and the screen does not.*
+
+### Screens were refreshed by whoever remembered to
+
+Each write invalidated the providers its caller happened to know about. Adding a
+word refreshed the hub and not the word list — so a learner added a word, opened
+My Words, and it was not there. Fourteen call sites, each a thing a future change
+has to remember, and the failure is silent because a stale screen looks exactly
+like a correct one.
+
+Now: **every write announces itself, and every screen that reads server state
+listens.**
+
+```dart
+Future<Map<String, dynamic>> _post(...) async {
+  final res = await _guard(...);
+  onChanged?.call();          // → serverRevisionProvider.bump()
+  return _asMap(res);
+}
+```
+
+The announcement lives at the bottom of the stack, where the HTTP verb *is* the
+classification — a method added tomorrow that goes through `_post` is announced
+without anyone deciding that it should be. The mock carries the same list by
+hand, because every widget test runs against it and a screen that failed to
+refresh would pass its tests and fail on a phone.
+
+One counter, not one per resource: a finer signal means deciding at each write
+which screens it could affect, which is the same guesswork this replaces.
+Refetching a screen nobody is looking at costs nothing, because `autoDispose`
+means nobody is listening to it. Only on success — announcing a refused write
+turns one error into a burst of requests.
+
+The fourteen hand-written invalidations are gone. What remains under `onRetry` is
+a different thing: retrying a read that failed.
+
+### Errors waited to be pressed
+
+A learner who walked into a tunnel got "something went wrong" — and it stayed,
+over a working network, until they found the retry button.
+
+`ErrorView.from(error, strings)` now picks the sentence from the failure, so
+somebody with no signal is told they have no signal; and while it is on screen it
+**retries on its own**, at 2s doubling to 20s, and immediately when the app is
+resumed. Only for failures that can heal (`isRetryable`) — a word that does not
+exist will refuse identically for ever, and retrying it is a request every few
+seconds that can never do anything. The button stays for anyone who wants to
+press it: waiting for a timer you cannot see is its own kind of stuck.
+
+### The test harness had to change with it
+
+Widget tests ran against the mock's artificial latency, which exists so loading
+states are visible while developing. With every write now refetching, one of
+those timers started in the last frame outlives the widget tree and fails the
+test with "pending timers" — a message about the harness, not about the app. The
+shared harness now runs at zero latency, which is what `latencyScale` was added
+for, and `stress_navigation` asks for it back, because a test about a learner
+mashing a tile *while a session loads* has no subject without it. Two hand-copied
+override lists in `qa_sweep` were replaced by the shared one, which is how they
+came to drift in the first place.
+
+## ADR-095 — One question, one button
+
+**Context.** A Writing question put a "check" button inside the scrolling body,
+under the text field, while the foot of the screen carried a "next" that stayed
+disabled until the answer came back. Two buttons for one decision — and the dead
+one was the one under the thumb.
+
+Reading and Listening had already solved this (ADR-064): a tap on an option is
+only a choice, and the footer reads "check" until the verdict is on screen, then
+"next". Writing was left out because its answer is typed rather than tapped,
+which is a difference in how the answer is *given*, not in what the learner is
+deciding.
+
+**Decision.** The footer is the only control on a question, for every skill that
+ends in an explicit check. It reads "check" until there is a verdict and
+"next" — or "finish" on the last one — afterwards. `_hasCheckStep(item)` says
+which questions have that first step and `_checkAction(item)` says what it does,
+so the branch is over the *item*, not over the skill.
+
+The button is disabled while there is nothing to check: an unchosen option, or
+an empty box. `_submitWriting` already refused an empty sentence, so pressing it
+did nothing — refusing it in the button is what stops it looking pressable.
+It is rebuilt as the learner types, from the text field's own notifier rather
+than a `setState` per keystroke, because `_next()` clears that controller inside
+a `setState` and a listener would re-enter it.
+
+**Spelling keeps its own button.** With letter tiles it lives in the same row as
+undo and clear, beside the tiles it commits; moving it to the foot would separate
+it from the thing it acts on. Free typing shares that layout. Left as it is, and
+named here so the next reader knows it was a decision rather than an oversight.
+
+**Consequences.** One control to look at, at the bottom of the screen, doing one
+thing at a time. `test/writing_answer_flow_test.dart` holds it: three of its
+assertions were confirmed failing against the two-button version.
+
+## ADR-096 — A second dictionary, beside the first
+
+**Context.** The product owner called the lexicon "سيئ جداً"، and the example
+was `sell = باع` — "مين باع sell؟". Querying the table found three separate
+faults, not one.
+
+**1. The sense order was invented here.** `FrequencyRank` combined the CEFR band
+with WordNet's own sense ordering, because no source in the first build shipped
+a frequency list. WordNet's order is not a frequency order, so the top row — the
+one the learner sees — was:
+
+| typed | shown first | its definition |
+|---|---|---|
+| `go` | تُوُفِّيَ | *pass from physical life* |
+| `eat` | أَكَلَ | *cause to deteriorate due to the action of water, air* |
+| `sell` | أَقْنَعَ بِـ | *persuade somebody to accept something* |
+| `house` | لعبة بيت بيوت | *play in which children take the roles…* |
+
+**2. Verbs were cited in the past.** Arabic WordNet gives the past tense, which
+is the citation form of every Arabic dictionary — and against the English
+infinitive it reads as a tense that is not there.
+
+**3. CEFR was applied per (word, POS) to every sense.** All thirty-odd senses of
+`go` were A1, including "be abolished or discarded"; and 84.7 % of senses had no
+band at all.
+
+**What was looked for.** No free API supplies all four of word, learner
+definition, Arabic gloss and CEFR. **Cambridge** is the only source with CEFR
+**per sense** (English Vocabulary Profile) alongside an official English–Arabic
+dictionary, and it is commercial: a licensing conversation, a 30-day evaluation
+key, and explicitly no free access for research or prototyping. The product
+owner is approaching them in parallel; this decision is what ships meanwhile.
+
+**Decision.** A second edition, built from Wiktionary via `wiktextract`, living
+in `lexicon_entries` **beside** the first. Three rules, each answering one of
+the faults:
+
+1. **Order comes from the dictionary**, and rank comes from a real frequency
+   list (`hermitdave/FrequencyWords`, top 50k). Wiktionary's senses are ordered
+   by people, so `sell` leads with *"To transfer goods or provide services in
+   exchange for money"*.
+2. **The Arabic form follows the English inflection** — the owner's own
+   formulation, sharper than "use the present tense":
+   `sell → يبيع`, `sold → باع`, `selling → بَيْع` (the مصدر, which is what an
+   -ing form is). The non-past is not generated: it is read from the Arabic
+   Wiktionary entry's own paradigm (`non-past`, `noun-from-verb`). A verb with
+   no paradigm recorded keeps the form it came with — conjugating by rule would
+   invent Arabic, and an invented word is worse than a dictionary one.
+3. **A band reaches the senses it was measured on** — the first two — and no
+   further.
+
+Dialect glosses are dropped: a learner studying for a CEFR band is studying
+فصحى. Wiktionary tags most of them, and not all — one arrives as the bare
+string `"Tunisian Arabic كلِا"` — so the name is matched in the tag *and* in the
+word.
+
+**Both editions stay.** `WordOsConfiguration.LexiconEdition` says which one is
+served, so going back is a setting, not a re-import (rule R3). It stays on
+`oewn-awn` until the new build has been imported and measured: a default naming
+an edition that is not in the table is an app with no dictionary at all, which
+is a worse failure than the one being fixed.
+
+**Search and resolution are separated, and only search is edition-scoped.**
+`db.ActiveLexicon` reads the active edition and is what decides *what a learner
+may add* — lookup, search by Arabic meaning, defining a tapped word.
+`db.LexiconEntries` stays edition-blind and is what reads the row behind a word
+a learner **already owns**. Filtering that too would mean switching dictionary
+quietly broke every vocabulary built under the other one. The distinction has a
+name on the context rather than a rule to remember at each of the twelve call
+sites.
+
+**Consequences.** Measured on 60 common words before any of this was built: 98 %
+carry an Arabic gloss and the leading sense was right in every one. It is not
+uniformly better — `polite → أَدِيب` is worse than the old `مؤدب`, `deliver`'s
+leading sense is archaic, `expand → يَوْسُعُ` is the wrong verb pattern — which is
+why the comparison is a report (`tools/lexicon/compare-editions.sql`) and the
+switch is a setting. Eleven tests pin the rules.
+
+## ADR-097 — The rebuild keeps the old dictionary underneath it
+
+**Context.** ADR-096 decided the second edition. Measuring it against the 50k
+frequency list found the thing no sample of sixty words could have shown:
+
+| frequency band | `oewn-awn` | `wiktionary` alone |
+|---|---|---|
+| top 1,000 | 85.4 % | 84.5 % |
+| 1k–3k | 80.9 % | 69.9 % |
+| 3k–5k | 73.9 % | 58.0 % |
+| 5k–10k | 66.5 % | 46.3 % |
+| 10k–50k | 48.8 % | **17.7 %** |
+
+Wiktionary's English→Arabic translations are excellent and **concentrated in
+common vocabulary**. Shipping it alone would have traded "the wrong meaning" for
+"no meaning", which is not obviously a trade a learner wants: a word they met in
+a passage and cannot add is as much of a dead end as a word glossed `تُوُفِّيَ`.
+
+**Decision.** Do not choose. The import fills its own gaps from the first
+edition — that row, its provenance, its Arabic — marked `fallback=oewn-awn` and
+ranked in a band above every genuine row, so a real entry always wins and the
+fallback only answers where there would otherwise be silence.
+
+| frequency band | `oewn-awn` | **now** |
+|---|---|---|
+| top 1,000 | 85.4 % | **92.2 %** |
+| 1k–3k | 80.9 % | **81.9 %** |
+| 3k–5k | 73.9 % | **74.2 %** |
+| 5k–10k | 66.5 % | **67.1 %** |
+| 10k–50k | 48.8 % | **49.4 %** |
+
+Better in every band, on quality and on coverage, which is what let the setting
+move to the second edition rather than waiting.
+
+**Two ordering rules came out of the same measurements.**
+
+*The part of speech the dictionary leads with wins.* `go` came back as `غُو`,
+the board game: two entries, equally common word, both a first sense, and the
+tie fell to the sense id where `n` sorts before `v`. Wiktionary's page is
+ordered verb, noun, adjective, and only fourth the game — the same human
+ordering the senses already had — so the rank now carries it:
+`word × 10,000 + entry × 1,000 + sense × 10`. Nothing in it is invented, which
+is the whole difference from the first edition's rank.
+
+*What the learner typed beats what merely starts with it.* Typing `go` answered
+`goodbye`: the authored closed-class words carry a rank of −1 so that `is` and
+`the` stay findable, and −1 beats every measured frequency there is. A prefix
+search now puts an exact match first, whatever the ranking says.
+
+**Consequences.** The dry run earned its keep: reading the wrong translation
+field (1,951 senses instead of 20,613), `taked`/`runed`/`wining` from blind
+spelling rules, and archaic `readen`/`putten` were all caught before a row was
+written. Two more — `غُو` and `goodbye` — were caught by querying the imported
+data and by calling the live API, which is why both are now tests.
+
+The test host pins `LexiconEdition` rather than following the shipped value:
+every dictionary fixture in the suite is written with `LexiconEntry.Create`,
+whose rows carry the first edition, and they all went invisible the day the
+setting moved. `LexiconEditionTests` covers the setting itself instead — that a
+search reads only the named edition, that moving it back restores the first
+dictionary, and that a word a learner owns resolves whichever edition it came
+from.
+
+## ADR-098 — Eight questions, and the two that carry one answer each
+
+**Context.** The product owner's words were "تحديد المستوى كثير أسئلة" — and
+"نوصل في النهاية بنخليه بس تقريبي". Twenty-odd questions to produce a number
+that the level engine starts overwriting from the first real session, on a
+screen a learner meets before they have used the app once. The ask was exact:
+three Reading, three Listening, one Writing, one Speaking, no Spelling.
+
+**Decision.** The test is eight questions.
+
+| skill | questions | how they are chosen |
+|---|---|---|
+| Reading | 3 | easiest first, then climbing with the estimate |
+| Listening | 3 | the same ladder |
+| Speaking | 1 | pitched at what Reading and Listening showed |
+| Writing | 1 | likewise |
+
+`PlacementConfig` carries all of it (rule R3): `SkillOrder` without Spelling,
+`CefrLimits = (3, 3)`, `ProductionLimits = (1, 1)`, `EstimatedTotalItems = 8`.
+There is no stopping rule left — at three items it could only ever cost a
+question, and a test whose length varies between learners is harder to describe
+honestly before they start it. `PlacementVersion` is 3, because a v3 band rests
+on much less evidence than a v2 one and the two must not be compared.
+
+**Spelling leaves the test.** Its four questions never produced a level. They
+chose between letter tiles and free typing — a starting affordance the first
+real spelling session settles anyway. Everyone now starts on tiles, which is
+the supported mode, and is promoted from there. The six items stay in the bank
+and the diagnostic stays in the API payload reading 0 of 0: putting the ladder
+back is `SkillOrder` plus its limits, not re-authoring six questions.
+
+The nine grammar items go with it. They were extra *Writing* questions that also
+counted as evidence for Speaking, and Writing now has room for one question,
+which has to be a written one.
+
+**Three things had to change for eight questions to be honest.**
+
+*A wrong answer may hold the level or lower it — never raise it.* "Closest
+remaining difficulty" pulls upwards from the floor: one missed A1 item leaves
+the estimate well above A1, so the nearest item left is A2 and the second
+question is harder than the first. Over six questions that corrected itself.
+Over three it is most of the test. The reach is now capped by the difficulty of
+a question just missed as well as by the band rule.
+
+*Three floor items per receptive skill, not two.* With that cap, a learner who
+missed both A1 Reading items had nothing left to be asked and their test quietly
+ended two questions short — the learner who most needs it not to give up on
+them. `rd_a1_3` and `ls_a1_3` are new.
+
+*A one-question skill borrows the location of the estimate, not its certainty.*
+Measured, the old rule placed every learner alive between A2+ and B2 on Writing
+whatever they wrote, including one who answered the entire test wrongly: a
+single response cannot outweigh the population prior. So Speaking and Writing
+are asked last, their one item is pitched at what the rest of the test showed
+rather than at the floor, and their band is estimated against a prior re-centred
+on that — keeping its usual width, so the produced answer still moves the band
+about as far as one answer should. The reported **confidence** comes from that
+one answer alone and stays near zero, which is what puts "مبدئي" on the row.
+
+This is the one place skills are not measured separately, and it is named here
+rather than left to be discovered. Reading and Listening have three answers each
+and are untouched.
+
+**Consequences.** All wrong now places A1 across the board; all right places
+B2+/C1+; answering the receptive half well and the written half badly moves
+Writing down about a band. The learner is told, on the result screen and in the
+API summary, that this is a first reading from eight questions and that they can
+change any of it in Settings — which they can, per skill, from the level card
+there.
+
+## ADR-099 — The weekly challenge asks again until you get it
+
+**Context.** "الكلمة لما نجاوبها صح خلاص ما ترجع، إلا الكلمات اللي جاوبتها غلط."
+Being *asked* was what retired a word from the challenge — `LastReviewedAt`
+set, ripeness gone, whatever the answer had been. So the one word a learner had
+just proved they did not remember was the one word the challenge never mentioned
+again, and the feature quietly tested everything except what was forgotten.
+
+**Decision.** Recalling a word is what retires it; being asked is not.
+
+- `Word.ReviewPassedAt` records the first correct recall, and only a word with
+  one is out of the pool. It is set once and never withdrawn.
+- Ripeness anchors on `LastReviewedAt ?? AddedAt`, so a missed word gets its own
+  week to be forgotten in before it is asked again — not tomorrow, which would
+  make the challenge the same lesson again (the fault ADR-089 exists to fix).
+- **First attempt only.** A word rescued on the retry was not remembered. That
+  is already the standard `WeeklyScore` is computed to (rule R9); it would be
+  strange for the same answer to fail the score and pass the retirement.
+
+Rule R9 is untouched. Neither field moves a word through the pipeline, and
+nothing here changes a skill, a schedule or a level.
+
+**The migration backfills.** Without it the change resurrects every word every
+learner has ever answered — ripeness would restart from their last review a week
+later. The evidence was already stored: `weekly_review_items.FirstAttemptCorrect`
+says which ones were named right, and those get a `ReviewPassedAt`. Words
+answered wrongly are deliberately left null. They are what this ADR is for.
+
+**Consequences.** A learner's backlog is now the words they have not yet
+recalled, which is also what the hub card counts and what the daily reminder
+projects. "Nothing to review" means they have recalled everything they added,
+and the message says that rather than "already reviewed". Two API tests hold the
+behaviour end to end: one right and one missed-then-rescued word, a week later
+exactly the missed one comes back; and a word recalled first time is not asked
+again ten weeks on.
+
+## ADR-100 — Spelling is spelled with letters, never with a keyboard
+
+**Context.** From the product owner, on seeing a text field in a Spelling
+session: "من قال لأهلك إنك تخليها بالكيبورد نكتب؟ … نحنا حذفنا الكيبورد."
+
+They were right twice over. It was a decision nobody had taken — B2 and above
+had been typing since `MVP Core §33–34`, on the reasoning that an advanced
+learner does not need letter support. And it does not work: a phone keyboard
+autocorrects, predicts and completes. The learner taps a suggestion and the
+exercise has measured the keyboard.
+
+**Decision.** Every spelling item is assembled from letter tiles, at every
+level. `SessionContentBuilder.BuildSpellingItems` no longer takes a preferred
+mode and always issues `LETTER_TILES` with a padded pool; the client's text
+field is deleted, so there is no path left that raises a keyboard.
+
+Difficulty was never the input method's job anyway — it is the **hint ladder**,
+which already starts at the rung that suits the learner (ADR-032): C1 at the
+dictionary definition, A1 at the Arabic translation. That is where an advanced
+learner is stretched, and it cannot be autocompleted.
+
+**`SpellingInputMode.FreeTyping` stays in the enum** and nothing produces it. It
+is a stored string in `user_skill_levels` and `session_items`, and removing the
+name would make existing rows unreadable — a retired value, not a live one.
+`SpellingSupportMode` likewise remains on the level row and is now always
+`LETTER_TILES`, which is what the shortened placement already wrote for
+everybody (ADR-098).
+
+**Consequences.** One way to answer a spelling question, and it is the way the
+learner already knows. `An_advanced_learner_still_spells_with_letters_not_a_keyboard`
+walks A1, B2 and C2 through a session and was confirmed failing against the old
+builder.
+
+## ADR-101 — The meaning is the learner's; the word is not
+
+**Context.** "نقدر نعدل معنى الكلمة… الكلمة create كانت أنشأ، نقدر نعدلها إلى
+يصنع." And the limit, in the same breath: "ضروري تكون بنفس المرادف… لكن مثلاً
+create، قمت سويتها يحجز، لا — النظام يقول له لا، هذه كلمة ثانية."
+
+A learner could already write their own meaning when **adding** a word
+(ADR-072), and delete a word they regretted (ADR-071). What they could not do
+was change their mind later — and the thing they most want to change their mind
+about is a machine-joined Arabic gloss they have since understood better. The
+only way out was delete and re-add, which throws away every day of the journey.
+
+**Decision.** `PATCH /api/words/{id}/meaning`. The meaning may change; the word
+may not.
+
+**Nothing about the journey moves.** Not the state, not the current skill, not a
+skill's status, attempts or schedule, not the exposure count, not `AddedAt`.
+That is the entire value of the feature — `Word.ChangeMeaning` touches the
+meaning fields and appends a `MeaningChanged` event, and a test snapshots the
+whole journey across a change.
+
+**Two authorities answer "is this still the same word", in this order.**
+
+1. **The dictionary, when it recognises the wording.** It is the only thing that
+   can *name* the English word a meaning belongs to, which is the difference
+   between "that is wrong" and "that is `book`". A wording that belongs to
+   another word is refused with the candidates attached, and **there is no
+   override** — insisting is precisely how one word would silently become
+   another.
+2. **The checker, when the dictionary has never seen the wording.** It can only
+   judge the pairing, not name an owner, so its refusal is the softer one the
+   learner may overrule with `acceptAnyway` — the same bargain ADR-074 struck on
+   the way in, and the disagreement is recorded the same way.
+
+**The sense travels with the meaning** when the new wording is another sense of
+the same English word: leaving the old sense id behind would keep an English
+definition describing the meaning the learner has just rejected. The learner may
+already own that sense, so the identity `(UserId, SenseId)` is checked first.
+
+**Swapping is one request, because it is one decision.** With
+`replaceWithSenseId`, the old word is deleted (softly, ADR-071) and the new one
+added in the same transaction, starting at Reading with nothing passed. A
+learner who agreed to a swap must not end up holding both words, or neither.
+Starting from the beginning is not a penalty — it is the truthful statement that
+they have never been tested on this word.
+
+**Consequences.** Nine API tests and six in the app. One crash avoided on the
+way: the dialog's `TextEditingController` was first created and disposed per
+edit, which disposes it while the dialog is still animating away and takes the
+app down on the next frame — the same fault ADR-036 fixed in the dashboard. It
+belongs to the screen and is disposed with it.
+
+---
+
+## ADR-102 — English definitions keep their direction, and the dictionary switch has an order
+
+**Date:** 2026-09-28 · **Status:** Accepted
+
+Three findings from a full check before migrating production, recorded together
+because each one passed every test until something other than a test looked.
+
+### An English definition inside the Arabic interface
+
+The add-word results, the word detail and the in-session lookup sheet drew the
+dictionary's English definition with a plain `Text`. It inherited the Arabic
+interface's right-to-left direction, and a trailing neutral character in an RTL
+paragraph belongs to the paragraph rather than the words — so every definition
+was drawn with its punctuation at the front: `.money`, `:To move`. Seen on the
+simulator the day the rebuilt dictionary, with its full-sentence definitions,
+reached the screen.
+
+`EnglishText` already existed for exactly this, and its own documentation
+describes this exact symptom. It was simply not used on these three cards. It is
+now — with one deliberate difference: `EnglishText` left-aligns, which would tear
+the definition away from the Arabic meaning above it in a card whose every other
+line hangs from the right. So the *direction* is English and the *alignment*
+follows the interface (`EnglishText.interfaceStart`). Direction is what moves the
+punctuation; alignment is only where the block sits.
+
+Pinned by a widget test confirmed failing against the old code
+(`TextDirection.rtl` where `ltr` was expected), and checked on the simulator
+after a clean rebuild — a signalled hot restart had not loaded the change, and
+the screen went on showing the bug while the tests were green.
+
+### A contract field that was never sent
+
+`docs/05-API-CONTRACT.md` listed `skillIndex` in placement progress. Starting a
+placement on the running service showed it has never been sent — not by this
+version, not by the first. Harmless: every client reads it as `?? 0` and no
+screen uses it. The contract now says so rather than silently dropping it, so
+nobody builds a screen on it.
+
+### The dictionary switch has one safe order
+
+Search reads only the configured edition, whose default is `wiktionary`, and
+production holds none of those rows. Three plausible orders each break
+something a learner would see — failing queries, empty search, or both
+dictionaries mixed into one list (the old code does not filter by edition).
+`docs/09-DEPLOYMENT.md` §4½ now gives the one order in which every intermediate
+state is the old app behaving as it did: migrate, pin `oewn-awn`, deploy, load,
+switch. Rollback is the setting.
+
+The old app on learners' phones was checked against the new contract rather
+than assumed compatible: every change is additive or keeps the old field
+(`spelling` stays at 0 of 0, `kind` beside `message`).
+
+---
+
+## ADR-103 — Ship on the old dictionary; the default must be safe to deploy
+
+**Date:** 2026-09-28 · **Status:** Accepted · **Amends ADR-096**
+
+The product owner's decision: publish the app update now, on the dictionary
+production already has, and load the rebuilt one after the Neon compute
+allowance resets on 1 October (ADR-077).
+
+That made the default of `WordOs:LexiconEdition` a hazard. It was `wiktionary`,
+production holds none of those rows, and search reads only the configured
+edition — so pushing this code would have given every learner an empty search.
+Pinning `oewn-awn` in Render before the push would work, as a step somebody
+must remember, on the deploy where forgetting is invisible until a learner
+searches.
+
+So the default is `oewn-awn` again, and `appsettings.Development.json` asks for
+`wiktionary` — which only the local stack loads (`ASPNETCORE_ENVIRONMENT` is
+`Production` in the Dockerfile). Production switches with
+`WordOs__LexiconEdition=wiktionary` after the load, and rolls back by removing it.
+
+---
+
+## ADR-104 — A pause on Android no longer erases the answer
+
+**Date:** 2026-09-28 · **Status:** Accepted
+
+Reported from students' Android phones: in Speaking, pause for a moment and
+everything said before the pause disappears.
+
+The service already kept *final* segments and reopened the microphone when the
+platform closed a session. What it assumed is that a session ends with a final
+result. On Android it frequently does not: a silence closes the session with
+`error_speech_timeout` or `error_no_match` and nothing final, and sometimes
+with a final result carrying **no words**. Either way the words were still a
+partial, nothing had moved them into the transcript, and the reopened session's
+first — empty — result replaced them. iOS almost always finalises before
+closing, which is why it was only ever seen on Android.
+
+Three changes, each closing one way the words could be lost:
+
+- **Opening a session commits whatever the last one left unfinished.** The
+  platform's silence is not the learner's decision to throw words away.
+- **An empty result never overwrites words.** A final with no words keeps what
+  was being heard; an empty partial carries no information and is ignored.
+- **Results are scoped to their session.** A late result from a session already
+  closed and saved is dropped, so committing on close cannot say a sentence
+  twice.
+
+Pinned by seven tests replaying the platform's sequences through a fake
+recogniser, four of which fail against the previous code with the exact
+symptom: `"my name is Ahmed"` came back as `"Ahmed"`, and three sentences
+separated by pauses came back as only the last. Not reproducible on a
+simulator — neither simulator has a working recogniser — so the device check is
+the release APK on an Android phone.

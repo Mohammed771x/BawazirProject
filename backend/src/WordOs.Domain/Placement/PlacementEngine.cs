@@ -8,12 +8,15 @@ namespace WordOs.Domain.Placement;
 /// <remarks>
 /// Shape of a run:
 /// <code>
-/// for each CEFR skill (Reading, Listening, Speaking, Writing):
-///     ask the item whose difficulty is closest to the current ability estimate
-///     re-estimate ability by EAP after every answer
-///     stop when the posterior SE is small enough, or the item cap is reached
-/// then Spelling: a short fixed ladder, measured but never levelled
+/// Reading    3 items — easiest first, then climbing with the estimate
+/// Listening  3 items — the same ladder
+/// Speaking   1 item  — pitched at what Reading and Listening already showed
+/// Writing    1 item  — likewise
 /// </code>
+///
+/// Eight questions, and no spelling ladder (ADR-098). The test is a first
+/// estimate a learner can overrule, not an examination, and twenty questions
+/// bought precision at the price of the people who never finished it.
 ///
 /// The engine is <b>stateless</b>: it is handed the responses so far and
 /// returns the next decision. Persistence lives in the API layer, which is what
@@ -113,7 +116,16 @@ public sealed class PlacementEngine(
             // or two — the ladder climbs from their second answer — and costs
             // a weak learner nothing, which is the trade this product wants:
             // the result must never read as a verdict (Part 1).
-            if (forSkill.Count == 0)
+            //
+            // Unless the skill has exactly one question to spend. Then there is
+            // no ladder to climb: the opening item is also the closing one, and
+            // pitching it at the floor would measure every learner alive at the
+            // floor. Speaking and Writing are asked after Reading and
+            // Listening precisely so that something is already known by the
+            // time their single question is chosen (ADR-098).
+            var oneShot = limits.MaxItems == 1 && responses.Count > 0;
+
+            if (forSkill.Count == 0 && !oneShot)
             {
                 var floor = pool.Min(i => Config.Scale.DifficultyOf(i.Level));
                 var easiest = pool
@@ -124,7 +136,16 @@ public sealed class PlacementEngine(
                 return easiest[random.Next(easiest.Count)];
             }
 
-            var theta = Estimator.Estimate(forSkill).Theta;
+            // A skill with answers of its own is estimated from those; a
+            // one-shot skill borrows the estimate from everything answered so
+            // far, because it has nothing of its own yet.
+            var theta = Estimator.Estimate(
+                forSkill.Count > 0
+                    ? forSkill
+                    : responses
+                        .Select(r => new ScoredResponse(
+                            r.ItemId, r.Difficulty, r.Score))
+                        .ToList()).Theta;
 
             // Never more than one band above where the learner currently sits.
             //
@@ -136,9 +157,35 @@ public sealed class PlacementEngine(
             // opposite of what this test is for. When nothing is within reach,
             // the skill is finished; the estimate is not going to improve.
             var reach = theta + Config.Scale.StepLogits;
-            pool = pool
+
+            // And never harder than the question they just got wrong.
+            //
+            // The band rule alone is not enough at the floor: one missed A1
+            // item leaves the estimate well above A1, so the nearest remaining
+            // difficulty is A2 and the second question is harder than the
+            // first. Over six questions that corrected itself; over three
+            // (ADR-098) it is most of the test. A wrong answer may hold the
+            // level or lower it — never raise it.
+            if (forSkill.Count > 0 && forSkill[^1].Score < 0.5)
+                reach = Math.Min(reach, forSkill[^1].Difficulty);
+            var within = pool
                 .Where(i => Config.Scale.DifficultyOf(i.Level) <= reach)
                 .ToList();
+
+            // For a one-shot skill the reach rule would be a way of asking
+            // nothing at all: there is no "next item" to protect the learner
+            // from, and skipping leaves the skill unmeasured. Fall back to the
+            // easiest item it has rather than returning nothing.
+            if (within.Count == 0 && oneShot)
+            {
+                var floor = pool.Min(i => Config.Scale.DifficultyOf(i.Level));
+                within = pool
+                    .Where(i => Math.Abs(
+                        Config.Scale.DifficultyOf(i.Level) - floor) < 1e-9)
+                    .ToList();
+            }
+
+            pool = within;
 
             if (pool.Count == 0) continue;
 
@@ -164,9 +211,32 @@ public sealed class PlacementEngine(
     }
 
     /// <summary>Computes the final per-skill levels and the spelling diagnostic.</summary>
+    /// <remarks>
+    /// Skills are measured separately — never averaged into one number — with
+    /// one exception that ADR-098 introduced and names openly.
+    ///
+    /// Speaking and Writing are now one question each. One response cannot
+    /// place anybody: the population prior dominates it, so every learner
+    /// alive lands within a band or two of the middle whatever they wrote, and
+    /// a learner who answered the whole test wrongly is told their Writing is
+    /// B1. Measured, it was A2+ to B2 across the entire range of behaviour.
+    ///
+    /// So a single-response skill is estimated against a prior centred on what
+    /// the rest of the test showed, rather than on the population mean. It
+    /// borrows the <i>location</i> and not the <i>certainty</i>: the prior keeps
+    /// its usual width, so the one produced answer still moves the band about
+    /// as far as one answer should, and the reported confidence — computed from
+    /// that answer alone — stays near zero. The learner is shown that as
+    /// "provisional", and the level engine replaces it from real sessions.
+    /// Reading and Listening have three answers each and are untouched.
+    /// </remarks>
     public PlacementOutcome Complete(IReadOnlyList<PlacementResponse> responses)
     {
         var levels = new List<PlacementSkillOutcome>();
+
+        var whole = responses
+            .Select(r => new ScoredResponse(r.ItemId, r.Difficulty, r.Score))
+            .ToList();
 
         foreach (var skill in Config.SkillOrder)
         {
@@ -183,14 +253,23 @@ public sealed class PlacementEngine(
                 continue;
             }
 
-            var estimate = Estimator.Estimate(forSkill
+            var own = forSkill
                 .Select(r => new ScoredResponse(r.ItemId, r.Difficulty, r.Score))
-                .ToList());
+                .ToList();
+
+            var precision = Estimator.Estimate(own);
+
+            var band = own.Count > 1
+                ? precision
+                : new AbilityEstimator(Config.Scale with
+                {
+                    PriorMean = Estimator.Estimate(whole).Theta,
+                }).Estimate(own);
 
             levels.Add(new PlacementSkillOutcome(
                 skill,
-                Level: Config.Scale.LevelFor(estimate.Theta),
-                Confidence: Config.Scale.ConfidenceFor(estimate.StandardError),
+                Level: Config.Scale.LevelFor(band.Theta),
+                Confidence: Config.Scale.ConfidenceFor(precision.StandardError),
                 Accuracy: accuracy));
         }
 
@@ -246,35 +325,68 @@ public sealed record PlacementConfig
 {
     public AbilityScale Scale { get; init; } = new();
 
+    /// <summary>
+    /// The order the placement test asks its skills in — the pipeline's order
+    /// (ADR-001, ADR-087), so the test reads as a preview of the journey.
+    /// </summary>
+    /// <remarks>
+    /// Spelling is not in it. It was four questions that produced no level —
+    /// only the choice between letter tiles and free typing, which the first
+    /// real spelling session settles anyway (ADR-098). Its items are still in
+    /// the bank, so putting it back is this list plus its limits.
+    ///
+    /// Speaking and Writing come last for a reason that now matters more than
+    /// the pipeline order: each has a single question, and it is chosen from
+    /// what Reading and Listening already established.
+    /// </remarks>
     public IReadOnlyList<SkillType> SkillOrder { get; init; } =
     [
         SkillType.Reading,
         SkillType.Listening,
         SkillType.Speaking,
         SkillType.Writing,
-        SkillType.Spelling,
     ];
 
-    /// <summary>Receptive skills — cheap items, so we can afford precision.</summary>
-    public SkillLimits CefrLimits { get; init; } = new(3, 6, 0.40);
+    /// <summary>
+    /// Receptive skills: three questions each, no early stop.
+    /// </summary>
+    /// <remarks>
+    /// Fixed length rather than adaptive stopping, because at three items the
+    /// stopping rule can only ever cost a question — and a test whose length
+    /// varies between learners is harder to describe honestly before they
+    /// start it. The ladder still adapts: easiest first, then climbing with the
+    /// estimate, which is the beginner / middle / harder shape asked for.
+    /// </remarks>
+    public SkillLimits CefrLimits { get; init; } = new(3, 3, 0);
 
     /// <summary>
-    /// Productive skills. Each item costs the learner a written or spoken
-    /// answer and an AI evaluation, so the caps are tighter and the SE target
-    /// looser; the level engine refines these from real sessions afterwards.
+    /// Productive skills: one question each.
     /// </summary>
-    public SkillLimits ProductionLimits { get; init; } = new(2, 3, 0.55);
+    /// <remarks>
+    /// One written answer and one spoken one. Each costs the learner real
+    /// effort and costs the service an AI evaluation, and three of them were
+    /// where the old test lost people. A single item cannot produce a
+    /// confident band — <see cref="PlacementOutcome.HasLowConfidence"/> will
+    /// say so — and the level engine refines it from real sessions.
+    /// </remarks>
+    public SkillLimits ProductionLimits { get; init; } = new(1, 1, 0);
 
+    /// <summary>
+    /// Unused while Spelling is out of <see cref="SkillOrder"/> (ADR-098).
+    /// </summary>
     public SkillLimits SpellingLimits { get; init; } = new(4, 4, 0);
 
     /// <summary>Spelling accuracy at or above which free typing is the start.</summary>
     public double FreeTypingThreshold { get; init; } = 0.75;
 
     /// <summary>
-    /// Shown to the learner as "about N questions" — an adaptive test has no
-    /// fixed length.
+    /// How many questions the test asks: 3 + 3 + 1 + 1 (ADR-098).
     /// </summary>
-    public int EstimatedTotalItems { get; init; } = 20;
+    /// <remarks>
+    /// Exact now rather than an estimate, because nothing stops early any
+    /// more. It stays a tunable: the client only reads it to draw progress.
+    /// </remarks>
+    public int EstimatedTotalItems { get; init; } = 8;
 
     public SkillLimits LimitsFor(SkillType skill) => skill switch
     {

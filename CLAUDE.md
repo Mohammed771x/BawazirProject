@@ -14,7 +14,7 @@ lifecycle: added with an explicit intended meaning → validated across five ski
 gaps → Mature → Active Vocabulary (reused by AI, exposure-prioritised) → Archive (never deleted).
 
 ```
-Reading → 2d → Listening → 2d → Speaking → 2d → Writing → 2d → Spelling → Active → Archive
+Reading → 2d → Listening → 2d → Speaking → 2d → Spelling → 2d → Writing → Active → Archive
 ```
 
 The MVP is equally an **algorithm-validation experiment**: everything meaningful must be

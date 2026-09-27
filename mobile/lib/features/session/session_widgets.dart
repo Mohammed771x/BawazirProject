@@ -12,6 +12,7 @@ import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/theme/skill_visuals.dart';
 import '../../core/widgets/app_widgets.dart';
+import 'clip_playback.dart';
 
 /// Renders generated content with the target words underlined/highlighted,
 /// exactly as the documents require — visible, but never explained inline.
@@ -566,6 +567,148 @@ class _ReplayPlayerState extends ConsumerState<ReplayPlayer> {
   }
 }
 
+/// How the target word sounds, beside the question that asks about it.
+///
+/// Listening is the one skill where a target word is never heard on its own.
+/// It arrives buried in a sentence, at speaking speed, once — and then the
+/// learner is asked what it means. A learner who did not catch the word is not
+/// being tested on meaning at all at that point; they are being tested on
+/// whether they heard it, which the comprehension questions already do
+/// (ADR-081).
+///
+/// So the word is offered separately, at both speeds, and only ever the word:
+/// the sentence around it stays where it was, because that is the test.
+///
+/// Nothing here can leak an answer. These items ask what the word *means*, and
+/// the options are meanings. It is deliberately not offered on the
+/// comprehension questions, which carry no word of their own.
+///
+/// **It does not show the word.** Listening's whole task is that the learner
+/// never sees it: the word arrives as sound, inside a sentence, and they are
+/// asked what it meant. Printing it here — as the button's label, or in a
+/// tooltip — would hand over the spelling and make the exercise reading with
+/// audio attached (ADR-085). The word is still *passed in*, because the device
+/// has to be given something to say; it is simply never drawn.
+class WordPronunciation extends ConsumerWidget {
+  const WordPronunciation({
+    super.key,
+    required this.word,
+    required this.color,
+    this.revealSpelling = false,
+  });
+
+  final String word;
+  final Color color;
+
+  /// Whether the word may be shown as well as heard.
+  ///
+  /// False everywhere today, and the default, because Listening is the only
+  /// caller. It exists so a future Reading use — where the word is on screen
+  /// anyway — states that it is choosing to show it, rather than quietly
+  /// turning the rule off (ADR-085).
+  final bool revealSpelling;
+
+  /// Distinct ids per speed, so the two controls never light up together.
+  String get _normalId => 'pronounce:$word';
+  String get _slowId => 'pronounce-slow:$word';
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+    // Watched, not read: when an utterance ends by itself these controls have
+    // to return to idle without being told.
+    final speech = ref.watch(speechServiceProvider);
+    final normalPlaying = speech.isSpeakingId(_normalId);
+    final slowPlaying = speech.isSpeakingId(_slowId);
+
+    return AppCard(
+      color: context.palette.subtleSurface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.record_voice_over_rounded, size: 18, color: color),
+              const SizedBox(width: AppSpacing.xs),
+              Expanded(
+                child: Text(s.hearTheWord, style: context.text.labelMedium),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          // Both children are flexed. The theme gives every FilledButton and
+          // OutlinedButton `Size.fromHeight(54)` — `Size(double.infinity, 54)`
+          // — so an unflexed one inside a Row demands infinite width and fails
+          // layout outright. That is what broke the sentence player above.
+          Row(
+            children: [
+              Expanded(
+                flex: 2,
+                // The tooltip is part of the screen too: a screen reader says
+                // it aloud and a long press shows it, so it may not carry the
+                // spelling either (ADR-085).
+                child: Tooltip(
+                  message: revealSpelling
+                      ? s.hearTheWordNormally(word)
+                      : s.hearTheWord,
+                  child: FilledButton.tonalIcon(
+                    onPressed: () => unawaited(speech.toggle(_normalId, word)),
+                    icon: Icon(
+                      normalPlaying
+                          ? Icons.stop_rounded
+                          : Icons.volume_up_rounded,
+                    ),
+                    label: revealSpelling
+                        // The word is English inside an Arabic interface, so it
+                        // is pinned left-to-right. A long one shortens rather
+                        // than bursting the button: the label is decoration
+                        // here, and the control works when it is clipped.
+                        ? EnglishText(
+                            word,
+                            style: context.text.labelLarge,
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          )
+                        : Text(s.playAudio),
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Expanded(
+                child: Tooltip(
+                  message: revealSpelling
+                      ? s.hearTheWordSlowly(word)
+                      : s.slowSpeed,
+                  child: OutlinedButton.icon(
+                    onPressed: () => unawaited(
+                      speech.toggle(_slowId, word, rate: SpeechRate.slow),
+                    ),
+                    icon: Icon(
+                      slowPlaying
+                          ? Icons.stop_rounded
+                          : Icons.slow_motion_video_rounded,
+                      size: 18,
+                    ),
+                    label: Text(s.slowSpeed),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The sentence a Listening question is about, as its own small player.
+///
+/// The same control the clip uses, in a card rather than a console: it waits to
+/// be started, the face states what the next tap does, and pausing continues
+/// from where it stopped rather than beginning again (ADR-080). It is the same
+/// engine underneath — `ClipPlayback` — so the two can no longer drift apart,
+/// which is exactly how one of them ended up carrying a bug the other did not.
 class SentencePlayer extends ConsumerStatefulWidget {
   const SentencePlayer({super.key, required this.text, required this.color});
 
@@ -577,40 +720,69 @@ class SentencePlayer extends ConsumerStatefulWidget {
 }
 
 class _SentencePlayerState extends ConsumerState<SentencePlayer> {
-  bool _played = false;
-  bool _audioFailed = false;
+  // Not `final`: the next question arrives as a new [text] on this same State
+  // and the controller is rebuilt around it — see [didUpdateWidget].
+  late ClipPlayback _clip;
+
+  /// Where the finger is while dragging. The bar follows it; the audio does
+  /// not move until it is let go.
+  double? _scrubbing;
 
   @override
   void initState() {
     super.initState();
-    // Play once on arrival so the learner is not left looking at a silent card.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _speak());
+    // No auto-play. This card used to speak the moment the question appeared,
+    // on the argument that a silent card looks broken — but the learner is
+    // still reading the question, and a voice that starts unasked is one the
+    // learner's first act is to silence. The control says what it offers.
+    _clip = _newClip();
   }
 
-  Future<void> _speak({bool slow = false}) async {
-    if (!mounted) return;
-    setState(() => _played = true);
+  ClipPlayback _newClip() => ClipPlayback(
+        speech: ref.read(speechServiceProvider),
+        text: widget.text,
+        idPrefix: 'sentence',
+      )..addListener(_repaint);
 
-    final ok = await ref.read(speechServiceProvider).speak(
-          'sentence:${widget.text.hashCode}',
-          widget.text,
-          rate: slow ? SpeechRate.slow : SpeechRate.normal,
-        );
-    if (mounted && !ok) setState(() => _audioFailed = true);
-  }
-
-  Future<void> _toggle({bool slow = false}) async {
-    final speech = ref.read(speechServiceProvider);
-    if (speech.isSpeakingId('sentence:${widget.text.hashCode}')) {
-      await speech.stop();
-      return;
+  @override
+  void didUpdateWidget(SentencePlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Moving to the next question does **not** build a new player. Same type,
+    // same position in the tree, no key — so Flutter keeps this State and only
+    // hands it a new [text]. A controller built once in `initState` therefore
+    // outlived the question it was made for: the card showed the new sentence
+    // and the voice read the old one, which on a listening test is the
+    // previous question's evidence played over this one.
+    //
+    // Rebuilt here rather than pinned with a `ValueKey` at the call site: a key
+    // is a promise every future caller has to remember, and the widget that
+    // owns the text is the one that can be sure. Disposing the old controller
+    // also silences it, so nothing follows the learner forward.
+    if (widget.text != oldWidget.text) {
+      _clip.removeListener(_repaint);
+      _clip.dispose();
+      _scrubbing = null;
+      _clip = _newClip();
     }
-    await _speak(slow: slow);
+  }
+
+  void _repaint() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _clip.removeListener(_repaint);
+    // Nothing spoken here may follow the learner to the next question.
+    _clip.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(stringsProvider);
+    final playing = _clip.isPlaying;
+
     return AppCard(
       color: context.palette.subtleSurface,
       child: Column(
@@ -623,51 +795,97 @@ class _SentencePlayerState extends ConsumerState<SentencePlayer> {
                 child: Text(s.listenToSentence,
                     style: context.text.titleSmall),
               ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          // Both buttons are flexed. The theme gives every FilledButton and
-          // OutlinedButton `Size.fromHeight(54)` — which is
-          // `Size(double.infinity, 54)` — so an unflexed one inside a Row
-          // demands infinite width and fails layout outright. That is what
-          // broke this player: the replay button was flexed, the slow-speed
-          // button next to it was not.
-          Row(
-            children: [
-              Expanded(
-                flex: 2,
-                child: Builder(builder: (context) {
-                  final playing = ref
-                      .watch(speechServiceProvider)
-                      .isSpeakingId('sentence:${widget.text.hashCode}');
-
-                  return FilledButton.tonalIcon(
-                    onPressed: () => _toggle(),
-                    icon: Icon(playing
-                        ? Icons.stop_rounded
-                        : (_played
-                            ? Icons.replay_rounded
-                            : Icons.play_arrow_rounded)),
-                    label: Text(playing
-                        ? s.stopAudio
-                        : (_played ? s.playAgain : s.playAudio)),
-                  );
-                }),
+              // Back to the first word. An icon in the header rather than a
+              // second button under the play one: as a button it had a third
+              // of a phone's width and wrapped "Back to the start" onto two
+              // cramped lines, and it left the primary control sharing space
+              // with something used far less often.
+              IconButton(
+                onPressed: () => unawaited(_clip.seekTo(0)),
+                tooltip: s.jumpToStart,
+                iconSize: 20,
+                visualDensity: VisualDensity.compact,
+                color: widget.color,
+                icon: const Icon(Icons.first_page_rounded),
               ),
-              const SizedBox(width: AppSpacing.xs),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _toggle(slow: true),
-                  icon: const Icon(Icons.slow_motion_video_rounded, size: 18),
-                  label: Text(s.slowSpeed),
+              // How far in, and how long altogether — the same clock the
+              // clip carries, and estimated the same way (ADR-082).
+              Text(
+                s.clipClock(
+                  formatClipTime(_clip.elapsed),
+                  formatClipTime(_clip.total),
+                ),
+                style: context.text.labelSmall?.copyWith(
+                  color: context.colors.onSurface.withValues(alpha: 0.7),
+                  fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
             ],
           ),
+          const SizedBox(height: AppSpacing.sm),
+          // The full width, because it is the only thing on this card the
+          // learner presses often. The theme gives every FilledButton
+          // `Size.fromHeight(54)` — `Size(double.infinity, 54)` — so it must
+          // either fill the row or be flexed inside one; an unflexed one
+          // demands infinite width and fails layout outright.
+          FilledButton.tonalIcon(
+            onPressed: () => unawaited(_clip.toggle()),
+            // The same three faces as the clip, for the same reason: the icon
+            // has to state what the *next* tap does, and a replay face on a
+            // paused sentence promises the wrong thing.
+            icon: Icon(playing
+                ? Icons.pause_rounded
+                : (_clip.finished
+                    ? Icons.replay_rounded
+                    : Icons.play_arrow_rounded)),
+            // The state, not the next tap — the icon already carries the verb
+            // (ADR-082).
+            label: Text(playing
+                ? s.audioPlaying
+                : (_clip.finished
+                    ? s.audioFinished
+                    : (_clip.started ? s.audioPaused : s.playAudio))),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          // A track here as well. Without one the learner can pause and
+          // continue but cannot go *back* a few words, which is the thing a
+          // sentence heard once is most often paused for. The unplayed part is
+          // drawn in `trackRest`, strongly enough to show where it ends.
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 6,
+              activeTrackColor: widget.color,
+              inactiveTrackColor: context.palette.trackRest,
+              thumbColor: widget.color,
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+            ),
+            child: Slider(
+              value: (_scrubbing ?? _clip.position)
+                  .clamp(0, _clip.totalChars.toDouble()),
+              max: _clip.totalChars.toDouble(),
+              onChanged: (value) => setState(() => _scrubbing = value),
+              onChangeEnd: (value) {
+                setState(() => _scrubbing = null);
+                unawaited(_clip.seekTo(value));
+              },
+            ),
+          ),
+          // Speed is a mode, not a second play button. It used to be one, so
+          // "slow" always restarted the sentence and there was no way to be
+          // playing slowly and pause. It now changes the voice in place and
+          // carries on from the line being spoken.
+          SegmentedButton<bool>(
+            segments: [
+              ButtonSegment(value: false, label: Text(s.normalSpeed)),
+              ButtonSegment(value: true, label: Text(s.slowSpeed)),
+            ],
+            selected: {_clip.slow},
+            onSelectionChanged: (value) => _clip.setSlow(value.first),
+          ),
           // If the device cannot speak, showing the sentence is a worse
           // listening exercise but a far better outcome than a learner stuck on
           // a question they can never hear (demo review §51).
-          if (_audioFailed) ...[
+          if (_clip.audioFailed) ...[
             const SizedBox(height: AppSpacing.sm),
             AppCard(
               color: context.palette.warningSurface,

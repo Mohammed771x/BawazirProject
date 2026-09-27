@@ -30,7 +30,7 @@ void main() {
 
   testWidgets('mashing a skill tile does not open a stack of sessions',
       (tester) async {
-    await bootAndSignIn(tester);
+    await bootAndSignIn(tester, latencyScale: 1);
 
     // Six taps in the time it takes one session to load. A learner does this
     // whenever the app feels slow.
@@ -50,7 +50,7 @@ void main() {
 
   testWidgets('leaving a session immediately after starting it is safe',
       (tester) async {
-    await bootAndSignIn(tester);
+    await bootAndSignIn(tester, latencyScale: 1);
 
     await tester.tap(find.text('Reading').first);
     // Deliberately not settled: the passage is still being fetched.
@@ -62,11 +62,17 @@ void main() {
     // The response arrives after the screen is gone. Anything that touches
     // state here — a setState, a provider read — throws on a dead widget.
     await tester.pump(const Duration(seconds: 2));
+
+    // Starting a session is a write, so its late arrival refreshes the hub
+    // behind the learner (ADR-094). Settled here so that refresh finishes
+    // inside the test rather than outliving it — the app is doing the right
+    // thing, and an unsettled test would report it as a pending timer.
+    await tester.pumpAndSettle();
     expectNoCrash(tester, 'leaving a session while it was still loading');
   });
 
   testWidgets('walking away while audio is playing stops it', (tester) async {
-    await bootAndSignIn(tester);
+    await bootAndSignIn(tester, latencyScale: 1);
 
     await tester.tap(find.text('Listening').first);
     await tester.pumpAndSettle();
@@ -96,7 +102,7 @@ void main() {
   });
 
   testWidgets('flicking between tabs at speed', (tester) async {
-    await bootAndSignIn(tester);
+    await bootAndSignIn(tester, latencyScale: 1);
 
     // Eight round trips: the pattern of someone looking for something they
     // cannot find.
@@ -112,7 +118,7 @@ void main() {
 
   testWidgets('typing into the word search faster than it can answer',
       (tester) async {
-    await bootAndSignIn(tester);
+    await bootAndSignIn(tester, latencyScale: 1);
 
     await tester.tap(find.widgetWithText(FloatingActionButton, 'Add word'));
     await tester.pumpAndSettle();
@@ -133,7 +139,7 @@ void main() {
 
   testWidgets('a session survives being answered as fast as it can be tapped',
       (tester) async {
-    await bootAndSignIn(tester);
+    await bootAndSignIn(tester, latencyScale: 1);
 
     await tester.tap(find.text('Reading').first);
     await tester.pumpAndSettle();
@@ -174,7 +180,7 @@ void main() {
 
   testWidgets('changing the language in the middle of everything',
       (tester) async {
-    await bootAndSignIn(tester);
+    await bootAndSignIn(tester, latencyScale: 1);
 
     await tester.tap(find.text('Settings').last);
     await tester.pumpAndSettle();
@@ -195,7 +201,7 @@ void main() {
   });
 
   testWidgets('signing out from inside a session', (tester) async {
-    await bootAndSignIn(tester);
+    await bootAndSignIn(tester, latencyScale: 1);
 
     await tester.tap(find.text('Reading').first);
     await tester.pumpAndSettle();

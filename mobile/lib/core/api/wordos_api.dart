@@ -141,6 +141,42 @@ abstract class WordOsApi {
     required String word,
   });
 
+  /// Rewrites the Arabic meaning of a word the learner already owns (ADR-101).
+  ///
+  /// The meaning may change; the word may not. A learner who decides `create`
+  /// is better written `يصنع` than `أنشأ` keeps every day of progress on it —
+  /// same pipeline position, same schedule, same attempts. Nothing about the
+  /// journey moves.
+  ///
+  /// Throws [MeaningIsAnotherWordException] when the dictionary recognises the
+  /// wording as belonging to a **different** English word — `يحجز` is `book`,
+  /// not `create`. That one carries the candidates, so the caller can offer the
+  /// swap; there is no override for it, because insisting is how one word
+  /// silently becomes another.
+  ///
+  /// Throws [MeaningRejectedException] when the dictionary has never seen the
+  /// wording and the checker does not believe it fits this word. That refusal
+  /// cannot name another owner, so it is the softer one and [acceptAnyway]
+  /// overrules it — the same bargain ADR-074 struck on the way in.
+  Future<Word> changeWordMeaning({
+    required String wordId,
+    required String meaning,
+    bool acceptAnyway = false,
+  });
+
+  /// Swaps this word for the sense the learner actually meant (ADR-101).
+  ///
+  /// Called only after [changeWordMeaning] has said the meaning belongs to
+  /// another word and the learner has agreed. One request, because it is one
+  /// decision: the old word is removed and the new one added, starting from
+  /// Reading with nothing passed — which is not a penalty but the truthful
+  /// statement that they have never been tested on it.
+  Future<Word> replaceWord({
+    required String wordId,
+    required String meaning,
+    required String senseId,
+  });
+
   /// Removes a word from the learner's vocabulary (ADR-071).
   ///
   /// Gone as far as this app is concerned: it leaves every list, no session
@@ -346,6 +382,23 @@ class MeaningRejectedException extends ApiException {
   /// The two deserve different words to the learner: "you meant the right
   /// thing, spelled slightly wrong" is not "that is not what this word means".
   bool get isSpellingOnly => corrected != null;
+}
+
+/// The wording is a real meaning — of a different English word (ADR-101).
+///
+/// The dictionary can name the owner, which is the whole difference between
+/// "that is wrong" and "that is `book`". Deliberately not a
+/// [MeaningRejectedException]: that one is a question the learner may answer
+/// "keep mine" to, and this one is an offer to swap words instead.
+class MeaningIsAnotherWordException extends ApiException {
+  const MeaningIsAnotherWordException({
+    required String message,
+    required this.candidates,
+    int? statusCode,
+  }) : super('MEANING_IS_ANOTHER_WORD', message, statusCode: statusCode);
+
+  /// The words this meaning does belong to, commonest first.
+  final List<WordCandidate> candidates;
 }
 
 /// The checker does not believe the typed word is English (ADR-075).

@@ -85,7 +85,8 @@ class WordTile extends ConsumerWidget {
                               style: context.text.titleMedium),
                         ),
                         // Every vocabulary item can be heard (§13, §44).
-                        SpeakerButton(
+                        // Both speeds, here as everywhere else (ADR-083).
+                        WordSpeakerButtons(
                           id: 'word:${word.id}',
                           text: word.text,
                           size: 18,

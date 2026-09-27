@@ -208,8 +208,14 @@ public class PlacementAnswer
 ///
 /// v2 (2026-08-17): Speaking answered by voice rather than typed, nine grammar
 /// items added as evidence for Speaking and Writing, per-answer evidence stored.
+///
+/// v3 (2026-09-18): eight questions instead of about twenty — three Reading,
+/// three Listening, one Speaking, one Writing. Spelling left the test, and the
+/// grammar items with it, since they were only ever asked as extra Writing
+/// items (ADR-098). A v3 band rests on much less evidence than a v2 one, which
+/// is exactly why the version is recorded.
 /// </remarks>
 public static class PlacementVersion
 {
-    public const int Current = 2;
+    public const int Current = 3;
 }

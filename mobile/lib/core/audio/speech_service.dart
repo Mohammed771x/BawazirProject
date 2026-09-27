@@ -24,17 +24,66 @@ class SpeechService extends ChangeNotifier {
   SpeechService({SpeechProvider? provider})
       : _provider = provider ?? DeviceSpeechProvider() {
     _provider.onComplete = _handleComplete;
+    _provider.onWordBoundary = _handleWordBoundary;
   }
 
   final SpeechProvider _provider;
 
   String? _utteranceId;
   Completer<void>? _utterance;
+  int _interruptions = 0;
+  bool _disposed = false;
+  int _spokenOffset = 0;
+
+  /// How far into the current utterance the voice has reached, in characters.
+  ///
+  /// Zero until the engine reports a word, and zero again for an engine that
+  /// never reports one — so a caller reads it as *at least this far*, never as
+  /// the whole truth (ADR-082).
+  int get spokenOffset => _spokenOffset;
+
 
   /// What is speaking right now, or null when nothing is.
   String? get utteranceId => _utteranceId;
 
+  /// How many times playback has been cut short rather than allowed to end —
+  /// an explicit [stop], or a new utterance taking the voice over.
+  ///
+  /// A caller that speaks a *sequence* cannot do without this. Text-to-speech
+  /// reports a cancelled utterance and a finished one through the same
+  /// callback, so a loop that waits for one sentence and then starts the next
+  /// has no way to tell "that line ended" from "somebody stopped me". The
+  /// Listening clip is exactly such a loop, and without this it carried on
+  /// reading over the questions it was about to be tested on — which is to say
+  /// it read the answers out (ADR-080).
+  ///
+  /// Read it once the voice is yours, then compare after every sentence: a
+  /// change means the clip is no longer yours to continue.
+  int get interruptions => _interruptions;
+
   bool get isSpeaking => _utteranceId != null;
+
+  /// Every call here is asynchronous and every caller is a widget, so a screen
+  /// that silences the voice as it goes away lands *after* the scope holding
+  /// this service has been torn down. `ChangeNotifier` asserts on a notify
+  /// after disposal, which would surface a teardown race as a crash in the
+  /// screen that did the right thing. So the service simply stops working
+  /// instead: it can no longer speak, and it no longer tells anyone anything.
+  void _notify() {
+    if (_disposed) return;
+    notifyListeners();
+  }
+
+  /// One word further in. Notifies rather than calling anyone back: the
+  /// service is app-wide and a single callback field would belong to whichever
+  /// player registered last — which is not necessarily the one speaking. Every
+  /// player is already a listener, and reads this only while
+  /// [isSpeakingId] says the voice is its own.
+  void _handleWordBoundary(int offset) {
+    if (_disposed || _utteranceId == null) return;
+    _spokenOffset = offset;
+    _notify();
+  }
 
   /// True when [id] is the utterance currently playing.
   ///
@@ -57,6 +106,7 @@ class SpeechService extends ChangeNotifier {
     String text, {
     SpeechRate rate = SpeechRate.normal,
   }) async {
+    if (_disposed) return;
     if (_utteranceId == id) {
       await stop();
       return;
@@ -70,16 +120,22 @@ class SpeechService extends ChangeNotifier {
     String text, {
     SpeechRate rate = SpeechRate.normal,
   }) async {
+    if (_disposed) return false;
     await stop();
+    if (_disposed) return false;
 
     _utteranceId = id;
-    notifyListeners();
+    // A fresh utterance starts at its beginning, whatever the last one
+    // reached. Leaving the old offset in place would put a new sentence's
+    // playhead wherever the previous sentence happened to stop.
+    _spokenOffset = 0;
+    _notify();
 
     final started = await _provider.speak(text, rate: rate);
     if (!started) {
       // Nothing is playing, so the UI must not claim otherwise.
       _utteranceId = null;
-      notifyListeners();
+      _notify();
     }
     return started;
   }
@@ -108,32 +164,50 @@ class SpeechService extends ChangeNotifier {
       );
       return true;
     } on TimeoutException {
-      await stop();
+      // A platform that never reported completion — not somebody stopping us.
+      // Counting it as an interruption would halt a sequence on the one
+      // failure the timeout exists to paper over, so it is not counted.
+      await stop(interrupting: false);
       return true;
     } finally {
       _utterance = null;
     }
   }
 
-  Future<void> stop() async {
-    if (_utteranceId == null) return;
+  /// Silences whatever is speaking.
+  ///
+  /// [interrupting] is false only where stopping *is* the end of the utterance
+  /// rather than something cutting it short — see the completion timeout
+  /// above. Everywhere else the default holds, including the [stop] [speak]
+  /// performs before taking the voice: replacing an utterance interrupts it.
+  Future<void> stop({bool interrupting = true}) async {
+    if (_disposed || _utteranceId == null) return;
 
+    if (interrupting) _interruptions++;
     await _provider.stop();
     _handleComplete();
   }
 
   void _handleComplete() {
+    // Completed even when disposed: something is awaiting this, and leaving it
+    // hanging is how a torn-down screen keeps a future alive for ever.
     final pending = _utterance;
     if (pending != null && !pending.isCompleted) pending.complete();
 
     if (_utteranceId != null) {
       _utteranceId = null;
-      notifyListeners();
+      _notify();
     }
   }
 
   @override
   void dispose() {
+    _disposed = true;
+    _utteranceId = null;
+    _provider.onWordBoundary = null;
+    // Anyone still waiting on the voice is released rather than left hanging.
+    final pending = _utterance;
+    if (pending != null && !pending.isCompleted) pending.complete();
     _provider.onComplete = null;
     unawaited(_provider.dispose());
     super.dispose();

@@ -12,10 +12,14 @@ class MockWordOsApi implements WordOsApi {
     required this.tokenReader,
     MockEngine? engine,
     this.latencyScale = 1.0,
+    this.onChanged,
   }) : engine = engine ?? MockEngine();
 
   final MockEngine engine;
   final String? Function() tokenReader;
+
+  /// Called after every call that changed something (ADR-094).
+  final void Function()? onChanged;
 
   /// Multiplier on the artificial latency. Tests pass `0` so no timer outlives
   /// the widget tree — a fire-and-forget call in `dispose` would otherwise be
@@ -24,6 +28,24 @@ class MockWordOsApi implements WordOsApi {
 
   static const Duration _latency = Duration(milliseconds: 320);
   static const Duration _aiLatency = Duration(milliseconds: 900);
+
+  /// A call that changes something, and says so afterwards.
+  ///
+  /// The real client announces these from its HTTP verbs, where the
+  /// classification is free (ADR-094). A stand-in has no verbs, so the same
+  /// list lives here — every method that is a POST, PUT, PATCH or DELETE in
+  /// `docs/05-API-CONTRACT.md` goes through this instead of [_delay].
+  ///
+  /// It matters that the mock mirrors it: every widget test in the suite runs
+  /// against this class, so a screen that failed to refresh would pass its
+  /// tests here and fail on a real phone.
+  ///
+  /// Only on success — a write that threw changed nothing.
+  Future<T> _write<T>(T Function() body, [Duration? duration]) async {
+    final result = await _delay(body, duration);
+    onChanged?.call();
+    return result;
+  }
 
   Future<T> _delay<T>(T Function() body, [Duration? duration]) async {
     final base = duration ?? _latency;
@@ -44,7 +66,7 @@ class MockWordOsApi implements WordOsApi {
     String? phoneCountryCode,
     String? phoneNumber,
   }) =>
-      _delay(() => engine.register(
+      _write(() => engine.register(
             email,
             password,
             displayName,
@@ -57,14 +79,14 @@ class MockWordOsApi implements WordOsApi {
     required String email,
     required String password,
   }) =>
-      _delay(() => engine.login(email, password));
+      _write(() => engine.login(email, password));
 
   @override
-  Future<void> logout() => _delay(() => engine.logout(tokenReader()));
+  Future<void> logout() => _write(() => engine.logout(tokenReader()));
 
   @override
   Future<void> requestPasswordReset(String email) =>
-      _delay(() => engine.requestPasswordReset(email));
+      _write(() => engine.requestPasswordReset(email));
 
   @override
   Future<void> resetPassword({
@@ -72,7 +94,7 @@ class MockWordOsApi implements WordOsApi {
     required String code,
     required String newPassword,
   }) =>
-      _delay(() => engine.resetPassword(
+      _write(() => engine.resetPassword(
             email: email,
             code: code,
             newPassword: newPassword,
@@ -87,11 +109,11 @@ class MockWordOsApi implements WordOsApi {
 
   @override
   Future<UserProfile> saveInterests(List<String> interests) =>
-      _delay(() => engine.saveInterests(_user, interests));
+      _write(() => engine.saveInterests(_user, interests));
 
   @override
   Future<PlacementStep> startPlacement() =>
-      _delay(() => engine.startPlacement(_user), _aiLatency);
+      _write(() => engine.startPlacement(_user), _aiLatency);
 
   @override
   Future<PlacementStep> answerPlacement({
@@ -99,14 +121,14 @@ class MockWordOsApi implements WordOsApi {
     required String itemId,
     required String answer,
   }) =>
-      _delay(
+      _write(
         () => engine.answerPlacement(_user, sessionId, itemId, answer),
         const Duration(milliseconds: 380),
       );
 
   @override
   Future<PlacementResult> completePlacement(String sessionId) =>
-      _delay(() => engine.completePlacement(_user, sessionId), _aiLatency);
+      _write(() => engine.completePlacement(_user, sessionId), _aiLatency);
 
   @override
   Future<HubState> hub() => _delay(() => engine.hub(_user));
@@ -121,7 +143,7 @@ class MockWordOsApi implements WordOsApi {
 
   @override
   Future<Word> addWord(WordCandidate candidate) =>
-      _delay(() => engine.addWord(_user, candidate), _aiLatency);
+      _write(() => engine.addWord(_user, candidate), _aiLatency);
 
   @override
   Future<Word> addWordWithMeaning({
@@ -129,7 +151,7 @@ class MockWordOsApi implements WordOsApi {
     required String meaning,
     bool acceptAnyway = false,
   }) =>
-      _delay(
+      _write(
         () => engine.addWordWithMeaning(
           _user,
           text: text,
@@ -144,14 +166,35 @@ class MockWordOsApi implements WordOsApi {
     required String sessionId,
     required String word,
   }) =>
-      _delay(
+      _write(
         () => engine.addWordFromPassage(_user, sessionId: sessionId, word: word),
         _aiLatency,
       );
 
   @override
+  Future<Word> changeWordMeaning({
+    required String wordId,
+    required String meaning,
+    bool acceptAnyway = false,
+  }) =>
+      _write(() => engine.changeWordMeaning(
+            _user,
+            wordId,
+            meaning: meaning,
+            acceptAnyway: acceptAnyway,
+          ));
+
+  @override
+  Future<Word> replaceWord({
+    required String wordId,
+    required String meaning,
+    required String senseId,
+  }) =>
+      _write(() => engine.replaceWord(_user, wordId, senseId: senseId));
+
+  @override
   Future<void> deleteWord(String wordId) =>
-      _delay(() => engine.deleteWord(_user, wordId));
+      _write(() => engine.deleteWord(_user, wordId));
 
   @override
   Future<List<DailyReminder>> dailyReminders() =>
@@ -167,13 +210,13 @@ class MockWordOsApi implements WordOsApi {
 
   @override
   Future<SkillSession> startSession(SkillType skill, {bool practice = false}) =>
-      _delay(
+      _write(
           () => engine.startSession(_user, skill, practice: practice),
           _aiLatency);
 
   @override
   Future<SkillSession> changeSessionLevel(String sessionId, CefrLevel level) =>
-      _delay(() => engine.changeSessionLevel(_user, sessionId, level),
+      _write(() => engine.changeSessionLevel(_user, sessionId, level),
           _aiLatency);
 
   @override
@@ -182,7 +225,7 @@ class MockWordOsApi implements WordOsApi {
     required String wordId,
     required String answer,
   }) =>
-      _delay(() => engine.answerWarmup(_user, sessionId, wordId, answer));
+      _write(() => engine.answerWarmup(_user, sessionId, wordId, answer));
 
   @override
   Future<SkillSession> resumeSession(String sessionId) =>
@@ -195,7 +238,7 @@ class MockWordOsApi implements WordOsApi {
     required String answer,
     int? timeMs,
   }) =>
-      _delay(
+      _write(
         () => engine.submitAnswer(_user, sessionId, itemId, answer),
         const Duration(milliseconds: 180),
       );
@@ -206,7 +249,7 @@ class MockWordOsApi implements WordOsApi {
     required String itemId,
     required String sentence,
   }) =>
-      _delay(
+      _write(
         () => engine.submitWriting(_user, sessionId, itemId, sentence),
         _aiLatency,
       );
@@ -216,22 +259,22 @@ class MockWordOsApi implements WordOsApi {
     required String sessionId,
     required String transcript,
   }) =>
-      _delay(
+      _write(
         () => engine.submitSpeakingTurn(_user, sessionId, transcript),
         _aiLatency,
       );
 
   @override
   Future<SessionResult> completeSession(String sessionId) =>
-      _delay(() => engine.completeSession(_user, sessionId));
+      _write(() => engine.completeSession(_user, sessionId));
 
   @override
   Future<void> abandonSession(String sessionId) =>
-      _delay(() => engine.abandonSession(_user, sessionId));
+      _write(() => engine.abandonSession(_user, sessionId));
 
   @override
   Future<WeeklyReviewSession> startWeeklyReview() =>
-      _delay(() => engine.startWeeklyReview(_user), _aiLatency);
+      _write(() => engine.startWeeklyReview(_user), _aiLatency);
 
   @override
   Future<ReviewAnswerResult> answerWeeklyReview({
@@ -239,28 +282,28 @@ class MockWordOsApi implements WordOsApi {
     required String itemId,
     required String answer,
   }) =>
-      _delay(
+      _write(
         () => engine.answerWeeklyReview(_user, reviewId, itemId, answer),
         const Duration(milliseconds: 180),
       );
 
   @override
   Future<WeeklyReviewResult> completeWeeklyReview(String reviewId) =>
-      _delay(() => engine.completeWeeklyReview(_user, reviewId));
+      _write(() => engine.completeWeeklyReview(_user, reviewId));
 
   @override
   Future<SkillLevel> updateSkillLevel({
     required SkillType skill,
     required CefrLevel level,
   }) =>
-      _delay(() => engine.updateSkillLevel(_user, skill, level));
+      _write(() => engine.updateSkillLevel(_user, skill, level));
 
   @override
   Future<SkillLevel> updateDailyTarget({
     required SkillType skill,
     required int target,
   }) =>
-      _delay(() => engine.updateDailyTarget(_user, skill, target));
+      _write(() => engine.updateDailyTarget(_user, skill, target));
 
   @override
   Future<PublicConfig> config() => _delay(() => MockEngine.configuration);
@@ -299,11 +342,11 @@ class MockWordOsApi implements WordOsApi {
 
   @override
   Future<ScheduleAdvance> adminAdvanceSchedule(String userId, {int days = 2}) =>
-      _delay(() => engine.adminAdvanceSchedule(_user, userId, days: days));
+      _write(() => engine.adminAdvanceSchedule(_user, userId, days: days));
 
   @override
   Future<void> sendFeedback(String body) =>
-      _delay(() => engine.sendFeedback(_user, body));
+      _write(() => engine.sendFeedback(_user, body));
 
   @override
   Future<FeedbackPage> adminFeedback({bool? handledOnly, int page = 0}) =>

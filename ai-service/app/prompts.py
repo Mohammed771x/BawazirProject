@@ -33,7 +33,7 @@ def system_instruction() -> str:
 
 # ── Reading / Listening content ──────────────────────────────────────────────
 
-READING_PROMPT_VERSION = "reading-v4"
+READING_PROMPT_VERSION = "reading-v6"
 
 READING_SCHEMA = {
     "type": "object",
@@ -111,8 +111,45 @@ READING_SCHEMA = {
                 "properties": {
                     "word": {"type": "string"},
                     "sentence_index": {"type": "integer"},
+                    # The same question in English, for the bands that answer
+                    # it in English (ADR-088). Written only when asked for —
+                    # `reading_schema` drops both fields for the Arabic bands,
+                    # because a field in the schema is a field the model spends
+                    # tokens filling whether or not anyone reads it.
+                    "meaning_here_en": {
+                        "type": "string",
+                        "description": (
+                            "What this word means HERE, in plain English."
+                        ),
+                    },
+                    "wrong_meanings_en": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Exactly 3 English meanings that are wrong for "
+                            "this word here, in the same register as the "
+                            "correct one."
+                        ),
+                    },
+                    # The wrong answers for "what does this word mean here?".
+                    #
+                    # Written per word, from the sentence it lives in, because
+                    # the alternative is worse than it looks: the backend used
+                    # to build them from the *other target words'* meanings, so
+                    # each answer a learner got right removed an option from
+                    # every question still to come. The last word of a session
+                    # was free (ADR-084).
+                    "wrong_meanings_ar": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Exactly 3 Arabic meanings that are wrong for this "
+                            "word here, but that a learner reading this "
+                            "sentence could seriously consider."
+                        ),
+                    },
                 },
-                "required": ["word", "sentence_index"],
+                "required": ["word", "sentence_index", "wrong_meanings_ar"],
             },
         },
     },
@@ -194,20 +231,72 @@ STRUCTURE_RULE = """- STRUCTURE IT LIKE A REAL READING TEXT — the way a passag
 INLINE_GLOSSARY_MAX_WORDS = 260
 
 
-def reading_schema(*, inline_glossary: bool) -> dict:
-    """The answer shape, with or without the glossary."""
-    if inline_glossary:
-        return READING_SCHEMA
+#: How the options to "what does this word mean here?" are written.
+#:
+#: The learner's band decides (ADR-088): Arabic up to A2+, plain English through
+#: B2, the dictionary's own register above it. The style reaches this module as
+#: a string because it arrives over the wire; unknown values fall back to Arabic,
+#: which is the one that needs nothing from the model it did not already need.
+ARABIC_MEANING = "ARABIC_MEANING"
+SIMPLE_DEFINITION = "SIMPLE_DEFINITION"
+DICTIONARY_DEFINITION = "DICTIONARY_DEFINITION"
 
-    schema = {
-        "type": "object",
-        "properties": {
-            k: v for k, v in READING_SCHEMA["properties"].items()
-            if k != "glossary"
+ENGLISH_STYLES = (SIMPLE_DEFINITION, DICTIONARY_DEFINITION)
+
+
+def _targets_schema(option_style: str) -> dict:
+    """The `targets` shape, carrying only the fields this band will use."""
+    base = READING_SCHEMA["properties"]["targets"]
+    props = dict(base["items"]["properties"])
+    english = option_style in ENGLISH_STYLES
+
+    if english:
+        # The correct option for SIMPLE_DEFINITION comes from here, so it is
+        # required; for DICTIONARY_DEFINITION the lexicon's own gloss is the
+        # correct answer and this is only a cross-check the backend ignores.
+        required = ["word", "sentence_index", "wrong_meanings_en"]
+        if option_style == SIMPLE_DEFINITION:
+            required.append("meaning_here_en")
+        else:
+            props.pop("meaning_here_en", None)
+        # Arabic is not asked for at these bands: nothing reads it, and asking
+        # costs tokens and dilutes the instruction that matters.
+        props.pop("wrong_meanings_ar", None)
+    else:
+        props.pop("meaning_here_en", None)
+        props.pop("wrong_meanings_en", None)
+        required = ["word", "sentence_index", "wrong_meanings_ar"]
+
+    return {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": props,
+            "required": required,
         },
-        "required": [k for k in READING_SCHEMA["required"] if k != "glossary"],
     }
-    return schema
+
+
+def reading_schema(
+    *,
+    inline_glossary: bool,
+    option_style: str = ARABIC_MEANING,
+) -> dict:
+    """The answer shape, with or without the glossary."""
+    properties = {
+        k: v for k, v in READING_SCHEMA["properties"].items()
+        if inline_glossary or k != "glossary"
+    }
+    properties["targets"] = _targets_schema(option_style)
+
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": [
+            k for k in READING_SCHEMA["required"]
+            if inline_glossary or k != "glossary"
+        ],
+    }
 
 
 #: A second pass that fills whatever the first one left out.
@@ -277,7 +366,7 @@ def _reuse_shape(word: dict) -> str:
     return f'"{text}" (exactly)'
 
 
-def _target_line(word: dict) -> str:
+def _target_line(word: dict, option_style: str = "ARABIC_MEANING") -> str:
     """One target word, and the shape the passage must put it in.
 
     Reading and Listening are the two skills that show a word inside real
@@ -304,7 +393,101 @@ def _target_line(word: dict) -> str:
     else:
         shape = f'use exactly "{text}"'
 
-    return f'- "{text}" ({pos}) — means: {definition}\n  {shape}'
+    # The correct answer, as the learner will actually see it. It is given so
+    # the wrong answers can be written to match it — same register, same
+    # length, same kind of phrase. Without it the model writes its own style of
+    # option and the correct one stands out by looking different, which is a way
+    # of passing the question without knowing the word (ADR-084).
+    #
+    # Which answer that is depends on the band (ADR-088), so this names the one
+    # the learner will be choosing between and not simply the Arabic.
+    if option_style == DICTIONARY_DEFINITION:
+        gloss = (
+            f"\n  the correct option will be this definition, printed exactly "
+            f"as written above"
+        )
+    elif option_style == SIMPLE_DEFINITION:
+        gloss = (
+            "\n  the correct option will be your own plain-English "
+            "`meaning_here_en` for this word"
+        )
+    else:
+        meaning_ar = word.get("meaning") or ""
+        gloss = (
+            f"\n  correct Arabic meaning here: {meaning_ar}" if meaning_ar else ""
+        )
+
+    return f'- "{text}" ({pos}) — means: {definition}\n  {shape}{gloss}'
+
+
+#: What the wrong answers to "what does this word mean here?" have to be.
+#:
+#: The rule replaced a much cheaper one. The backend built each word's wrong
+#: answers out of the *other target words'* meanings, which made a session
+#: solvable by bookkeeping: five words, five meanings, and every question
+#: answered correctly removed an option from all the questions still to come.
+#: By the last word there was nothing left to choose (ADR-084).
+#: Shared by all three registers. Only the *language* of the options changes
+#: with the band, never what makes a wrong answer a good one.
+_DISTRACTOR_CRAFT = """  * Write them from THE SENTENCE THE WORD IS IN. A learner who has understood
+    the sentence should be able to rule them out; a learner who has not should
+    find each one worth considering. That is the whole test.
+  * Draw on what the word is near: another plausible reading of the same
+    sentence, the word's own other senses, a near-neighbour in meaning, a word
+    that would fit the grammar of that slot but not its sense.
+  * Match the correct answer's shape — the same register, roughly the same
+    length, the same kind of phrase. If the correct answer is one word, do not
+    write three explanatory clauses: the odd one out must not be identifiable
+    by its style.
+  * Never absurd, and never almost-right: a learner must not be able to argue
+    that two options are both correct.
+  * Each target word gets its OWN three. Do not reuse another target word's
+    answer, and do not repeat a wrong one across two words."""
+
+_ARABIC_DISTRACTORS = f"""- For EACH target word, write `wrong_meanings_ar`: exactly 3
+  Arabic meanings that are WRONG for that word in that sentence.
+{_DISTRACTOR_CRAFT}"""
+
+#: B1–B2. The learner reads English but does not read *dictionaries* in it, and
+#: an option they cannot parse is not an option — the question stops being about
+#: the word and becomes about the sentence describing it (ADR-088).
+_SIMPLE_DISTRACTORS = f"""- For EACH target word, write `meaning_here_en`: what the
+  word means IN THAT SENTENCE, in plain English a B1 learner reads without
+  stopping.
+  * Say it the way you would explain it to someone, not the way a dictionary
+    prints it: ordinary words, one idea, under about ten words.
+  * No part-of-speech labels, no "used to describe...", no semicolons stacking
+    several senses. THIS sense only — the one the sentence uses.
+  * It must still be exactly right. You are simplifying the meaning you were
+    given, not replacing it with something near it.
+- And write `wrong_meanings_en`: exactly 3 English meanings, in EXACTLY the same
+  plain register, that are WRONG for that word in that sentence.
+{_DISTRACTOR_CRAFT}"""
+
+#: B2+ and above. The lexicon's own gloss is the correct answer at this band, so
+#: the wrong ones have to be written to sit beside it without looking different.
+_DICTIONARY_DISTRACTORS = f"""- For EACH target word, write `wrong_meanings_en`:
+  exactly 3 English definitions that are WRONG for that word in that sentence.
+  * Write them AS A DICTIONARY WOULD. The correct option is the real dictionary
+    definition you were given above, printed unchanged — if your three read like
+    conversational explanations, the right answer is the one that looks like a
+    dictionary, and the learner never had to know the word.
+  * Match it closely: the same length, the same grammatical opening (a noun
+    phrase for a noun, "to ..." for a verb), the same level of detail.
+{_DISTRACTOR_CRAFT}"""
+
+
+def distractor_rule(option_style: str) -> str:
+    """What the wrong answers must be, in the register this band answers in."""
+    if option_style == SIMPLE_DEFINITION:
+        return _SIMPLE_DISTRACTORS
+    if option_style == DICTIONARY_DEFINITION:
+        return _DICTIONARY_DISTRACTORS
+    return _ARABIC_DISTRACTORS
+
+
+#: Kept as the default for callers that do not care which band they are serving.
+DISTRACTOR_RULE = _ARABIC_DISTRACTORS
 
 
 #: How long a passage should be at each band, in **words**, and how long its
@@ -387,6 +570,7 @@ def reading_prompt(
     comprehension_count: int,
     reuse_words: list[str] | None = None,
     inline_glossary: bool = True,
+    option_style: str = ARABIC_MEANING,
 ) -> str:
     """Builds the passage prompt for Reading or Listening.
 
@@ -397,7 +581,7 @@ def reading_prompt(
     topic = ", ".join(interests[:3]) if interests else "everyday student life"
     length, sentence_length, sentence_count = _passage_shape(
         level, len(words), listening=listening)
-    word_lines = "\n".join(_target_line(w) for w in words)
+    word_lines = "\n".join(_target_line(w, option_style) for w in words)
 
     medium = (
         "This text will be SPOKEN ALOUD and the learner will not see it. "
@@ -496,6 +680,7 @@ Requirements:
 - Each comprehension question needs one correct answer and exactly 3 plausible
   distractors. Distractors must be wrong but not absurd.
 - For each target word, report the index (0-based) of the sentence containing it.
+{distractor_rule(option_style) if words else ""}
 """
 
 
@@ -1095,7 +1280,7 @@ do not reward length by itself."""
 
 # ── Re-telling a passage at another level ────────────────────────────────────
 
-RELEVEL_PROMPT_VERSION = "relevel-v2"
+RELEVEL_PROMPT_VERSION = "relevel-v4"
 
 
 def relevel_prompt(
@@ -1106,6 +1291,7 @@ def relevel_prompt(
     words: list[dict],
     comprehension_count: int,
     inline_glossary: bool = True,
+    option_style: str = ARABIC_MEANING,
 ) -> str:
     """Re-tells one passage at a different CEFR level.
 
@@ -1117,7 +1303,7 @@ def relevel_prompt(
     The questions have to be regenerated regardless: they would otherwise ask
     about sentences that no longer exist.
     """
-    word_lines = "\n".join(_target_line(w) for w in words)
+    word_lines = "\n".join(_target_line(w, option_style) for w in words)
     targets = (
         f"""These target words must still appear, exactly once each:
 {word_lines}"""
@@ -1165,6 +1351,8 @@ be the same title said differently; it must not name any target word.
 Return it split into sentences, with {comprehension_count} fresh comprehension
 questions about the NEW text — the old questions ask about sentences that no
 longer exist{" — and a glossary of the new passage" if inline_glossary else ""}:
+
+{distractor_rule(option_style) if words else ""}
 
 {GLOSSARY_RULE if inline_glossary else _NO_INLINE_GLOSSARY}
 

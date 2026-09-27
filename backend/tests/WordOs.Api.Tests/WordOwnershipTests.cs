@@ -718,7 +718,274 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    // ── Changing a meaning (ADR-101) ──────────────────────────────────────
+
+    [SkippableFact]
+    public async Task Another_wording_of_the_same_word_is_simply_accepted()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var senseId = await SeedAsync(
+            "create", "v", "bring into existence", "أنشأ");
+        await SeedAsync("create", "v", "make or produce", "يصنع", rank: 2);
+
+        var wordId = await AddAsync(new { senseId });
+
+        var changed = await ChangeAsync(wordId, new { meaning = "يصنع" });
+        changed.EnsureSuccessStatusCode();
+
+        var word = await changed.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("يصنع", word.GetProperty("meaning").GetString());
+        Assert.Equal("create", word.GetProperty("text").GetString());
+
+        // The English definition follows the meaning. Leaving the old sense id
+        // behind would describe the meaning the learner has just rejected.
+        Assert.Equal(
+            "make or produce", word.GetProperty("definitionEn").GetString());
+    }
+
+    [SkippableFact]
+    public async Task Changing_the_meaning_costs_the_learner_nothing()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var senseId = await SeedAsync(
+            "create", "v", "bring into existence", "أنشأ");
+        await SeedAsync("create", "v", "make or produce", "يصنع", rank: 2);
+        var wordId = await AddAsync(new { senseId });
+
+        JourneySnapshot before;
+        await using (var context = db.CreateContext())
+        {
+            before = await SnapshotAsync(context, wordId);
+        }
+
+        (await ChangeAsync(wordId, new { meaning = "يصنع" }))
+            .EnsureSuccessStatusCode();
+
+        // Same word, same queue, same position — the whole promise the feature
+        // makes. Only the meaning and the sense behind it moved.
+        await using (var context = db.CreateContext())
+        {
+            Assert.Equal(before, await SnapshotAsync(context, wordId));
+        }
+    }
+
+    [SkippableFact]
+    public async Task A_meaning_that_belongs_to_another_word_is_refused_by_name()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var senseId = await SeedAsync(
+            "create", "v", "bring into existence", "أنشأ");
+        var bookSense = await SeedAsync(
+            "book", "v", "reserve in advance", "يحجز");
+
+        var wordId = await AddAsync(new { senseId });
+
+        var response = await ChangeAsync(wordId, new { meaning = "يحجز" });
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var error = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error");
+
+        Assert.Equal("MEANING_IS_ANOTHER_WORD", error.GetProperty("code").GetString());
+
+        // Naming the word is the point: the learner was not wrong, they were on
+        // a different word — and the offer to swap needs the sense id.
+        var candidate = error.GetProperty("candidates").EnumerateArray().First();
+        Assert.Equal("book", candidate.GetProperty("text").GetString());
+        Assert.Equal(bookSense, candidate.GetProperty("senseId").GetString());
+
+        // And nothing was written: the word still means what it did.
+        var unchanged = await Client.GetFromJsonAsync<JsonElement>(
+            $"/api/words/{wordId}");
+        Assert.Equal("أنشأ", unchanged.GetProperty("meaning").GetString());
+    }
+
+    [SkippableFact]
+    public async Task Insisting_cannot_turn_one_word_into_another()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var senseId = await SeedAsync(
+            "create", "v", "bring into existence", "أنشأ");
+        await SeedAsync("book", "v", "reserve in advance", "يحجز");
+        var wordId = await AddAsync(new { senseId });
+
+        // The override exists for a checker that could not recognise a wording
+        // (ADR-074). It has no business here: the dictionary knows whose
+        // meaning this is, and insisting would silently make `create` mean
+        // `book`.
+        var response = await ChangeAsync(
+            wordId, new { meaning = "يحجز", acceptAnyway = true });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task Swapping_for_the_other_word_starts_that_one_from_nothing()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var senseId = await SeedAsync(
+            "create", "v", "bring into existence", "أنشأ");
+        var bookSense = await SeedAsync(
+            "book", "v", "reserve in advance", "يحجز");
+
+        var wordId = await AddAsync(new { senseId });
+
+        var response = await ChangeAsync(wordId, new
+        {
+            meaning = "يحجز",
+            replaceWithSenseId = bookSense,
+        });
+        response.EnsureSuccessStatusCode();
+
+        var replacement = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("book", replacement.GetProperty("text").GetString());
+        Assert.Equal("يحجز", replacement.GetProperty("meaning").GetString());
+
+        // A different word, so it has been tested on nothing: Reading, no
+        // passes, no attempts. That is not a penalty, it is the truth.
+        Assert.Equal("READING", replacement.GetProperty("currentSkill").GetString());
+        Assert.All(
+            replacement.GetProperty("skills").EnumerateArray(),
+            skill =>
+            {
+                Assert.Equal(0, skill.GetProperty("attempts").GetInt32());
+                Assert.Equal(
+                    JsonValueKind.Null,
+                    skill.GetProperty("passedAt").ValueKind);
+            });
+
+        // One of them, never both: the learner agreed to a swap.
+        var list = await Client.GetFromJsonAsync<JsonElement>("/api/words");
+        Assert.Equal(1, list.GetProperty("total").GetInt32());
+
+        var old = await Client.GetAsync($"/api/words/{wordId}");
+        Assert.Equal(HttpStatusCode.NotFound, old.StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task A_wording_the_dictionary_lacks_is_put_to_the_checker()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var senseId = await SeedAsync(
+            "create", "v", "bring into existence", "أنشأ");
+        var wordId = await AddAsync(new { senseId });
+
+        // Nothing in the lexicon says this, so the dictionary cannot name
+        // another owner for it — only the checker can judge the pairing.
+        Ai.RejectMeanings = true;
+        var refused = await ChangeAsync(wordId, new { meaning = "يُكَوِّن" });
+        Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+
+        var error = (await refused.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error");
+        Assert.Equal("MEANING_REJECTED", error.GetProperty("code").GetString());
+
+        // A refusal it cannot justify by naming another word is the softer one,
+        // and the learner may overrule it — the same bargain ADR-074 struck on
+        // the way in. The disagreement is recorded rather than forgotten.
+        var kept = await ChangeAsync(
+            wordId, new { meaning = "يُكَوِّن", acceptAnyway = true });
+        kept.EnsureSuccessStatusCode();
+
+        await using var context = db.CreateContext();
+        var stored = await context.Words.SingleAsync(w => w.Id == wordId);
+        Assert.Equal("يُكَوِّن", stored.Meaning);
+        Assert.Equal(MeaningSource.Learner, stored.MeaningSource);
+        Assert.Equal(MeaningCheckResult.Overridden, stored.MeaningCheck);
+    }
+
+    [SkippableFact]
+    public async Task Another_learners_word_is_not_editable()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var senseId = await SeedAsync(
+            "create", "v", "bring into existence", "أنشأ");
+        await SeedAsync("create", "v", "make or produce", "يصنع", rank: 2);
+        var wordId = await AddAsync(new { senseId });
+
+        await SignInAsync();
+        var response = await ChangeAsync(wordId, new { meaning = "يصنع" });
+
+        // 404, not 403: the id names nothing as far as this learner is
+        // concerned (docs/07-SECURITY.md §4).
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task Saving_the_meaning_it_already_has_is_not_a_change()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var senseId = await SeedAsync(
+            "create", "v", "bring into existence", "أنشأ");
+        var wordId = await AddAsync(new { senseId });
+
+        var before = Ai.MeaningChecks;
+        (await ChangeAsync(wordId, new { meaning = "أنشأ" }))
+            .EnsureSuccessStatusCode();
+
+        // Nothing asked, and nothing written: the learner opened the field and
+        // pressed save.
+        Assert.Equal(before, Ai.MeaningChecks);
+
+        await using var context = db.CreateContext();
+        var events = await context.WordEvents
+            .Where(e => e.WordId == wordId
+                        && e.Type == WordEventType.MeaningChanged)
+            .CountAsync();
+        Assert.Equal(0, events);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
+
+    private Task<HttpResponseMessage> ChangeAsync(Guid wordId, object body) =>
+        Client.PatchAsJsonAsync($"/api/words/{wordId}/meaning", body);
+
+    /// <summary>Everything a meaning change must leave exactly as it was.</summary>
+    private sealed record JourneySnapshot(
+        WordState State,
+        SkillType? CurrentSkill,
+        DateTimeOffset AddedAt,
+        int ExposureCount,
+        string Skills);
+
+    private static async Task<JourneySnapshot> SnapshotAsync(
+        Infrastructure.Persistence.WordOsDbContext context, Guid wordId)
+    {
+        var word = await context.Words
+            .Include(w => w.Skills)
+            .SingleAsync(w => w.Id == wordId);
+
+        return new JourneySnapshot(
+            word.State,
+            word.CurrentSkill,
+            word.AddedAt,
+            word.ExposureCount,
+            string.Join(
+                ";",
+                word.Skills
+                    .OrderBy(x => x.Skill)
+                    .Select(x =>
+                        $"{x.Skill}:{x.Status}:{x.Attempts}:"
+                        + $"{x.AvailableAt:O}:{x.PassedAt:O}")));
+    }
+
+
 
     private async Task<Guid> AddAsync(object body) =>
         Guid.Parse((await AddAndReadAsync(body)).GetProperty("id").GetString()!);

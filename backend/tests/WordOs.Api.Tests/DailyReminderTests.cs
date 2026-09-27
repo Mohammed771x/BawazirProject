@@ -76,7 +76,12 @@ public class DailyReminderTests(PostgresFixture db) : IAsyncLifetime
             .Distinct()
             .ToList();
 
-        Assert.Equal(Config.ReminderHorizonDays, dates.Count);
+        // The horizon, or one short of it. Both of today's times are 08:00 and
+        // 20:00, so a run after 20:00 finds today already over and the first
+        // reminder falls tomorrow. The test used to demand the full count and
+        // therefore passed or failed by the hour it was run at.
+        Assert.InRange(dates.Count, Config.ReminderHorizonDays - 1,
+            Config.ReminderHorizonDays);
 
         // One morning and one evening per day — except today, which may have
         // lost one or both to the clock.
@@ -134,7 +139,16 @@ public class DailyReminderTests(PostgresFixture db) : IAsyncLifetime
             else
             {
                 Assert.Equal("WORDS_DUE", kind);
-                Assert.Equal(1, reminder.GetProperty("count").GetInt32());
+
+                // The number is only asserted where the line actually carries
+                // one. Since ADR-090 most of them do not: a reminder that
+                // states the count every single time becomes a digit the
+                // learner reads instead of a sentence.
+                if (reminder.GetProperty("message").GetString() is
+                    "WORDS_DUE_COUNT" or "WORDS_DUE_ONE")
+                {
+                    Assert.Equal(1, reminder.GetProperty("count").GetInt32());
+                }
             }
         }
 
@@ -154,11 +168,25 @@ public class DailyReminderTests(PostgresFixture db) : IAsyncLifetime
         var added = await Client.PostAsJsonAsync("/api/words", new { senseId });
         added.EnsureSuccessStatusCode();
 
-        Assert.All(await FetchAsync(), r =>
+        var reminders = await FetchAsync();
+
+        Assert.All(reminders, r =>
         {
             Assert.Equal("WORDS_DUE", r.GetProperty("kind").GetString());
-            Assert.Equal(1, r.GetProperty("count").GetInt32());
+
+            // Where the line counts words, it counts the right number.
+            if (r.GetProperty("message").GetString() is
+                "WORDS_DUE_COUNT" or "WORDS_DUE_ONE")
+            {
+                Assert.Equal(1, r.GetProperty("count").GetInt32());
+            }
         });
+
+        // Every line is one this build knows. A key the client cannot render is
+        // a notification that says nothing, and it would reach the learner
+        // rather than a test.
+        Assert.All(reminders, r =>
+            Assert.StartsWith("WORDS_DUE", r.GetProperty("message").GetString()!));
     }
 
     [SkippableFact]

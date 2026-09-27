@@ -95,11 +95,12 @@ class ReminderController {
           ReminderSlot.morning => s.reminderTitleMorning,
           ReminderSlot.evening => s.reminderTitleEvening,
         },
-        body: switch (reminder.kind) {
-          ReminderKind.wordsDue => s.reminderWordsDue(reminder.count),
-          ReminderKind.nothingDue => s.reminderNothingDue(reminder.count),
-          ReminderKind.noWords => s.reminderNoWords,
-        },
+        // Which of the twenty lines is the server's decision (ADR-090) — it
+        // is the only side that knows whether there is a streak to mention or
+        // a level that moved. This says it, and falls back on the kind for a
+        // key it has never met.
+        body: s.reminderBody(
+            reminder.message, reminder.kind, reminder.count),
         at: at,
       ));
     }

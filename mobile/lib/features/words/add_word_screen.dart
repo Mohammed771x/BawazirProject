@@ -380,8 +380,13 @@ class _CandidateTile extends ConsumerWidget {
           ],
           if (candidate.definitionEn.isNotEmpty) ...[
             const SizedBox(height: AppSpacing.xxs),
-            Text(
+            // English, so laid out left-to-right: in the Arabic interface a
+            // plain Text put the full stop at the front — ".money",
+            // ":To move". Aligned with the card, so it stays under the
+            // meaning it explains.
+            EnglishText(
               candidate.definitionEn,
+              textAlign: EnglishText.interfaceStart(context),
               style: context.text.bodySmall?.copyWith(
                 color: context.colors.onSurface.withValues(alpha: 0.6),
               ),

@@ -25,11 +25,27 @@ mkdir -p "$LOGS"
 # The address the phone uses. Loopback is the Mac talking to itself; a phone
 # needs the address the Mac has on the network it shares with it.
 lan_ip() {
-  local ip
-  for iface in en0 en1 en7; do
+  local ip iface
+
+  # Ask the routing table which interface actually reaches the network, rather
+  # than guessing from a list of names. The list used to be `en0 en1 en7`, and a
+  # Mac on a direct cable — `en5` here — fell past all three to loopback, which
+  # quietly writes a *device* build that calls the phone itself.
+  iface="$(route -n get default 2>/dev/null \
+            | awk '/interface:/ {print $2; exit}')"
+  if [ -n "$iface" ]; then
+    ip="$(ipconfig getifaddr "$iface" 2>/dev/null)"
+    [ -n "$ip" ] && { echo "$ip"; return; }
+  fi
+
+  # No default route (or it is on something without an IPv4 address): take the
+  # first interface that has one.
+  for iface in $(ifconfig -l 2>/dev/null); do
+    case "$iface" in lo*|utun*|awdl*|llw*) continue ;; esac
     ip="$(ipconfig getifaddr "$iface" 2>/dev/null)"
     [ -n "$ip" ] && { echo "$ip"; return; }
   done
+
   echo "127.0.0.1"
 }
 
@@ -43,7 +59,7 @@ try:
 except OSError:
     sys.exit()
 for line in text.splitlines():
-    if not line.startswith("DART_DEFINES"):
+    if not line.startswith("DART_DEFINES[sdk=iphoneos"):
         continue
     for value in line.split("=", 1)[1].split(","):
         value = value.strip()
