@@ -145,7 +145,38 @@ line (ADR-079):
 Then each migration is named as it applies, ending in `Done.` **If a deployed
 database replays `InitialSchema`, it is the wrong database** — stop.
 
-### Three things the host and role must be
+### The simple way: connect as `wordos_migrator` itself (since 2026-09-28)
+
+`wordos_migrator` owns every table, so a migration run **as** it needs no
+borrowed role, no grant to hand back, and no `Options`. The only reason the
+workaround below existed is that nobody knew its password. Now the owner does —
+kept outside this repository. To set a new one, from Neon → SQL Editor →
+database `wordos` (as `neondb_owner`, which holds admin over the role):
+
+```bash
+export MIGRATOR_PW=$(openssl rand -hex 24) && echo "$MIGRATOR_PW"   # save it
+```
+
+```sql
+ALTER ROLE wordos_migrator WITH PASSWORD '<the value above>';
+```
+
+Hex, deliberately: a password with `@ : / # %` breaks the `postgresql://` URL
+form, and one copied from the console with a trailing space is accepted by
+Npgsql (which trims) and refused by `psql` (which does not) — both cost an
+evening on 2026-09-28. Then:
+
+```bash
+cd backend && ConnectionStrings__WordOsMigrations="Host=ep-….neon.tech;Database=wordos;Username=wordos_migrator;Password=$MIGRATOR_PW;SSL Mode=Require" \
+  dotnet ef database update --project src/WordOs.Infrastructure --startup-project src/WordOs.Api
+```
+
+Tables it creates are owned by the right role from the start. The grant to
+`wordos_app` (below) is still needed for a **new table**.
+
+Never change `wordos_app`'s password for this — Render serves learners with it.
+
+### Three things the host and role must be (the older route)
 
 **Drop `-pooler` from the hostname.** Neon's connect dialog hands out the pooled
 host by default; PgBouncer refuses the startup parameter the next step needs
