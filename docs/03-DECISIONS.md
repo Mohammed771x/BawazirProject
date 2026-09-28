@@ -5263,3 +5263,31 @@ One refused request on Render then shows which header carries the caller and
 where. The fix is two environment variables, chosen from that log line and
 verified with a forged prefix — not a third release. One more test: with
 `X-Forwarded-For` at entry -1, a forged left-hand prefix buys nothing.
+
+**Second addendum — the first deploy did fix it; the probe was wrong.** The
+"second machine" in both probes was Claude Code's WebFetch, which fetches from
+the same Mac. It shared the budget because it *was* the same caller, before the
+fix and after it. The addendum above drew its conclusion from that probe and is
+superseded by what the new log line showed on Render:
+
+```
+Rate limit refused GET /health/live for 111.92.56.251 (X-Forwarded-For=198.51.100.77,111.92.56.251,
+172.69.131.179, 10.27.71.204; True-Client-IP=111.92.56.251; CF-Connecting-IP=111.92.56.251; X-Real-IP=-;
+socket=127.0.0.1)
+```
+
+* **The bug was real:** the socket is `127.0.0.1` for every request, so the old
+  key was one value for the whole user base.
+* **`True-Client-IP` arrives and is right**, and the key is the caller's address.
+* **It cannot be forged:** with the budget spent, a request carrying a made-up
+  `True-Client-IP` was still refused — the edge overwrites it. A made-up
+  `CF-Connecting-IP` is refused by Cloudflare outright (403).
+* **X-Forwarded-For's first entry is forgeable**, exactly as Render says: the
+  made-up `198.51.100.77` sits at the front. Were it ever needed, the real
+  caller is entry `-3` (client, Cloudflare, Render's balancer).
+
+Configuration stays at the default (`True-Client-IP`, entry 0). The log line and
+`ClientAddressEntry` stay: they are what settled this, and what will settle it
+on the next platform. Lesson for any future probe of a per-caller limit: the
+second caller must be a different network — a phone on mobile data — never a
+tool running on the same machine.
