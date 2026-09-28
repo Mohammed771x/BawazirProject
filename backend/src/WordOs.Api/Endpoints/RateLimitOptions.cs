@@ -50,4 +50,16 @@ public sealed class RateLimitOptions
     /// why it is configuration and not code (rule R3).
     /// </remarks>
     public string ClientAddressHeader { get; init; } = "True-Client-IP";
+
+    /// <summary>
+    /// Which entry of <see cref="ClientAddressHeader"/> to use when it holds a
+    /// list: 0 the first, -1 the last, -2 the one before the last.
+    /// </summary>
+    /// <remarks>
+    /// Render's proxy <i>appends</i> to X-Forwarded-For rather than replacing
+    /// it, so its first entry is whatever the caller sent. The trustworthy one
+    /// is counted from the right, and how far depends on how many proxies the
+    /// platform runs — read it off a refused request's log line (ADR-106).
+    /// </remarks>
+    public int ClientAddressEntry { get; init; }
 }

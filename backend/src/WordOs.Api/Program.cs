@@ -260,12 +260,30 @@ builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
+    // Every refusal says who it thought the caller was and which address
+    // headers arrived. That is how the right `ClientAddressHeader` is found on
+    // a new platform — and how a limit keyed on the wrong thing shows itself,
+    // as it did on Render, where every learner was the proxy (ADR-106).
+    options.OnRejected = (rejected, _) =>
+    {
+        var context = rejected.HttpContext;
+        context.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("WordOs.RateLimit")
+            .LogWarning(
+                "Rate limit refused {Method} {Path} for {Client} ({Headers})",
+                context.Request.Method,
+                context.Request.Path,
+                ClientAddress.Of(context, limits.ClientAddressHeader, limits.ClientAddressEntry),
+                ClientAddress.Describe(context));
+        return ValueTask.CompletedTask;
+    };
+
     // Authentication is the credential-stuffing surface, so it is partitioned
     // by IP rather than by user — an attacker trying many accounts would
     // otherwise get a fresh budget for each one.
     options.AddPolicy(RateLimitPolicies.Authentication, context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            ClientAddress.Of(context, limits.ClientAddressHeader),
+            ClientAddress.Of(context, limits.ClientAddressHeader, limits.ClientAddressEntry),
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = limits.AuthenticationPermits,
@@ -303,7 +321,7 @@ builder.Services.AddRateLimiter(options =>
 
     string PartitionKey(HttpContext context) =>
         context.User.UserId()?.ToString()
-        ?? ClientAddress.Of(context, limits.ClientAddressHeader);
+        ?? ClientAddress.Of(context, limits.ClientAddressHeader, limits.ClientAddressEntry);
 });
 
 // ── CORS ─────────────────────────────────────────────────────────────────────

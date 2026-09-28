@@ -5240,3 +5240,26 @@ were already per user.
 Two tests: callers behind one proxy with different addresses keep separate
 budgets (confirmed failing on the old code), and non-address values fall back
 to the socket.
+
+**Addendum, same day — the first deploy did not fix it.** Re-running the
+two-machine probe against `8ba3ed7` live on Render: still one shared budget.
+`True-Client-IP` does not reach the service (a forum answer said it would; the
+probe says otherwise), so every request fell back to the socket — no worse than
+before, and no better. Render's own guidance is X-Forwarded-For, and it also says
+the proxy *appends* to that header rather than replacing it, so its first entry
+is whatever the caller sent. Taking it would let anyone reset their sign-in
+budget per request.
+
+So the header is not guessed a second time. Two changes:
+
+* `RateLimits:ClientAddressEntry` picks an entry from a list — 0 the first,
+  -1 the last — because the trustworthy entry of an appended list is counted
+  from the right;
+* every 429 logs the address it keyed on and the candidate headers exactly as
+  they arrived (`X-Forwarded-For`, `True-Client-IP`, `CF-Connecting-IP`,
+  `X-Real-IP`, the socket).
+
+One refused request on Render then shows which header carries the caller and
+where. The fix is two environment variables, chosen from that log line and
+verified with a forged prefix — not a third release. One more test: with
+`X-Forwarded-For` at entry -1, a forged left-hand prefix buys nothing.

@@ -749,13 +749,20 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
     // ── The caller's address behind a proxy (ADR-106) ───────────────────────
 
     /// <summary>A client whose sign-in budget is two, so it runs out quickly.</summary>
-    private HttpClient TightAuthenticationBudget() =>
+    private HttpClient TightAuthenticationBudget(
+        string? header = null, string? entry = null) =>
         _factory!.WithWebHostBuilder(builder =>
-                builder.UseSetting("RateLimits:AuthenticationPermits", "2"))
+            {
+                builder.UseSetting("RateLimits:AuthenticationPermits", "2");
+                if (header is not null)
+                    builder.UseSetting("RateLimits:ClientAddressHeader", header);
+                if (entry is not null)
+                    builder.UseSetting("RateLimits:ClientAddressEntry", entry);
+            })
             .CreateClient();
 
     private static async Task<HttpStatusCode> SignInAsync(
-        HttpClient client, string? address)
+        HttpClient client, string? address, string header = "True-Client-IP")
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login")
         {
@@ -765,7 +772,7 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
                 password = "wrong-password",
             }),
         };
-        if (address is not null) request.Headers.Add("True-Client-IP", address);
+        if (address is not null) request.Headers.TryAddWithoutValidation(header, address);
 
         return (await client.SendAsync(request)).StatusCode;
     }
@@ -802,5 +809,24 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.TooManyRequests,
             await SignInAsync(client, "garbage-3"));
+    }
+
+    [SkippableFact]
+    public async Task Only_the_entry_the_proxy_appended_decides_the_caller()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        // Render appends to X-Forwarded-For rather than replacing it, so the
+        // entries on the left are the caller's own invention. Counted from the
+        // right, a forged prefix changes nothing.
+        using var client = TightAuthenticationBudget("X-Forwarded-For", "-1");
+
+        await SignInAsync(client, "198.51.100.1, 203.0.113.10", "X-Forwarded-For");
+        await SignInAsync(client, "198.51.100.2, 203.0.113.10", "X-Forwarded-For");
+        Assert.Equal(HttpStatusCode.TooManyRequests,
+            await SignInAsync(client, "198.51.100.3, 203.0.113.10", "X-Forwarded-For"));
+
+        Assert.NotEqual(HttpStatusCode.TooManyRequests,
+            await SignInAsync(client, "198.51.100.3, 203.0.113.20", "X-Forwarded-For"));
     }
 }
