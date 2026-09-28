@@ -265,7 +265,7 @@ builder.Services.AddRateLimiter(options =>
     // otherwise get a fresh budget for each one.
     options.AddPolicy(RateLimitPolicies.Authentication, context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            ClientAddress.Of(context, limits.ClientAddressHeader),
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = limits.AuthenticationPermits,
@@ -301,10 +301,9 @@ builder.Services.AddRateLimiter(options =>
                 Window = TimeSpan.FromMinutes(1),
             }));
 
-    static string PartitionKey(HttpContext context) =>
+    string PartitionKey(HttpContext context) =>
         context.User.UserId()?.ToString()
-        ?? context.Connection.RemoteIpAddress?.ToString()
-        ?? "unknown";
+        ?? ClientAddress.Of(context, limits.ClientAddressHeader);
 });
 
 // ── CORS ─────────────────────────────────────────────────────────────────────

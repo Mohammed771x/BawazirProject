@@ -5196,3 +5196,47 @@ Six API tests, all six confirmed failing against the previous code; nine in the
 AI service. The twelve production words were repaired from the lexicon's own
 rows — never typed — after a rolled-back dry run showed exactly the twelve
 changes.
+
+## ADR-106 — The rate limiter sees the learner, not Render's proxy
+
+**Date:** 2026-09-28 · **Status:** Accepted
+
+**What was wrong.** Every request on Render arrives through Render's own proxy
+(Cloudflare in front), so `Connection.RemoteIpAddress` is the proxy's address —
+the same one for every learner in the world. The limiter partitions anonymous
+traffic by that address, so:
+
+* **sign-in, registration, refresh and password reset shared one budget of 10
+  per 15 minutes across the whole user base.** `/auth/refresh` is in that
+  budget, and the access token lives 15 minutes, so every opening of the app
+  after a quarter of an hour spends one. Eleven students opening the app in the
+  same quarter of an hour — exactly what an announcement in the group produces —
+  and the eleventh is refused. The client correctly does not sign them out on a
+  429 (the session is not dead), so what they see is a screen that does not load;
+* every anonymous request, including the keep-alive, shared one 300-per-minute
+  global budget.
+
+Measured, not inferred: 320 requests from one Mac exhausted the budget, and at
+that moment a request from an unrelated machine (a different country) got 429
+too; a minute later, when the window rolled, it got 200.
+
+**The fix.** Partitions use `ClientAddress.Of`, which reads the address from a
+configured header (`RateLimits:ClientAddressHeader`, default `True-Client-IP`,
+which Render's edge sets) and falls back to the socket. A value that is not a
+valid IP address is ignored, so a made-up header cannot buy a fresh budget per
+request.
+
+**Why a setting.** Which header a platform *overwrites* — rather than passes
+through from the caller — is a fact about the platform, and a header the caller
+controls would disable the limiter entirely. If a test on production ever shows
+the header can be spoofed, the fix is an environment variable, not a release
+(rule R3). Verify after each hosting change: exhaust the budget from one
+machine while sending a forged `True-Client-IP`; the forged value must still be
+refused.
+
+Not changed: the budgets themselves, and the authenticated partitions, which
+were already per user.
+
+Two tests: callers behind one proxy with different addresses keep separate
+budgets (confirmed failing on the old code), and non-address values fall back
+to the socket.

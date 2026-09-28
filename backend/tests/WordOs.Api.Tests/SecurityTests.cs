@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using WordOs.Domain.Common;
 using WordOs.Domain.Lexicon;
@@ -743,5 +744,63 @@ public class SecurityTests(PostgresFixture db) : IAsyncLifetime
 
         var fresh = await Client.PostAsync("/api/sessions/reading/start", null);
         Assert.NotEqual(HttpStatusCode.TooManyRequests, fresh.StatusCode);
+    }
+
+    // ── The caller's address behind a proxy (ADR-106) ───────────────────────
+
+    /// <summary>A client whose sign-in budget is two, so it runs out quickly.</summary>
+    private HttpClient TightAuthenticationBudget() =>
+        _factory!.WithWebHostBuilder(builder =>
+                builder.UseSetting("RateLimits:AuthenticationPermits", "2"))
+            .CreateClient();
+
+    private static async Task<HttpStatusCode> SignInAsync(
+        HttpClient client, string? address)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login")
+        {
+            Content = JsonContent.Create(new
+            {
+                email = "nobody@test.dev",
+                password = "wrong-password",
+            }),
+        };
+        if (address is not null) request.Headers.Add("True-Client-IP", address);
+
+        return (await client.SendAsync(request)).StatusCode;
+    }
+
+    [SkippableFact]
+    public async Task Learners_behind_one_proxy_do_not_share_one_sign_in_budget()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        // Every request in production arrives from Render's proxy. Keyed by the
+        // socket, one learner's sign-ins spent everyone's.
+        using var client = TightAuthenticationBudget();
+
+        await SignInAsync(client, "203.0.113.10");
+        await SignInAsync(client, "203.0.113.10");
+        Assert.Equal(HttpStatusCode.TooManyRequests,
+            await SignInAsync(client, "203.0.113.10"));
+
+        Assert.NotEqual(HttpStatusCode.TooManyRequests,
+            await SignInAsync(client, "203.0.113.20"));
+    }
+
+    [SkippableFact]
+    public async Task A_made_up_address_header_buys_no_fresh_budget()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+
+        // Anything that is not an address falls back to the socket, so varying
+        // it per request does not open a new partition each time.
+        using var client = TightAuthenticationBudget();
+
+        await SignInAsync(client, "garbage-1");
+        await SignInAsync(client, "garbage-2");
+
+        Assert.Equal(HttpStatusCode.TooManyRequests,
+            await SignInAsync(client, "garbage-3"));
     }
 }

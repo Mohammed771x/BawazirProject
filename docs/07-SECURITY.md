@@ -188,6 +188,12 @@ this is a stored-XSS vector.
 
 📋 A daily AI-spend cap per user, so one account cannot exhaust the budget.
 
+✅ **Behind a proxy, "per IP" means the client's IP** (ADR-106). On Render every
+socket is the proxy's, so the address comes from `RateLimits:ClientAddressHeader`
+(`True-Client-IP` by default) and only if it parses as an address. Before this,
+the whole user base shared one sign-in budget. Only a header the platform
+overwrites may be named — one the caller controls switches the limiter off.
+
 ✅ The lookup endpoint returns a bounded result set and caps the query length, so
 it cannot be used to dump the lexicon. A **single letter is matched exactly**
 rather than as a prefix — `a` and `I` are real words a learner must be able to
