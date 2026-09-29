@@ -114,6 +114,19 @@ public class LearnerRequestsTests
     }
 
     [Fact]
+    public void A_long_rambling_turn_is_judged_without_failing()
+    {
+        // Production, 2026-09-30: a regex timeout here failed every Speaking
+        // turn with a 500. Whatever the input, judging it must never throw.
+        var ramble = string.Concat(Enumerable.Repeat(
+            "so what is it that I really want to say about football and my day ", 400));
+
+        var answer = LearnerRequests.AnswerPart(ramble + "I play football.", Football);
+
+        Assert.Contains("I play football.", answer);
+    }
+
+    [Fact]
     public void An_empty_turn_has_no_answer()
     {
         Assert.Equal(string.Empty, LearnerRequests.AnswerPart("", Football));

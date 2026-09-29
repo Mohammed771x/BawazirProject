@@ -31,10 +31,19 @@ namespace WordOs.Domain.Sessions;
 /// </remarks>
 public static class LearnerRequests
 {
+    // Interpreted, not Compiled. A compiled pattern is JIT-compiled the first
+    // time it runs, *inside* the match — and on Render's throttled CPU that
+    // first match ran past the timeout, so every Speaking turn failed with a
+    // 500 on production (2026-09-30) while the same code took microseconds on
+    // a laptop. These patterns are short and read one sentence at a time; the
+    // interpreter is the right engine for them.
     private const RegexOptions Options =
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
 
-    private static readonly TimeSpan Timeout = TimeSpan.FromMilliseconds(100);
+    // A guard against a pathological input, not a performance budget: a
+    // shared CPU can pause any thread for longer than 100 ms, which is what
+    // the old value was.
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(1);
 
     /// <summary>Asking the tutor for something, whatever the word.</summary>
     private static readonly Regex[] Asks =
@@ -77,7 +86,25 @@ public static class LearnerRequests
     }
 
     /// <summary>Whether one sentence asks the tutor for something.</summary>
+    /// <remarks>
+    /// Never throws. A sentence that cannot be judged in time is read as an
+    /// answer: the model's own check still stands behind this one, and failing
+    /// the learner's turn over a timeout is the one outcome that is always
+    /// wrong.
+    /// </remarks>
     public static bool IsRequest(string sentence, IReadOnlyCollection<string> targetWords)
+    {
+        try
+        {
+            return Matches(sentence, targetWords);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
+    }
+
+    private static bool Matches(string sentence, IReadOnlyCollection<string> targetWords)
     {
         var text = Normalise(sentence);
         if (text.Length == 0) return false;
@@ -109,11 +136,23 @@ public static class LearnerRequests
     /// A turn cut into sentences at full stops, question and exclamation marks,
     /// and line breaks. A transcript with no punctuation is one sentence.
     /// </summary>
-    public static IReadOnlyList<string> Sentences(string turn) =>
-        Regex.Split(turn ?? string.Empty, @"(?<=[.!?])\s+|\r?\n+", RegexOptions.None, Timeout)
-            .Select(s => s.Trim())
-            .Where(s => s.Length > 0)
-            .ToList();
+    public static IReadOnlyList<string> Sentences(string turn)
+    {
+        try
+        {
+            return Regex.Split(turn ?? string.Empty, @"(?<=[.!?])\s+|\r?\n+",
+                    RegexOptions.None, Timeout)
+                .Select(s => s.Trim())
+                .Where(s => s.Length > 0)
+                .ToList();
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Unsplit is still judged: one sentence, answer or request.
+            var whole = (turn ?? string.Empty).Trim();
+            return whole.Length == 0 ? [] : [whole];
+        }
+    }
 
     /// <summary>Curly quotes and doubled spaces made plain, so one pattern fits both.</summary>
     private static string Normalise(string sentence) =>
