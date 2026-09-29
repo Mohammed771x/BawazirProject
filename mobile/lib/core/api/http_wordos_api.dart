@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import '../models/models.dart';
@@ -507,7 +509,6 @@ class HttpWordOsApi implements WordOsApi {
   Future<Word> addWordWithMeaning({
     required String text,
     required String meaning,
-    bool acceptAnyway = false,
   }) async =>
       // No sense id: there is no lexicon row for this meaning, which is the
       // point of the call. The server resolves `text` for the word's grammar
@@ -516,7 +517,6 @@ class HttpWordOsApi implements WordOsApi {
       Word.fromJson(await _post('/words', {
         'text': text,
         'customMeaning': meaning,
-        if (acceptAnyway) 'acceptAnyway': true,
       }));
 
   @override
@@ -537,11 +537,9 @@ class HttpWordOsApi implements WordOsApi {
   Future<Word> changeWordMeaning({
     required String wordId,
     required String meaning,
-    bool acceptAnyway = false,
   }) async =>
       Word.fromJson(await _patch('/words/$wordId/meaning', {
         'meaning': meaning,
-        'acceptAnyway': acceptAnyway,
       }));
 
   @override
@@ -653,6 +651,38 @@ class HttpWordOsApi implements WordOsApi {
       ));
 
   @override
+  Future<String> transcribeSpeech(
+    Uint8List audio, {
+    String mimeType = 'audio/mp4',
+  }) async {
+    // The raw recording as the body, typed by its Content-Type — the backend
+    // reads bytes, not a form. The send timeout is the one worth raising: a
+    // minute of speech on a weak connection takes longer to upload than a
+    // JSON body ever does.
+    final res = await _guard(() => _dio.post<dynamic>(
+          '/speech/transcribe',
+          data: Stream.fromIterable([audio]),
+          options: Options(
+            contentType: mimeType,
+            headers: {Headers.contentLengthHeader: audio.length},
+            sendTimeout: const Duration(seconds: 60),
+          ),
+        ));
+    return (_asMap(res)['text'] as String? ?? '').trim();
+  }
+
+  @override
+  Future<SynthesizedSpeech> synthesizeSpeech(String text) async {
+    // Not `_post`: rendering a voice changes nothing on the server, so it must
+    // not announce a change and make every open screen reload (ADR-094).
+    final res = await _guard(() => _dio.post<dynamic>(
+          '/speech/synthesize',
+          data: {'text': text},
+        ));
+    return SynthesizedSpeech.fromJson(_asMap(res));
+  }
+
+  @override
   Future<SessionResult> completeSession(String sessionId) async =>
       SessionResult.fromJson(await _post('/sessions/$sessionId/complete'));
 
@@ -664,6 +694,11 @@ class HttpWordOsApi implements WordOsApi {
   @override
   Future<WeeklyReviewSession> startWeeklyReview() async =>
       WeeklyReviewSession.fromJson(await _post('/weekly-review/start'));
+
+  @override
+  Future<WeeklyReviewSession> startWeeklyReviewPractice() async =>
+      WeeklyReviewSession.fromJson(
+          await _post('/weekly-review/practice/start'));
 
   @override
   Future<ReviewAnswerResult> answerWeeklyReview({
@@ -701,6 +736,13 @@ class HttpWordOsApi implements WordOsApi {
       SkillLevel.fromJson(await _patch('/settings/daily-target', {
         'skill': skill.wire,
         'target': target,
+      }));
+
+  @override
+  Future<SpellingHints> updateSpellingHintStart(
+          SpellingClueKind? start) async =>
+      SpellingHints.fromJson(await _patch('/settings/spelling-hints', {
+        'start': start?.wire ?? 'AUTO',
       }));
 
   @override

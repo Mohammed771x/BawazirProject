@@ -12,6 +12,8 @@ prompt change rather than blamed on learners.
 
 from __future__ import annotations
 
+import re
+
 # ── Shared framing ───────────────────────────────────────────────────────────
 
 _SYSTEM = """You write material for WordOS, an English vocabulary app whose \
@@ -535,8 +537,11 @@ def _passage_shape(
     clause, not the paragraph.
 
     The floor is set by the words themselves: every target word must appear in
-    a sentence whose neighbours give a clue to its meaning, and that costs
-    roughly thirty words each however easy the band.
+    a sentence whose neighbours give a clue to its meaning — two of the band's
+    own sentences each. It used to be a flat thirty words a word, which is a
+    B2 sentence pair: measured with five words, an A1 passage came back at
+    168 words and 24 sentences, twice its band, and B1 listening was the same
+    length as A2 (ADR-117). An A1 clue sentence is eight words, not fifteen.
     """
     words, sentence_length, average = _PASSAGE_SHAPE.get(
         level.upper().replace("+", "_PLUS"), _PASSAGE_SHAPE["B1"])
@@ -544,7 +549,7 @@ def _passage_shape(
     if listening:
         words = int(words * 0.6)
 
-    words = max(words, 40 + word_count * 30)
+    words = max(words, 20 + word_count * 2 * average)
 
     # A sentence count as well as a word count, because a word count alone is
     # not something a model can hold itself to: asked for 720 words at C2 it
@@ -768,16 +773,33 @@ sentence is already exactly how a {level} writer would put it."""
 
 # ── Speaking conversation ────────────────────────────────────────────────────
 
-SPEAKING_PROMPT_VERSION = "speaking-v6"
+SPEAKING_PROMPT_VERSION = "speaking-v10"
+
+#: What the learner's last message was (ADR-113). The backend reads it as the
+#: second of two checks on whether a word was used; the first is its own.
+LEARNER_INTENTS = ("answer", "new_question", "explain", "other")
 
 SPEAKING_TURN_SCHEMA = {
     "type": "object",
     "properties": {
+        "learner_intent": {"type": "string", "enum": list(LEARNER_INTENTS)},
         "reply": {"type": "string"},
         "words_only_named": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["reply", "words_only_named"],
+    "required": ["learner_intent", "reply", "words_only_named"],
 }
+
+#: How a question is pitched, whatever the word (ADR-113).
+#:
+#: The product owner's report: a scientific word — "tissue", as in the tissues
+#: of the body — got a question that needed biology to answer. The learner is
+#: here to learn a word, not a field. Questions come from ordinary life at the
+#: learner's level, and a specialist word is met where an ordinary person meets
+#: it — above all when it is outside what they are interested in.
+_EVERYDAY_RULE = """Pitch every question at their level and in their everyday life:
+  - A question a {level} learner can answer from their OWN ordinary life — home, family, school or work, food, health, weather, shopping, free time. Never a question that needs specialist knowledge, facts or opinions about a field.
+  - A scientific, medical or technical word is asked about SIMPLY: in the plainest real situation where an ordinary person meets it IN THIS SENSE. Never switch to a commoner sense of the same spelling because it is easier to ask about: a paper tissue for your nose is a different word from the tissue of the body. "tissue" (body): "When you cut your finger, the skin and tissue under it hurt. Have you ever hurt your hand?" — never how tissues form or what they are made of. A learner is not a scientist, and least of all in a field outside their interests.
+  - One idea per question, short and concrete. If they could not answer the last question, the next one is EASIER, not another in the same style."""
 
 
 #: What speaking at a level actually means, band by band.
@@ -802,10 +824,50 @@ _REGISTER = {
 }
 
 
+def _band(level: str) -> str:
+    return (level or "B1").upper().replace("_PLUS", "").replace("+", "")
+
+
 def register_for(level: str) -> str:
     """The register rule for a band, ignoring the `+` half-steps."""
-    return _REGISTER.get((level or "B1").upper().replace("_PLUS", "").replace("+", ""),
-                         _REGISTER["B1"])
+    return _REGISTER.get(_band(level), _REGISTER["B1"])
+
+
+#: How much the tutor says in one turn, band by band: (sentences, words).
+#:
+#: Both counted WITHOUT the closing "Try to use the word …" line, which every
+#: asking turn ends with and which the learner needs whatever their band.
+#:
+#: The register above says how hard each sentence is; it never said how many.
+#: Measured before this existed (ADR-117): an A2 tutor answered a request for
+#: another question in 46 words across five sentences, and A1 explained a word
+#: in five sentences — about as long as it spoke to C1. A beginner hears it once
+#: and has to hold all of it before answering. So beginners get less to hold,
+#: and the length climbs with the band the way the passages do.
+_SPEAKING_LENGTH = {
+    "A1": (2, 16),
+    "A2": (2, 20),
+    "B1": (3, 30),
+    "B2": (3, 38),
+    "C1": (3, 45),
+    "C2": (4, 55),
+}
+
+
+def speaking_length_for(level: str) -> tuple[int, int]:
+    """(sentences, words) for one tutor turn at this band."""
+    return _SPEAKING_LENGTH.get(_band(level), _SPEAKING_LENGTH["B1"])
+
+
+def _speaking_length_rule(level: str, *, asks: bool) -> str:
+    sentences, words = speaking_length_for(level)
+    tail = (' — NOT counting the final "Try to use the word …" sentence'
+            if asks else "")
+    return (f"**Length at {level}: at most {sentences} short sentences and "
+            f"about {words} words in all{tail}.** Count them. Whatever the turn "
+            f"is doing — reacting, explaining a word, giving a new question — "
+            f"it fits in this. Say less rather than more: a learner hears this "
+            f"once and has to hold all of it before answering.")
 
 
 def _speaking_shape_line(shape: dict) -> str:
@@ -823,12 +885,20 @@ def _speaking_shape_line(shape: dict) -> str:
     form = shape.get("form")
     pos = shape.get("part_of_speech")
     definition = (shape.get("definition") or "").strip()
+    # The learner's own Arabic meaning, the surest guide to which sense they
+    # added (ADR-113). Measured: shown only the dictionary's "an aggregate of
+    # cells", a tutor asked for another question about body "tissue" drifted
+    # to a paper tissue half the time; نسيج is body or cloth, never منديل.
+    arabic = (shape.get("meaning") or "").strip()
 
     sense = f'"{word}"'
     if pos:
         sense += f" ({pos})"
     if definition:
         sense += f" — means: {definition}"
+    if arabic:
+        sense += (f" — the learner's meaning in Arabic: {arabic}. Every question "
+                  f"about it stays in THIS sense only")
 
     if form:
         return (
@@ -867,6 +937,7 @@ def speaking_turn_prompt(
         f"{'Tutor' if t['from_ai'] else learner_name}: {t['text']}"
         for t in transcript[-6:]
     )
+    everyday = _EVERYDAY_RULE.format(level=level)
     remaining = ", ".join(f'"{w}"' for w in remaining_words) or "none left"
     # What they like, for choosing between the scenes a word could live in —
     # never a reason to force a word somewhere it does not belong.
@@ -885,8 +956,8 @@ This is the very first thing they will hear, spoken aloud.
 Write a short, friendly greeting:
 - Greet {learner_name} by name and ask one easy, open question about how they \
 are or how their day has been.
-- Two sentences at most. Do NOT mention any target word yet, and do NOT set an \
-exercise. This is small talk to settle them in.
+- {_speaking_length_rule(level, asks=False)} Do NOT mention any target word \
+yet, and do NOT set an exercise. This is small talk to settle them in.
 - Plain spoken English. **At {level}:** {register_for(level)}
 - No lists, no emoji, no markdown."""
 
@@ -929,10 +1000,11 @@ happened in between.
 something they expressed clearly.
 - Close warmly, and make it sound like an ending: thank them, or say you \
 enjoyed talking, or that you will pick it up next time.
-- Two or three short sentences.
+- {_speaking_length_rule(level, asks=False)}
 - Do NOT ask another question. Do NOT ask for a word, and do NOT invent one.{missed_rule}
 - No lists, no markdown, no emoji — every character is spoken aloud.
-- Report `words_only_named` by the same rule as always: usually empty."""
+- Report `words_only_named` by the same rule as always: usually empty.
+- Report `learner_intent` for their last message: "answer", "new_question", "explain" or "other" — by the same rule as always."""
 
     # After a few exchanges with a word still untouched, the tutor may ask for it
     # outright — but only then, and only once the conversation is somewhere the
@@ -977,6 +1049,39 @@ read aloud and answered out loud.
 
 Conversation so far:
 {history}
+
+FIRST, decide what {learner_name}'s last message IS — `learner_intent`:
+  - "answer": they answered or talked, in sentences of their own. Most turns.
+  - "new_question": they asked for another, new, different or easier \
+question — "Can you give me another question using football?", "Ask me \
+something easier".
+  - "explain": they asked what a word means or how to use it — "What does \
+football mean?", "Can you explain football?", "How can I use football in a \
+sentence?", "I don't understand the word".
+  - "other": anything else that is not an answer — "Can you repeat that?", \
+"Sorry, I didn't hear you".
+A message that asks for something is NOT an answer, even when it contains a \
+target word. If it both answers and asks ("I play football on Fridays. Give \
+me another question."), it is "answer", and you still do what they asked.
+
+What to do for each:
+  - "new_question": give a NEW question about the SAME word they were \
+working on, IN THE SAME MEANING — the meaning given below, never another \
+sense of the same spelling ("tissue" of the body is not a paper tissue). A \
+different everyday situation, and EASIER than the one before. Do not repeat \
+or rephrase the old question. Do not move to another word. Easier means \
+SHORTER too: the new question itself, with at most a few words before it \
+("Sure!"). No scene-setting sentences — a question that needs a story to \
+explain it is not the easier one.
+  - "explain": explain that word — in the meaning given below — in ONE short \
+sentence of simple English at {level}, then ask a simple everyday question \
+they can now answer with it. An example only if the length below leaves \
+room for one. Kind, never a lecture.
+  - "other": do what they asked — say it again more simply — and carry on.
+  - "answer": the steps below.
+Whichever it is, the length limit further down applies to the whole turn.
+
+{everyday}
 
 Target words still to practise: {remaining}{shapes_block}
 Already used naturally: {", ".join(used_words) or "none yet"}
@@ -1034,7 +1139,7 @@ nobody is listening.
   And {learner_name} is never obliged to use it. If they answer without the \
 word, that is a good answer: take what they said seriously, and find the word \
 another opening later.{repair}{nudge}
-- Two or three short sentences, the way a person speaks.
+- {_speaking_length_rule(level, asks=True)} The way a person speaks.
 - **Speak at {level}:** {register_for(level)} This is what the learner chose,
   and it is the whole reason the level can be changed mid-conversation: if they
   drop it because you were too hard, the very next thing you say has to be
@@ -1043,14 +1148,76 @@ another opening later.{repair}{nudge}
 spoken aloud.
 - Also report `words_only_named`: any target word that appears in \
 {learner_name}'s last message where they are talking *about* the word rather \
-than using it — "let me use 'hook' in a sentence", or echoing your question back \
-word for word. **This list is usually empty.**
+than using it — asking for a question with it, asking what it means or how to \
+use it ("Can you explain what football means?", "Give me another question \
+using football", "How can I use football in a sentence?"), "let me use 'hook' \
+in a sentence", or echoing your question back word for word. **This list is \
+usually empty.** List a word ONLY if every place it appears in their message \
+is a request or a naming. If they also used it in a sentence of their own — \
+"I play football on Fridays. Give me another question." — it was USED: do \
+not list it, and their intent is "answer".
 
   Whether a word was used is decided from their words, not from this list; you \
 are being asked only about the one case a reader of the text cannot settle. So \
 do NOT list a word merely because it was used badly: "I want to become a \
 software engineering" is an attempt, and attempts count. How well they used it \
 is judged once, at the end, by someone else."""
+
+
+# ── Keeping a tutor turn to its band's length (ADR-117) ──────────────────────
+
+#: How far past its band's word count a turn may run before it is shortened.
+#: The prompt states the length and the model mostly keeps to it — but not when
+#: a learner asks for a new question about a hard word: measured at A2, "tissue"
+#: came back as a 41-word scene before the question, twice the band. A turn
+#: that far over gets one rewrite; one a little over is left alone, because a
+#: rewrite costs the learner a second model call's wait.
+SPEAKING_SHORTEN_OVER = 1.5
+
+_TRY_LINE = re.compile(r"\s*Try to use the word\b.*$", re.IGNORECASE | re.DOTALL)
+
+
+def split_try_line(reply: str) -> tuple[str, str]:
+    """The turn, and its closing "Try to use the word …" sentence if it has one.
+
+    The closing line is kept apart because it is not part of the length — every
+    asking turn ends with it whatever the band — and because it must survive a
+    rewrite word for word: it is how the learner knows which word is wanted.
+    """
+    found = _TRY_LINE.search(reply or "")
+    if not found:
+        return (reply or "").strip(), ""
+    return reply[:found.start()].strip(), found.group(0).strip()
+
+
+def speaking_too_long(reply: str, level: str) -> bool:
+    body, _ = split_try_line(reply)
+    _, words = speaking_length_for(level)
+    return len(body.split()) > words * SPEAKING_SHORTEN_OVER
+
+
+SPEAKING_SHORTEN_SCHEMA = {
+    "type": "object",
+    "properties": {"reply": {"type": "string"}},
+    "required": ["reply"],
+}
+
+
+def speaking_shorten_prompt(*, body: str, level: str) -> str:
+    """Asks for the same turn in fewer words — nothing added, nothing changed."""
+    sentences, words = speaking_length_for(level)
+    return f"""A tutor is about to say this, aloud, to an English learner at CEFR \
+level {level}. It is too long for them to hold in their head:
+
+{body}
+
+Say the same thing in AT MOST {sentences} short sentences and about {words} \
+words.
+- Keep the question, and keep what it asks about. It is the part that matters.
+- Keep any word it asks about, in the same meaning.
+- Cut the scene-setting, the repetition and the second example first.
+- {register_for(level)}
+- Plain spoken English: no lists, no markdown, no emoji."""
 
 
 # ── Speaking evaluation (end of conversation) ────────────────────────────────

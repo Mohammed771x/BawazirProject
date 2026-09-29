@@ -255,4 +255,7 @@ public static class RateLimitPolicies
 
     /// <summary>Each of these costs an AI call, so the budget is tight.</summary>
     public const string Expensive = "expensive";
+
+    /// <summary>The voice: fetched ahead in bulk, so it has its own budget.</summary>
+    public const string Voice = "voice";
 }

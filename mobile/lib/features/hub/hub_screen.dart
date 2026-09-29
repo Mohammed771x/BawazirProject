@@ -66,6 +66,7 @@ class HubScreen extends ConsumerWidget {
                 // the feature does not exist — so it waits in plain sight with
                 // the date on it.
                 if (data.weeklyReview.available ||
+                    data.weeklyReview.practiceAvailable ||
                     data.weeklyReview.nextAvailableAt != null) ...[
                   const SizedBox(height: AppSpacing.md),
                   _WeeklyReviewCard(status: data.weeklyReview),
@@ -241,23 +242,33 @@ class _WeeklyReviewCard extends ConsumerWidget {
     final s = ref.watch(stringsProvider);
     final color = context.palette.review;
     final open = status.available;
+    // Finished for the week: the card stays usable, as practice over the
+    // same words, instead of locking until next week (ADR-120).
+    final practice = !open && status.practiceAvailable;
+    final tappable = open || practice;
+    String dateOf(DateTime at) =>
+        DateFormat.MMMd(s.locale.languageCode).format(at.toLocal());
 
     // Waiting, not broken. A muted card that names the day is the difference
     // between "this is coming" and "this does not work".
     final accent =
-        open ? color : context.colors.onSurface.withValues(alpha: 0.45);
+        tappable ? color : context.colors.onSurface.withValues(alpha: 0.45);
 
     return AppCard(
-      borderColor: accent.withValues(alpha: open ? 0.35 : 0.2),
-      color: accent.withValues(alpha: open ? 0.06 : 0.03),
+      borderColor: accent.withValues(alpha: tappable ? 0.35 : 0.2),
+      color: accent.withValues(alpha: tappable ? 0.06 : 0.03),
       onTap: open
           ? () => context.push(Routes.weeklyReview)
+          : practice
+          ? () => context.push(Routes.weeklyReviewPractice)
           : null,
       child: Row(
         children: [
           Icon(
             open
                 ? Icons.replay_circle_filled_rounded
+                : practice
+                ? Icons.task_alt_rounded
                 : Icons.lock_clock_rounded,
             color: accent,
             size: 34,
@@ -272,12 +283,22 @@ class _WeeklyReviewCard extends ConsumerWidget {
                 Text(
                   open
                       ? s.wordsDue(status.wordCount)
-                      : s.challengeOpensOn(
-                          DateFormat.MMMd(s.locale.languageCode)
-                              .format(status.nextAvailableAt!.toLocal()),
-                        ),
+                      : practice
+                      ? s.practiseWeekWords(status.practiceWordCount)
+                      : s.challengeOpensOn(dateOf(status.nextAvailableAt!)),
                   style: context.text.bodySmall?.copyWith(color: accent),
                 ),
+                // The real challenge still has its day, and practising does
+                // not move it.
+                if (practice && status.nextAvailableAt != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    s.nextChallengeOn(dateOf(status.nextAvailableAt!)),
+                    style: context.text.labelSmall?.copyWith(
+                      color: context.colors.onSurface.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ],
                 // Said before they start, not discovered after they finish
                 // what they thought was everything (ADR-089).
                 if (open && status.wordsWaitingAfterThis > 0) ...[
@@ -292,7 +313,7 @@ class _WeeklyReviewCard extends ConsumerWidget {
               ],
             ),
           ),
-          if (open)
+          if (tappable)
             Icon(
               Icons.chevron_right_rounded,
               color: context.colors.onSurface.withValues(alpha: 0.65),

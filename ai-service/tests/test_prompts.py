@@ -58,7 +58,27 @@ def test_a_listening_clip_is_shorter_than_the_same_reading():
 def test_every_target_word_still_fits_when_there_are_many():
     """The floor is the words themselves, whatever the band says: each needs a
     sentence of its own with neighbours that hint at its meaning."""
-    assert _passage_words("A1", 12, listening=True) >= 12 * 30
+    # Two of the band's own sentences per word: eight words each at A1.
+    assert _passage_words("A1", 12, listening=True) >= 12 * 2 * 8
+    assert _passage_words("C1", 12, listening=True) >= 12 * 2 * 20
+
+
+def test_the_floor_does_not_flatten_the_bands():
+    """Measured with five words: A1 came back at 168 words, twice its band,
+    and B1 listening at the length of A2 (ADR-117). Each band must stay
+    longer than the one below it, reading and listening alike, at the word
+    counts a session actually uses."""
+    ladder = ["A1", "A2", "B1", "B2", "C1", "C2"]
+    for count in (3, 5, 8):
+        for listening in (False, True):
+            lengths = [_passage_words(level, count, listening=listening)
+                       for level in ladder]
+            assert lengths == sorted(lengths), (count, listening, lengths)
+            assert lengths[0] < lengths[2] < lengths[4], (count, listening, lengths)
+
+    # A beginner's five-word passage stays a beginner's length.
+    assert _passage_words("A1", 5) <= 110
+    assert _passage_words("A1", 5, listening=True) <= 110
 
 
 def test_an_unknown_band_falls_back_rather_than_raising():
@@ -399,3 +419,165 @@ def test_relevelling_keeps_the_register_of_the_session_it_belongs_to():
         option_style=prompts.SIMPLE_DEFINITION, **common)
     assert "wrong_meanings_ar" in prompts.relevel_prompt(
         option_style=prompts.ARABIC_MEANING, **common)
+
+
+# ── Questions, requests and specialist words (ADR-113) ───────────────────────
+
+def _turn(level="A1", words=("tissue",), last="Hi, I am fine."):
+    return prompts.speaking_turn_prompt(
+        learner_name="Sara", level=level, remaining_words=list(words),
+        used_words=[], interests=["cooking"],
+        transcript=[
+            {"from_ai": True, "text": "Hello Sara, how are you?"},
+            {"from_ai": False, "text": last},
+        ],
+        remaining_shapes=[{"text": w, "definition": "part of a body",
+                           "part_of_speech": "noun"} for w in words])
+
+
+def test_the_tutor_classifies_the_message_before_it_answers():
+    prompt = _turn(last="Can you give me another question using tissue?")
+
+    assert "learner_intent" in prompt
+    for intent in prompts.LEARNER_INTENTS:
+        assert f'"{intent}"' in prompt
+    # The product owner's three examples are each named as not an answer.
+    assert "Can you give me another question using football?" in prompt
+    assert "What does football mean?" in prompt
+    assert "How can I use football in a" in prompt
+    assert "is NOT an answer" in prompt
+
+
+def test_a_new_question_is_easier_and_about_the_same_word():
+    prompt = _turn()
+    assert "NEW question about the SAME word" in prompt
+    assert "EASIER than the one before" in prompt
+
+
+def test_a_specialist_word_is_asked_about_in_everyday_life():
+    prompt = _turn(level="A1")
+
+    assert "everyday life" in prompt
+    assert "scientific, medical or technical word is asked about SIMPLY" in prompt
+    assert "outside their interests" in prompt
+    # Pitched at the learner's band, in the words the band means.
+    assert "A1 learner" in prompt
+    assert prompts.register_for("A1") in prompt
+
+
+def test_the_schema_requires_the_intent():
+    schema = prompts.SPEAKING_TURN_SCHEMA
+    assert "learner_intent" in schema["required"]
+    assert schema["properties"]["learner_intent"]["enum"] == list(
+        prompts.LEARNER_INTENTS)
+
+
+def test_the_turn_reports_the_intent_and_never_an_unknown_one(
+        client, auth, stub_gemini):
+    body = {
+        "learner_name": "Sara", "level": "A1",
+        "remaining_words": ["tissue"], "used_words": [],
+        "transcript": [{"from_ai": True, "text": "Hello."},
+                       {"from_ai": False, "text": "What does tissue mean?"}],
+    }
+
+    stub_gemini({"learner_intent": "explain", "reply": "It is...",
+                 "words_only_named": ["tissue"]})
+    answer = client.post("/ai/speaking/turn", json=body, headers=auth).json()
+    assert answer["learner_intent"] == "explain"
+    assert answer["words_only_named"] == ["tissue"]
+
+    # A label outside the four is read as an answer: the backend's own check
+    # still decides, and an invented label must not unmark a word.
+    stub_gemini({"learner_intent": "complaint", "reply": "Ok.",
+                 "words_only_named": []})
+    answer = client.post("/ai/speaking/turn", json=body, headers=auth).json()
+    assert answer["learner_intent"] == "answer"
+
+
+def test_a_long_conversation_can_still_be_evaluated(client, auth, stub_gemini):
+    # The conversation now runs until every word is used (ADR-113); the
+    # backend sends up to 120 of its latest lines.
+    stub_gemini({"words": [], "summary": "ok"})
+    transcript = [{"from_ai": i % 2 == 0, "text": f"line {i}"} for i in range(120)]
+    response = client.post("/ai/speaking/evaluate", headers=auth, json={
+        "learner_name": "Sara", "level": "A1",
+        "words": [{"text": "tissue", "meaning": "نسيج"}],
+        "transcript": transcript,
+    })
+    assert response.status_code == 200
+
+
+# ── How much the tutor says, by band (ADR-117) ───────────────────────────────
+
+_TURN = dict(learner_name="Sara", remaining_words=["deliver"], used_words=[],
+             transcript=[{"from_ai": True, "text": "Hi Sara!"},
+                         {"from_ai": False, "text": "Hi, I am fine."}])
+
+
+def test_a_beginner_hears_less_than_an_advanced_learner():
+    """Measured: A2 answered in 46 words over five sentences, about what it
+    said to C1. Beginners get less to hold, and it climbs with the band."""
+    ladder = ["A1", "A2", "B1", "B2", "C1", "C2"]
+    sentences = [prompts.speaking_length_for(level)[0] for level in ladder]
+    words = [prompts.speaking_length_for(level)[1] for level in ladder]
+
+    assert sentences == sorted(sentences) and words == sorted(words)
+    assert words[0] < words[2] < words[4]
+    assert prompts.speaking_length_for("A2") <= (2, 20)
+
+
+def test_the_half_steps_speak_like_their_band():
+    assert prompts.speaking_length_for("A2_PLUS") == prompts.speaking_length_for("A2")
+    assert prompts.speaking_length_for("b1+") == prompts.speaking_length_for("B1")
+    assert prompts.speaking_length_for("Z9") == prompts.speaking_length_for("B1")
+
+
+def test_every_speaking_turn_carries_its_band_length():
+    """The greeting, a turn and the goodbye all say how long, not only the
+    middle — a greeting is the first thing a beginner has to understand."""
+    greeting = prompts.speaking_turn_prompt(level="A1", **{**_TURN, "transcript": []})
+    turn = prompts.speaking_turn_prompt(level="A1", **_TURN)
+    goodbye = prompts.speaking_turn_prompt(level="A1", **{**_TURN, "remaining_words": []})
+
+    for prompt in (greeting, turn, goodbye):
+        assert "at most 2 short sentences and about 16 words" in prompt
+    # Only an asking turn ends with the "Try to use" line, so only it is told
+    # that line is outside the count.
+    assert "NOT counting" in turn
+    assert "NOT counting" not in greeting
+
+
+def test_the_length_follows_the_level_asked_for():
+    """A learner who lowers their level mid-conversation must hear it."""
+    a1 = prompts.speaking_turn_prompt(level="A1", **_TURN)
+    c1 = prompts.speaking_turn_prompt(level="C1", **_TURN)
+
+    assert "about 16 words" in a1 and "about 16 words" not in c1
+    assert "about 45 words" in c1
+
+
+def test_an_explanation_fits_inside_the_length():
+    """Explaining a word used to be three parts — definition, example,
+    question — whatever the band, which is how A1 got five sentences."""
+    prompt = prompts.speaking_turn_prompt(level="A1", **_TURN)
+
+    assert "An example only if the length below leaves" in prompt
+
+
+def test_a_specialist_word_keeps_its_sense_when_made_simple():
+    """Measured: "tissue" of the body, simplified, became a paper tissue for a
+    cold — the easy everyday sense of the same spelling."""
+    prompt = prompts.speaking_turn_prompt(level="B1", **_TURN)
+
+    assert "IN THIS SENSE" in prompt
+    assert "or through its everyday meaning" not in prompt
+
+
+def test_a_new_question_is_a_shorter_one():
+    """Measured: asked for another question, A1 set a scene first — five
+    sentences for a beginner who had just said the last one was too hard."""
+    prompt = prompts.speaking_turn_prompt(level="A1", **_TURN)
+
+    assert "Easier means SHORTER too" in prompt
+    assert "applies to the whole turn" in prompt

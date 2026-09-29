@@ -434,7 +434,15 @@ public sealed record SpeakingObservation(
     bool FromFallback,
     string PromptVersion = "",
     string Model = "",
-    int Tokens = 0);
+    int Tokens = 0,
+    /// <summary>
+    /// What the learner's last message was, in the model's reading:
+    /// <c>answer</c>, <c>new_question</c>, <c>explain</c> or <c>other</c>
+    /// (ADR-113). The second of two checks on whether a turn used a word;
+    /// the first is <c>LearnerRequests</c>. Empty from a service that does
+    /// not report it.
+    /// </summary>
+    string LearnerIntent = "");
 
 public sealed record SpeakingEvaluationRequest(
     string LearnerName,

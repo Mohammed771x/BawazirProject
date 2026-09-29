@@ -79,7 +79,17 @@ class WeeklyReviewStatus {
     required this.periodStart,
     required this.nextAvailableAt,
     this.wordsWaitingAfterThis = 0,
+    this.practiceAvailable = false,
+    this.practiceWordCount = 0,
   });
+
+  /// Whether the last finished review's words can be gone over again as
+  /// practice (ADR-120). Only while no challenge is open: then the card is
+  /// the challenge.
+  final bool practiceAvailable;
+
+  /// How many words that practice asks about.
+  final int practiceWordCount;
 
   final bool available;
 
@@ -109,6 +119,8 @@ class WeeklyReviewStatus {
             DateTime.tryParse(json['nextAvailableAt'] as String? ?? '')?.toUtc(),
         wordsWaitingAfterThis:
             (json['wordsWaitingAfterThis'] as num?)?.toInt() ?? 0,
+        practiceAvailable: json['practiceAvailable'] as bool? ?? false,
+        practiceWordCount: (json['practiceWordCount'] as num?)?.toInt() ?? 0,
       );
 
   Map<String, dynamic> toJson() => {
@@ -117,6 +129,8 @@ class WeeklyReviewStatus {
         'periodStart': periodStart?.toIso8601String(),
         'nextAvailableAt': nextAvailableAt?.toIso8601String(),
         'wordsWaitingAfterThis': wordsWaitingAfterThis,
+        'practiceAvailable': practiceAvailable,
+        'practiceWordCount': practiceWordCount,
       };
 }
 

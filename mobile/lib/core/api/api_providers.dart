@@ -91,14 +91,20 @@ class AppEnvironment {
 
   /// Fails fast rather than silently sending bearer tokens over cleartext.
   ///
-  /// The private-network exception is gated on [kDebugMode] on purpose: a
+  /// The private-network exception is closed to release builds on purpose: a
   /// release build sends tokens over TLS or not at all, whatever address it is
   /// pointed at. Nothing here is relaxed by configuration — a build has to be a
-  /// debug build, and the host has to be on a private network
+  /// debug or profile build, and the host has to be on a private network
   /// (`docs/07-SECURITY.md` §2).
+  ///
+  /// Profile as well as debug (ADR-118): a profile build is compiled like a
+  /// release build, so it is the one to hand a tester judging speed against the
+  /// Mac, and it is never published. It used to be refused here before any
+  /// request left the phone, which the tester saw only as "something went
+  /// wrong".
   void assertTransportIsSafe() {
     if (useMockBackend || isSecureTransport || isLoopback) return;
-    if (kDebugMode && isPrivateNetwork) return;
+    if (!kReleaseMode && isPrivateNetwork) return;
 
     throw StateError(
       'WORDOS_API_BASE_URL must use https (got: $baseUrl). '

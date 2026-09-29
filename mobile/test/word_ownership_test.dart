@@ -127,18 +127,11 @@ void main() {
     expect(unchanged.word.meaning, 'كتاب');
   });
 
-  test('insisting cannot turn one word into another', () async {
+  test('a meaning of another word is refused, with that word named', () async {
     final (api, book) = await apiWithBook();
 
-    // The override exists for a checker that could not recognise a wording
-    // (ADR-074). It has no business here: the dictionary knows whose meaning
-    // this is.
     await expectLater(
-      api.changeWordMeaning(
-        wordId: book.id,
-        meaning: 'يُحقّق',
-        acceptAnyway: true,
-      ),
+      api.changeWordMeaning(wordId: book.id, meaning: 'يُحقّق'),
       throwsA(isA<MeaningIsAnotherWordException>()),
     );
   });
@@ -375,7 +368,7 @@ void main() {
     expect(find.text('إنسان'), findsWidgets, reason: 'their text is not lost');
   });
 
-  testWidgets('the learner may insist, and it is recorded as an override',
+  testWidgets('a wrong meaning cannot be saved: there is no way past it',
       (tester) async {
     await openAddWord(tester);
 
@@ -392,16 +385,14 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
     await tester.pumpAndSettle();
 
-    // The checker is sometimes wrong, and this feature exists because an
-    // automated source of meanings was (ADR-072). So there is a way past it —
-    // below the suggestions, and quieter than them.
-    await tester.tap(find.widgetWithText(TextButton, 'Save it as I wrote it'));
-    await tester.pumpAndSettle();
-    await tester.pump(const Duration(seconds: 2));
-    await tester.pumpAndSettle();
-
+    // ADR-112: no "save it anyway". What is offered instead is the way
+    // forward — the checker's meanings, and a line saying to correct it.
+    expect(find.text('Save it as I wrote it'), findsNothing);
+    expect(find.textContaining('correct the meaning'), findsOneWidget);
+    expect(find.byType(ActionChip), findsWidgets);
+    // The sheet stays open with their text, and the word is not in the list.
+    expect(find.text('Check this meaning'), findsOneWidget);
     expect(find.text('إنسان'), findsWidgets);
-    expect(find.text('Check this meaning'), findsNothing);
   });
 
   testWidgets('tapping a suggestion saves that meaning instead',
@@ -591,17 +582,16 @@ void main() {
     );
   });
 
-  test('an insisted meaning is saved, and only that one is', () async {
+  test('a rejected meaning is never saved', () async {
     final api = await signedInApi();
 
-    final word = await api.addWordWithMeaning(
-      text: 'book',
-      meaning: 'إنسان',
-      acceptAnyway: true,
+    await expectLater(
+      api.addWordWithMeaning(text: 'book', meaning: 'إنسان'),
+      throwsA(isA<MeaningRejectedException>()),
     );
 
-    // Their wording, untouched — not quietly replaced by a suggestion.
-    expect(word.meaning, 'إنسان');
+    final words = await api.words();
+    expect(words.items.where((w) => w.text == 'book'), isEmpty);
   });
 
   test('the same written meaning cannot be added twice', () async {

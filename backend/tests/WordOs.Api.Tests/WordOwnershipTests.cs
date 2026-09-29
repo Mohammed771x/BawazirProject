@@ -522,19 +522,46 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task The_learner_may_insist_and_it_is_recorded()
+    public async Task Insisting_on_a_rejected_meaning_saves_nothing()
     {
+        // ADR-112: there is no "add it anyway". An app that still sends the
+        // old flag is refused exactly as one that does not.
         Skip.IfNot(db.IsAvailable, db.SkipReason);
         await SignInAsync();
 
         await SeedAsync("bellows", "n", "a device for blowing air", "منفاخ");
         Ai.RejectMeanings = true;
 
+        var response = await Client.PostAsJsonAsync("/api/words", new
+        {
+            text = "bellows",
+            customMeaning = "قطة",
+            acceptAnyway = true,
+        });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error");
+        Assert.Equal("MEANING_REJECTED", error.GetProperty("code").GetString());
+        // What to do instead: the meanings the checker would accept.
+        Assert.NotEmpty(error.GetProperty("suggestions").EnumerateArray());
+
+        await using var context = db.CreateContext();
+        Assert.False(await context.Words.AnyAsync(w => w.Text == "bellows"));
+    }
+
+    [SkippableFact]
+    public async Task A_meaning_the_checker_accepts_is_saved_as_written()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        await SeedAsync("bellows", "n", "a device for blowing air", "منفاخ");
+
         var body = await AddAndReadAsync(new
         {
             text = "bellows",
             customMeaning = "منفاخ الحداد",
-            acceptAnyway = true,
         });
 
         // Their wording, untouched — the checker does not get to rewrite it.
@@ -542,11 +569,7 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
 
         await using var context = db.CreateContext();
         var word = await context.Words.FirstAsync(w => w.Text == "bellows");
-
-        // "The model said no and the learner said yes" is what explains a word
-        // failing a fortnight later, and it is unrecoverable if nobody wrote it
-        // down.
-        Assert.Equal(MeaningCheckResult.Overridden, word.MeaningCheck);
+        Assert.Equal(MeaningCheckResult.Approved, word.MeaningCheck);
     }
 
     [SkippableFact]
@@ -892,18 +915,15 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
             .GetProperty("error");
         Assert.Equal("MEANING_REJECTED", error.GetProperty("code").GetString());
 
-        // A refusal it cannot justify by naming another word is the softer one,
-        // and the learner may overrule it — the same bargain ADR-074 struck on
-        // the way in. The disagreement is recorded rather than forgotten.
-        var kept = await ChangeAsync(
+        // And insisting changes nothing (ADR-112): the word keeps the meaning
+        // it had, which the learner can see is still correct.
+        var insisted = await ChangeAsync(
             wordId, new { meaning = "يُكَوِّن", acceptAnyway = true });
-        kept.EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.Conflict, insisted.StatusCode);
 
         await using var context = db.CreateContext();
         var stored = await context.Words.SingleAsync(w => w.Id == wordId);
-        Assert.Equal("يُكَوِّن", stored.Meaning);
-        Assert.Equal(MeaningSource.Learner, stored.MeaningSource);
-        Assert.Equal(MeaningCheckResult.Overridden, stored.MeaningCheck);
+        Assert.Equal("أنشأ", stored.Meaning);
     }
 
     [SkippableFact]

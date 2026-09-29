@@ -165,6 +165,14 @@ public static class HubEndpoints
 
         var periodStart = now.AddDays(-config.WeeklyReviewPeriodDays);
 
+        // Once this week's challenge is done, the card offers its words again
+        // as practice instead of locking (ADR-120). Only then: while a
+        // challenge is open, the card is the challenge.
+        var practiceWords = reviewWordCount > 0
+            ? 0
+            : (await WeeklyReviewEndpoints.PracticeSourceAsync(
+                db, userId.Value, ct)).Words.Count;
+
         return Results.Ok(new
         {
             dailyProgress = new
@@ -188,6 +196,8 @@ public static class HubEndpoints
                 // this sitting is not the end of it (ADR-089).
                 wordsWaitingAfterThis = Math.Max(
                     0, ripe - config.WeeklyReviewMaxWords),
+                practiceAvailable = practiceWords > 0,
+                practiceWordCount = practiceWords,
             },
             vocabulary = new
             {

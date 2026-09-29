@@ -57,6 +57,12 @@ public class User
 
     public string TimeZone { get; private set; } = "UTC";
 
+    /// <summary>
+    /// Where Spelling's hint ladder starts for this learner, or null to start
+    /// where their level puts them (ADR-115).
+    /// </summary>
+    public SpellingClueKind? SpellingHintStart { get; private set; }
+
     public IReadOnlyList<UserInterest> Interests => _interests;
 
     public IReadOnlyList<SkillLevel> SkillLevels => _skillLevels;
@@ -131,6 +137,16 @@ public class User
     public SkillLevel LevelFor(SkillType skill) =>
         _skillLevels.Single(l => l.Skill == skill);
 
+    /// <summary>
+    /// The band Spelling's content is pitched at. Spelling carries no CEFR band
+    /// of its own, so it follows Reading: whether an English definition is a
+    /// usable clue is a reading question (ADR-008).
+    /// </summary>
+    public CefrLevel SpellingContentLevel() =>
+        _skillLevels.FirstOrDefault(l => l.Skill == SkillType.Spelling)?.UserSelectedLevel
+        ?? _skillLevels.FirstOrDefault(l => l.Skill == SkillType.Reading)?.UserSelectedLevel
+        ?? CefrLevel.B1;
+
     public void RecordLogin(DateTimeOffset now) => LastLoginAt = now;
 
     /// <summary>
@@ -144,6 +160,27 @@ public class User
     }
 
     public void AdvanceOnboarding(OnboardingStage stage) => OnboardingStage = stage;
+
+    /// <summary>
+    /// Chooses the rung every Spelling word starts on, or null for automatic
+    /// (ADR-115).
+    /// </summary>
+    /// <remarks>
+    /// The letter count is refused as a start: it is the last resort, the hint
+    /// under all the others, and a word that opened on it would have no hint
+    /// left to give.
+    /// </remarks>
+    public void ChooseSpellingHintStart(SpellingClueKind? start)
+    {
+        if (start == SpellingClueKind.LetterCount)
+        {
+            throw new ArgumentException(
+                "The letter count is the last hint, not a place to start.",
+                nameof(start));
+        }
+
+        SpellingHintStart = start;
+    }
 
     public void ReplaceInterests(IEnumerable<string> interests, DateTimeOffset now)
     {

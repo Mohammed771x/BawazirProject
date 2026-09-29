@@ -484,6 +484,7 @@ class MockContentGenerator {
     required List<SessionTargetWord> words,
     required List<String> definitions,
     required CefrLevel level,
+    SpellingClueKind? start,
   }) {
     final items = <SessionItem>[];
     final correct = <String, String>{};
@@ -494,7 +495,10 @@ class MockContentGenerator {
       final definition = definitions[i];
       final synonym = MockDictionary.synonymFor(word.text);
 
-      final ladder = _hintLadder(word, definition, synonym, level);
+      // Every word from the same rung: the next word starts at the top again,
+      // not where the last one's hints ran out (ADR-115).
+      final ladder = _hintLadder(
+          word, definition, synonym, start ?? hintStartFor(level));
       final letters = _letterPool(word.text);
 
       items.add(
@@ -528,19 +532,21 @@ class MockContentGenerator {
   /// Mirrors `SessionContentBuilder.BuildHintLadder` in the C# backend: one
   /// ladder of five rungs, each easier than the last, entered at the rung that
   /// suits the level. Deleted with the rest of `mock_backend/` in Phase 7.
+  /// Mirrors `SessionContentBuilder.HintStartFor` (ADR-115).
+  static SpellingClueKind hintStartFor(CefrLevel level) => switch (level.rank) {
+        final r when r >= CefrLevel.c1.rank => SpellingClueKind.definitionEn,
+        final r when r >= CefrLevel.b2.rank =>
+          SpellingClueKind.simplifiedDefinition,
+        final r when r >= CefrLevel.b1.rank => SpellingClueKind.synonym,
+        _ => SpellingClueKind.arabicMeaning,
+      };
+
   List<SpellingHint> _hintLadder(
     SessionTargetWord word,
     String definition,
     String? synonym,
-    CefrLevel level,
+    SpellingClueKind entry,
   ) {
-    final entry = switch (level.rank) {
-      final r when r >= CefrLevel.c1.rank => SpellingClueKind.definitionEn,
-      final r when r >= CefrLevel.b2.rank =>
-        SpellingClueKind.simplifiedDefinition,
-      final r when r >= CefrLevel.b1.rank => SpellingClueKind.synonym,
-      _ => SpellingClueKind.arabicMeaning,
-    };
 
     final ladder = <SpellingHint>[];
     void rung(SpellingClueKind kind, String? text) {

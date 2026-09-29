@@ -177,6 +177,24 @@ builder.Services.AddScoped<IAiContentService>(provider =>
             provider.GetRequiredService<HttpAiContentService>(),
             provider.GetRequiredService<ILogger<ResilientAiContentService>>())));
 
+// Speaking's recorder (ADR-107): the same AI service and the same gate, a
+// separate seam — a transcript is a draft for the learner, not an observation.
+builder.Services.AddHttpClient<ISpeechTranscriber, HttpSpeechTranscriber>((provider, client) =>
+{
+    var aiOptions = provider
+        .GetRequiredService<IOptions<AiServiceOptions>>().Value;
+    client.BaseAddress = new Uri(aiOptions.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(aiOptions.TimeoutSeconds);
+});
+
+builder.Services.AddHttpClient<ISpeechSynthesizer, HttpSpeechSynthesizer>((provider, client) =>
+{
+    var aiOptions = provider
+        .GetRequiredService<IOptions<AiServiceOptions>>().Value;
+    client.BaseAddress = new Uri(aiOptions.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(aiOptions.TimeoutSeconds);
+});
+
 // ── Email ────────────────────────────────────────────────────────────────────
 //
 // The only email WordOS sends is a password-reset code (ADR-078). Brevo when a
@@ -307,6 +325,15 @@ builder.Services.AddRateLimiter(options =>
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = limits.ExpensivePermitsPerMinute,
+                Window = TimeSpan.FromMinutes(1),
+            }));
+
+    options.AddPolicy(RateLimitPolicies.Voice, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            PartitionKey(context),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = limits.VoicePermitsPerMinute,
                 Window = TimeSpan.FromMinutes(1),
             }));
 
@@ -471,6 +498,7 @@ app.MapWeeklyReviewEndpoints();
 app.MapWordEndpoints();
 app.MapAdminEndpoints();
 app.MapFeedbackEndpoints();
+app.MapSpeechEndpoints();
 
 app.Run();
 

@@ -39,6 +39,7 @@ public static class WeeklyReviewEndpoints
             .RequireAuthorization();
 
         group.MapPost("/start", StartAsync);
+        group.MapPost("/practice/start", StartPracticeAsync);
         group.MapPost("/{id:guid}/answer", AnswerAsync);
         group.MapPost("/{id:guid}/complete", CompleteAsync);
 
@@ -129,8 +130,99 @@ public static class WeeklyReviewEndpoints
             periodStart = review.PeriodStart,
             totalWords = review.TotalWords,
             wordsWaitingAfterThis = remainingAfter,
+            isPractice = false,
             queue = review.Queue.Select(ToItem).ToList(),
         });
+    }
+
+    /// <summary>
+    /// Goes over the last finished review's words again, as practice (ADR-120).
+    /// </summary>
+    /// <remarks>
+    /// The challenge closes once it is done and opens again when words have
+    /// had another week — which left a learner who wanted to go over the
+    /// week's words with a locked card. This is that going-over: the same
+    /// words, the same questions, and none of it recorded (rule R9).
+    /// </remarks>
+    private static async Task<IResult> StartPracticeAsync(
+        ClaimsPrincipal principal,
+        WordOsDbContext db,
+        TimeProvider clock,
+        CancellationToken ct)
+    {
+        var userId = principal.UserId();
+        if (userId is null) return Results.Unauthorized();
+
+        var (source, words) = await PracticeSourceAsync(db, userId.Value, ct);
+        if (source is null || words.Count == 0)
+        {
+            return Problems.Conflict(
+                "PRACTICE_NOTHING_TO_PRACTISE",
+                "Finish a weekly review first; its words can then be practised.");
+        }
+
+        // Only an unfinished practice is replaced. An unfinished *review* is
+        // left alone: starting a practice must never throw away the real one.
+        var stale = await db.WeeklyReviews
+            .Where(r => r.UserId == userId && !r.IsComplete && r.IsPractice)
+            .ToListAsync(ct);
+        db.WeeklyReviews.RemoveRange(stale);
+
+        var now = clock.GetUtcNow();
+        var practice = WeeklyReview.StartPractice(userId.Value, source, now);
+        var random = Random.Shared;
+        var meanings = words.Select(w => w.Meaning).ToList();
+
+        foreach (var word in Shuffled(words, random))
+        {
+            practice.AddItem(WeeklyReviewItem.Create(
+                word.Id, word.Text,
+                BuildOptions(word.Meaning, meanings, random),
+                word.Meaning));
+        }
+
+        db.WeeklyReviews.Add(practice);
+        await db.SaveChangesAsync(ct);
+
+        return Results.Ok(new
+        {
+            id = practice.Id,
+            periodStart = practice.PeriodStart,
+            totalWords = practice.TotalWords,
+            wordsWaitingAfterThis = 0,
+            isPractice = true,
+            queue = practice.Queue.Select(ToItem).ToList(),
+        });
+    }
+
+    /// <summary>
+    /// The review a practice goes over — the learner's latest finished one —
+    /// and those of its words the learner still has.
+    /// </summary>
+    /// <remarks>
+    /// Shared with the hub, so the card offers practice exactly when this
+    /// endpoint would start one. A word deleted since is not practised: the
+    /// learner removed it, and asking about it would bring it back.
+    /// </remarks>
+    public static async Task<(WeeklyReview? Source, List<Word> Words)> PracticeSourceAsync(
+        WordOsDbContext db, Guid userId, CancellationToken ct)
+    {
+        var source = await db.WeeklyReviews
+            .Include(r => r.Items)
+            .Where(r => r.UserId == userId && r.IsComplete && !r.IsPractice)
+            .OrderByDescending(r => r.CompletedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (source is null) return (null, []);
+
+        var ids = source.Items.Select(i => i.WordId).Distinct().ToList();
+        var words = await db.Words
+            .Where(w => ids.Contains(w.Id) && w.UserId == userId
+                        && w.State != WordState.Deleted)
+            .OrderBy(w => w.AddedAt)
+            .ToListAsync(ct);
+
+        return (source, words);
     }
 
     private static async Task<IResult> AnswerAsync(
@@ -184,7 +276,12 @@ public static class WeeklyReviewEndpoints
         // Recorded as an event keyed by (word, source, review), so the requeue
         // that follows a wrong answer cannot count the same word twice — the
         // learner met it once, in one review.
-        var word = await db.Words.FirstOrDefaultAsync(w => w.Id == item.WordId, ct);
+        // A practice round is recorded as nothing (ADR-120): it neither
+        // retires a word from the challenge nor ripens it again, and it is
+        // not a meeting with the word the challenge would count.
+        var word = review.IsPractice
+            ? null
+            : await db.Words.FirstOrDefaultAsync(w => w.Id == item.WordId, ct);
         if (word is not null)
         {
             // Correct first time retires the word from the challenge; anything
@@ -243,9 +340,14 @@ public static class WeeklyReviewEndpoints
         {
             var now = clock.GetUtcNow();
             review.Complete(now);
-            db.ActivityEvents.Add(ActivityEvent.Record(
-                userId.Value, ActivityType.ReviewCompleted, now,
-                entityId: review.Id));
+            // A practice is not this week's review: logging it as one would
+            // tell the reminders the challenge was done (ADR-120).
+            if (!review.IsPractice)
+            {
+                db.ActivityEvents.Add(ActivityEvent.Record(
+                    userId.Value, ActivityType.ReviewCompleted, now,
+                    entityId: review.Id));
+            }
         }
 
         await db.SaveChangesAsync(ct);
@@ -257,6 +359,7 @@ public static class WeeklyReviewEndpoints
             firstPassCorrect = review.FirstPassCorrect,
             weeklyScore = Math.Round(review.WeeklyScore, 4),
             totalAttempts = review.TotalAttempts,
+            isPractice = review.IsPractice,
         });
     }
 

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../api/api_providers.dart';
+import 'cloud_speech_provider.dart';
 import 'speech_provider.dart';
 
 /// The one place spoken English comes from.
@@ -41,6 +43,15 @@ class SpeechService extends ChangeNotifier {
   /// never reports one — so a caller reads it as *at least this far*, never as
   /// the whole truth (ADR-082).
   int get spokenOffset => _spokenOffset;
+
+  /// How many word starts the voice has reported, ever.
+  ///
+  /// A caller timing speech watches this change rather than the clock at
+  /// which it asked: a cloud voice is fetched before it plays (ADR-108), and
+  /// counting the fetch as speaking made a Listening clip's clock read 0:27
+  /// for fifteen seconds of audio.
+  int get wordEvents => _wordEvents;
+  int _wordEvents = 0;
 
 
   /// What is speaking right now, or null when nothing is.
@@ -82,6 +93,7 @@ class SpeechService extends ChangeNotifier {
   void _handleWordBoundary(int offset) {
     if (_disposed || _utteranceId == null) return;
     _spokenOffset = offset;
+    _wordEvents++;
     _notify();
   }
 
@@ -131,13 +143,41 @@ class SpeechService extends ChangeNotifier {
     _spokenOffset = 0;
     _notify();
 
-    final started = await _provider.speak(text, rate: rate);
+    // A routed provider chooses the voice by who is speaking (ADR-108).
+    final provider = _provider;
+    final started = provider is RoutedSpeechProvider
+        ? await provider.speakFor(id, text, rate: rate)
+        : await provider.speak(text, rate: rate);
+    // Stopped, or replaced by another utterance, while the voice was still
+    // being fetched: that is not a failure, and not this utterance's to undo.
+    if (_utteranceId != id) return started;
     if (!started) {
       // Nothing is playing, so the UI must not claim otherwise.
       _utteranceId = null;
       _notify();
     }
     return started;
+  }
+
+  /// [text] will be spoken as [id], a sentence at a time, soon.
+  ///
+  /// Lets a cloud voice fetch it ahead so no gap opens between sentences
+  /// (ADR-108). A no-op for the phone's voice, which needs no warning.
+  void prepare(String id, String text) {
+    if (_disposed) return;
+    final provider = _provider;
+    if (provider is RoutedSpeechProvider) provider.prepare(id, text);
+  }
+
+  /// Completes once [text] can start speaking at once — or once it is clear
+  /// the server's voice will not come in time and the phone will say it
+  /// (ADR-116). The tutor's line is shown together with its voice, so the
+  /// screen waits on this before drawing it. Immediate for the phone's voice,
+  /// which has nothing to fetch.
+  Future<void> ready(String id, String text) async {
+    if (_disposed) return;
+    final provider = _provider;
+    if (provider is RoutedSpeechProvider) await provider.ready(id, text);
   }
 
   /// Speaks and returns only once the voice has actually stopped.
@@ -155,12 +195,25 @@ class SpeechService extends ChangeNotifier {
   }) async {
     final started = await speak(id, text, rate: rate);
     if (!started) return false;
+    // Already over — stopped while a cloud voice was being fetched, or
+    // finished before this line ran. Waiting now would wait for nothing until
+    // the timeout.
+    if (_utteranceId != id) return true;
 
+    final provider = _provider;
     final completer = _utterance = Completer<void>();
     try {
       await completer.future.timeout(
-        // Roughly reading speed, with a floor for short replies.
-        Duration(seconds: 8 + (text.length ~/ 10)),
+        // Roughly reading speed, with a floor for short replies — longer for
+        // the slow voice, and longer again for a voice that is fetched before
+        // it plays.
+        Duration(
+              seconds: 8 +
+                  (text.length ~/ 10) * (rate == SpeechRate.slow ? 3 : 2) ~/ 2,
+            ) +
+            (provider is RoutedSpeechProvider
+                ? provider.startupAllowance
+                : Duration.zero),
       );
       return true;
     } on TimeoutException {
@@ -219,6 +272,19 @@ class SpeechService extends ChangeNotifier {
 /// No `ref.onDispose` here: `ChangeNotifierProvider` already disposes the
 /// notifier it creates, and registering it a second time disposes it twice —
 /// which `ChangeNotifier` asserts against.
-final speechServiceProvider = ChangeNotifierProvider<SpeechService>(
-  (ref) => SpeechService(),
-);
+///
+/// Against the real backend the tutor and Listening speak in Gemini's voice
+/// and everything else in the phone's (ADR-108); against the mock, the
+/// phone's alone, as the widget suite expects.
+final speechServiceProvider = ChangeNotifierProvider<SpeechService>((ref) {
+  final env = ref.watch(appEnvironmentProvider);
+  if (env.useMockBackend) return SpeechService();
+  return SpeechService(
+    provider: HybridSpeechProvider(
+      device: DeviceSpeechProvider(),
+      // Read when a line is fetched, never watched: rebuilding the voice
+      // would cut off whatever it is saying.
+      synthesize: (text) => ref.read(wordOsApiProvider).synthesizeSpeech(text),
+    ),
+  );
+});

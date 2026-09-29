@@ -292,11 +292,21 @@ public sealed class StubAiContentService : IAiContentService
     /// <summary>Words the closing turn was told the learner never reached.</summary>
     public IReadOnlyList<string> LastUnusedWords { get; private set; } = [];
 
+    /// <summary>What the model reports the learner's last message was (ADR-113).</summary>
+    public string SpeakingIntent { get; set; } = "answer";
+
+    /// <summary>Words the model reports as only named, whatever was said.</summary>
+    public IReadOnlyList<string> SpeakingNamedAlways { get; set; } = [];
+
+    /// <summary>How many conversation lines the last turn was sent.</summary>
+    public int LastTranscriptLength { get; private set; }
+
     public Task<SpeakingObservation> SpeakingTurnAsync(
         SpeakingTurnRequest request,
         CancellationToken ct = default)
     {
         SpeakingTurns++;
+        LastTranscriptLength = request.Transcript.Count;
         LastRemainingWords = request.RemainingWords;
         LastFormReminders = request.FormReminders ?? [];
         LastRemainingShapes = request.RemainingShapes ?? [];
@@ -326,11 +336,13 @@ public sealed class StubAiContentService : IAiContentService
                 .Take(1)
                 .SelectMany(t => request.RemainingWords.Where(w =>
                     t.Text.Contains($"use {w}", StringComparison.OrdinalIgnoreCase)))
+                .Concat(SpeakingNamedAlways)
                 .ToList(),
             FromFallback: false,
             PromptVersion: "stub-speaking-v1",
             Model: "stub",
-            Tokens: 0));
+            Tokens: 0,
+            LearnerIntent: SpeakingIntent));
     }
 
     /// <summary>

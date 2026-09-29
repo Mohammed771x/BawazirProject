@@ -126,6 +126,14 @@ public static class SettingsEndpoints
         [property: Required] string Skill,
         [property: Range(1, 100)] int Target);
 
+    /// <param name="Start">
+    /// <c>AUTO</c>, or the rung every Spelling word starts on:
+    /// <c>DEFINITION_EN</c>, <c>SIMPLIFIED_DEFINITION</c>, <c>SYNONYM</c> or
+    /// <c>ARABIC_MEANING</c> (ADR-115).
+    /// </param>
+    public sealed record UpdateSpellingHintsRequest(
+        [property: Required, MaxLength(32)] string Start);
+
     public static IEndpointRouteBuilder MapSettingsEndpoints(
         this IEndpointRouteBuilder app)
     {
@@ -136,6 +144,7 @@ public static class SettingsEndpoints
         group.MapGet("", GetAsync);
         group.MapPatch("/skill-level", UpdateSkillLevelAsync);
         group.MapPatch("/daily-target", UpdateDailyTargetAsync);
+        group.MapPatch("/spelling-hints", UpdateSpellingHintsAsync);
 
         // Public tunables. No secret and no per-user data, but still
         // authenticated — an anonymous caller has no reason to need it.
@@ -167,7 +176,11 @@ public static class SettingsEndpoints
             .Where(l => l.UserId == userId)
             .ToListAsync(ct);
 
-        return Results.Ok(new { skillLevels = levels.Select(ToResponse).ToList() });
+        return Results.Ok(new
+        {
+            // In the pipeline's order, whatever was edited last (ADR-114).
+            skillLevels = AuthEndpoints.InPipelineOrder(levels).Select(ToResponse).ToList(),
+        });
     }
 
     /// <summary>
@@ -252,6 +265,54 @@ public static class SettingsEndpoints
         await db.SaveChangesAsync(ct);
 
         return Results.Ok(ToResponse(row));
+    }
+
+    /// <summary>
+    /// Chooses where Spelling's hints start, or hands it back to the level
+    /// (ADR-115). Applies from the next Spelling session: one already open
+    /// keeps the ladder it was built with.
+    /// </summary>
+    private static async Task<IResult> UpdateSpellingHintsAsync(
+        UpdateSpellingHintsRequest request,
+        ClaimsPrincipal principal,
+        WordOsDbContext db,
+        CancellationToken ct)
+    {
+        if (!MiniValidator.TryValidate(request, out var errors))
+            return Results.ValidationProblem(errors);
+
+        var userId = principal.UserId();
+        if (userId is null) return Results.Unauthorized();
+
+        SpellingClueKind? start;
+        var wire = request.Start.Trim().ToUpperInvariant();
+        if (wire == "AUTO")
+        {
+            start = null;
+        }
+        else
+        {
+            start = Enum.GetValues<SpellingClueKind>()
+                .Where(k => k != SpellingClueKind.LetterCount)
+                .Select(k => (SpellingClueKind?)k)
+                .FirstOrDefault(k => k!.Value.ToWire() == wire);
+            if (start is null)
+            {
+                return Problems.BadRequest(
+                    "INVALID_HINT_START",
+                    "Choose AUTO, DEFINITION_EN, SIMPLIFIED_DEFINITION, SYNONYM or ARABIC_MEANING.");
+            }
+        }
+
+        var user = await db.Users
+            .Include(u => u.SkillLevels)
+            .FirstOrDefaultAsync(u => u.Id == userId, ct);
+        if (user is null) return Results.Unauthorized();
+
+        user.ChooseSpellingHintStart(start);
+        await db.SaveChangesAsync(ct);
+
+        return Results.Ok(AuthEndpoints.ToUserResponse(user).SpellingHints);
     }
 
     internal static object ToResponse(Domain.Levels.SkillLevel l) => new

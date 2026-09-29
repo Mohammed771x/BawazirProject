@@ -30,6 +30,14 @@ public sealed class RateLimitOptions
     /// <summary>Anything that spends Gemini tokens.</summary>
     public int ExpensivePermitsPerMinute { get; init; } = 30;
 
+    /// <summary>
+    /// The voice (ADR-110). Its own budget, because it no longer costs a paid
+    /// call and a Listening session now asks for every question's audio ahead
+    /// — about twenty requests in its first minute. Sharing the AI budget
+    /// would have spent the tutor's and the microphone's on sound.
+    /// </summary>
+    public int VoicePermitsPerMinute { get; init; } = 120;
+
     /// <summary>The backstop across every endpoint, per user.</summary>
     public int GlobalPermitsPerMinute { get; init; } = 300;
 

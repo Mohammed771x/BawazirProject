@@ -164,6 +164,10 @@ class AppStrings {
             'This review is no longer available.',
             'لم تعد هذه المراجعة متاحة.',
           ),
+        'PRACTICE_NOTHING_TO_PRACTISE' => _(
+            'Finish a weekly review first, then its words can be practised.',
+            'أكمل مراجعة أسبوعية أولًا، وبعدها تقدر تراجع كلماتها.',
+          ),
 
         // Placement.
         'PLACEMENT_NOT_FOUND' => _(
@@ -542,6 +546,24 @@ class AppStrings {
   /// that appears broken into one that is obviously coming.
   String challengeOpensOn(String when) =>
       _('Opens on $when', 'يفتح في $when');
+
+  // ── Practice after the challenge (ADR-120) ─────────────────────────────────
+  String practiseWeekWords(int count) => _(
+        count == 1
+            ? 'Done for this week — practise its word again'
+            : 'Done for this week — practise its $count words again',
+        count == 1
+            ? 'أكملت مراجعة هذا الأسبوع — راجع كلمتها مرة ثانية'
+            : 'أكملت مراجعة هذا الأسبوع — راجع كلماتها ($count) مرة ثانية',
+      );
+  String nextChallengeOn(String when) =>
+      _('Next weekly review: $when', 'المراجعة الأسبوعية القادمة: $when');
+  String get practiceTitle => _('Word practice', 'مراجعة الكلمات');
+  String get practiceDoesNotCount => _(
+        'Practice only. It is not your weekly review, and it changes nothing.',
+        'هذا تمرين فقط، لا يُحسب مراجعة أسبوعية ولا يغيّر أي شيء.',
+      );
+  String get practiceScore => _('Practice score', 'نتيجة التمرين');
 
   /// Said before they start, not discovered after they finish.
   String challengeMoreAfterThis(int count) => _(
@@ -933,8 +955,14 @@ class AppStrings {
   String get meaningLooksWrong =>
       _('Check this meaning', 'راجع هذا المعنى');
   String get meaningSuggestions => _('Did you mean:', 'هل تقصد:');
-  String get keepMyMeaning =>
-      _('Save it as I wrote it', 'احفظها كما كتبتها');
+  /// Under a rejected meaning, where "save it anyway" used to be (ADR-112):
+  /// the two ways forward, since a wrong meaning is never saved.
+  String get meaningFixToSave => _(
+        'Pick one of these, or correct the meaning above — the word is saved '
+        'once its meaning is right.',
+        'اختر أحد هذه المعاني، أو صحّح المعنى في الخانة — تُحفظ الكلمة عندما '
+        'يكون معناها صحيحًا.',
+      );
   String get editMeaning => _('Edit', 'تعديل');
 
   /// Shown when the checker cannot be reached at all.
@@ -1274,6 +1302,15 @@ class AppStrings {
         "I didn't catch that. Tap the microphone and try again.",
         'لم أسمع ذلك. اضغط على الميكروفون وحاول مرة أخرى.',
       );
+  // The server recogniser (ADR-107) could not be reached or no engine
+  // answered. Not "I didn't catch that": the learner spoke fine, and should
+  // know that trying again — or typing — is the way on.
+  String get couldNotListen => _(
+        "We couldn't listen just now. Try again, or type your answer.",
+        'تعذّر علينا الاستماع الآن. حاول مرة أخرى، أو اكتب إجابتك.',
+      );
+  String get transcribing =>
+      _('Writing down what you said…', 'نكتب ما قلته…');
   String get microphoneUnavailable => _(
         'This device cannot listen, so you can type your turn instead.',
         'هذا الجهاز لا يستطيع الاستماع، يمكنك كتابة دورك بدلًا من ذلك.',
@@ -1374,6 +1411,39 @@ class AppStrings {
         'Each skill can carry a different load.',
         'يمكن أن يختلف العدد من مهارة إلى أخرى.',
       );
+  // ── Where Spelling's hints start (ADR-115) ────────────────────────────────
+  String get spellingHintsTitle =>
+      _('Spelling hints', 'تلميحات التهجئة');
+  String get spellingHintsExplainer => _(
+        'Every word starts here. Each tap on the hint button steps to an '
+        'easier one, and the next word starts here again.',
+        'كل كلمة تبدأ من هنا، وكل ضغطة على التلميح تنزل خطوة أسهل، '
+        'والكلمة التالية ترجع تبدأ من هنا.',
+      );
+
+  /// A rung of the ladder, named for choosing a start — fuller than the
+  /// short label shown on the hint itself.
+  String spellingHintStartName(SpellingClueKind kind) => switch (kind) {
+        SpellingClueKind.definitionEn =>
+          _('Dictionary definition', 'تعريف من القاموس'),
+        SpellingClueKind.simplifiedDefinition =>
+          _('Simplified definition', 'تعريف مبسّط'),
+        SpellingClueKind.synonym => _('Synonyms', 'مرادفات'),
+        SpellingClueKind.arabicMeaning =>
+          _('Arabic meaning', 'المعنى بالعربية'),
+        SpellingClueKind.letterCount => _('Number of letters', 'عدد الحروف'),
+      };
+
+  /// Automatic, and what it means for them, so the choice is informed.
+  String spellingHintAutomatic(SpellingClueKind start) => _(
+        'Automatic — for your level: ${spellingHintStartName(start).toLowerCase()}',
+        'تلقائي — حسب مستواك: ${spellingHintStartName(start)}',
+      );
+  String get spellingHintsSaved => _(
+        'Saved. Your next Spelling session starts here.',
+        'تم الحفظ. جلسة التهجئة القادمة تبدأ من هنا.',
+      );
+
   String get interests => _('Interests', 'الاهتمامات');
   String get appearance => _('Appearance', 'المظهر');
   String get themeSystem => _('System', 'النظام');

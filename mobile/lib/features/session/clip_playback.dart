@@ -27,6 +27,7 @@ class ClipPlayback extends ChangeNotifier {
     required SpeechService speech,
     required this.text,
     required String idPrefix,
+    bool prepareEarly = false,
     // The lint would have this be `this._speech`; a named parameter may not
     // start with an underscore, so it is assigned here instead.
     // ignore: prefer_initializing_formals
@@ -39,6 +40,10 @@ class ClipPlayback extends ChangeNotifier {
     // The service is the single source of truth for what is audible, so a
     // clip that ends by itself has to repaint the control without being told.
     _speech.addListener(_onVoiceChanged);
+    // A Listening passage is the reason the screen exists: its voice is
+    // fetched while the learner reads the instructions, so the first press is
+    // answered at once (ADR-108). Never *played* early — ADR-080 stands.
+    if (prepareEarly) _speech.prepare(_id, text);
   }
 
   final SpeechService _speech;
@@ -90,6 +95,12 @@ class ClipPlayback extends ChangeNotifier {
   double _charsPerSecond = _defaultCharsPerSecond;
   int _measuredChars = 0;
   final Stopwatch _measured = Stopwatch();
+
+  /// The voice's word count when the current sentence was asked for. The
+  /// stopwatch restarts at the first word after it: time spent fetching a
+  /// cloud voice is waiting, not speaking (ADR-108). A voice that reports no
+  /// words keeps timing from the request, as before.
+  int _wordsAtRequest = -1;
 
   /// The app's normal rate (0.46 on the device engine), **measured** rather
   /// than guessed: an iOS run of a B2 passage settled at just over 16.
@@ -172,6 +183,12 @@ class ClipPlayback extends ChangeNotifier {
     // resumed sentence is only the tail of one — so the cut is added back.
     if (_speech.isSpeakingId(_id)) {
       _offset = _utteranceStart + _speech.spokenOffset;
+      if (_wordsAtRequest >= 0 && _speech.wordEvents != _wordsAtRequest) {
+        _wordsAtRequest = -1;
+        _measured
+          ..reset()
+          ..start();
+      }
     }
     _notify();
   }
@@ -242,6 +259,10 @@ class ClipPlayback extends ChangeNotifier {
     _offset = into;
     _notify();
 
+    // A cloud voice fetches the rest of the clip while this sentence plays, so
+    // no gap opens between sentences (ADR-108). Nothing for the phone's voice.
+    _speech.prepare(_id, text);
+
     // Take the voice first, then note where the interruption count stands:
     // from here on any change to it means somebody else stopped us, and a
     // cancelled sentence is otherwise indistinguishable from a finished one
@@ -273,6 +294,7 @@ class ClipPlayback extends ChangeNotifier {
       _measured
         ..reset()
         ..start();
+      _wordsAtRequest = _speech.wordEvents;
 
       final ok = await _speech.speakToCompletion(
         _id,

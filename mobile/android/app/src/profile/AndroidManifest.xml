@@ -4,4 +4,13 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- A profile build is compiled like a release build, so it is the one to
+         hand a tester who is judging speed — and it talks to the API on this
+         Mac over http, which only private addresses are allowed. Release is
+         untouched and still refuses cleartext. -->
+    <application
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:replace="android:networkSecurityConfig"
+        xmlns:tools="http://schemas.android.com/tools" />
 </manifest>

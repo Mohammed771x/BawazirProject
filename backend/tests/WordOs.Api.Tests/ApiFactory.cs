@@ -94,6 +94,12 @@ public sealed class ApiFactory(string connectionString)
             services.RemoveAll<IEmailSender>();
             services.AddSingleton<IEmailSender>(Email);
 
+            // Speaking's recorder never reaches a real engine either (ADR-107).
+            services.RemoveAll<ISpeechTranscriber>();
+            services.AddSingleton<ISpeechTranscriber>(Speech);
+            services.RemoveAll<ISpeechSynthesizer>();
+            services.AddSingleton<ISpeechSynthesizer>(Voice);
+
             services.RemoveAll<IAiContentService>();
             services.AddSingleton(Ai);
             services.AddScoped<IAiContentService>(provider =>
@@ -117,6 +123,12 @@ public sealed class ApiFactory(string connectionString)
 
     /// <summary>The deterministic stand-in for Gemini.</summary>
     public StubAiContentService Ai { get; } = new();
+
+    /// <summary>The stand-in for Gemini-then-Groq transcription.</summary>
+    public StubSpeechTranscriber Speech { get; } = new();
+
+    /// <summary>The stand-in for Gemini's voice (ADR-108).</summary>
+    public StubSpeechSynthesizer Voice { get; } = new();
 
     /// <summary>Every email the API tried to send, in order.</summary>
     public CapturingEmailSender Email { get; } = new();

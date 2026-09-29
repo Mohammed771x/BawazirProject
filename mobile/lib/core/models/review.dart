@@ -38,12 +38,17 @@ class WeeklyReviewSession {
     required this.periodStart,
     required this.totalWords,
     required this.queue,
+    this.isPractice = false,
   });
 
   final String id;
   final DateTime? periodStart;
   final int totalWords;
   final List<ReviewItem> queue;
+
+  /// A practice round over the last finished review's words — played like the
+  /// review, recorded as nothing (ADR-120).
+  final bool isPractice;
 
   factory WeeklyReviewSession.fromJson(Map<String, dynamic> json) =>
       WeeklyReviewSession(
@@ -54,6 +59,7 @@ class WeeklyReviewSession {
         queue: (json['queue'] as List<dynamic>? ?? const [])
             .map((e) => ReviewItem.fromJson(e as Map<String, dynamic>))
             .toList(),
+        isPractice: json['isPractice'] as bool? ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -61,6 +67,7 @@ class WeeklyReviewSession {
         'periodStart': periodStart?.toIso8601String(),
         'totalWords': totalWords,
         'queue': queue.map((e) => e.toJson()).toList(),
+        'isPractice': isPractice,
       };
 }
 
@@ -110,7 +117,11 @@ class WeeklyReviewResult {
     required this.firstPassCorrect,
     required this.weeklyScore,
     required this.totalAttempts,
+    this.isPractice = false,
   });
+
+  /// Whether this was practice, whose score is shown and never kept (ADR-120).
+  final bool isPractice;
 
   final String reviewId;
   final int totalWords;
@@ -125,6 +136,7 @@ class WeeklyReviewResult {
         firstPassCorrect: (json['firstPassCorrect'] as num?)?.toInt() ?? 0,
         weeklyScore: (json['weeklyScore'] as num?)?.toDouble() ?? 0,
         totalAttempts: (json['totalAttempts'] as num?)?.toInt() ?? 0,
+        isPractice: json['isPractice'] as bool? ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -133,5 +145,6 @@ class WeeklyReviewResult {
         'firstPassCorrect': firstPassCorrect,
         'weeklyScore': weeklyScore,
         'totalAttempts': totalAttempts,
+        'isPractice': isPractice,
       };
 }

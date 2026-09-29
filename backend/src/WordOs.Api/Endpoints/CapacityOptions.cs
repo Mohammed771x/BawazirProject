@@ -128,4 +128,25 @@ public sealed class CapacityOptions
 
     /// <summary>Largest request body accepted, in bytes. A transcript is small.</summary>
     public long MaxRequestBodyBytes { get; init; } = 256 * 1024;
+
+    /// <summary>
+    /// Largest recorded Speaking turn accepted, in bytes (ADR-107).
+    /// </summary>
+    /// <remarks>
+    /// The one endpoint allowed past <see cref="MaxRequestBodyBytes"/>. The app
+    /// records 16 kHz mono AAC at 32 kbit/s — about 4 KB a second — so 8 MB is
+    /// over half an hour of talking, far past any real turn, while still
+    /// small enough that a flood of them cannot exhaust memory.
+    /// </remarks>
+    public long MaxAudioBytes { get; init; } = 8 * 1024 * 1024;
+
+    /// <summary>
+    /// Longest text spoken in one request, in characters (ADR-108).
+    /// </summary>
+    /// <remarks>
+    /// The app sends a tutor reply or a few sentences of a passage at a time;
+    /// a longer request takes longer than a learner will wait for the first
+    /// word. Kept equal to the AI service's own <c>TTS_MAX_CHARS</c>.
+    /// </remarks>
+    public int MaxSpeechChars { get; init; } = 1500;
 }

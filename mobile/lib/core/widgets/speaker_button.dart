@@ -25,7 +25,11 @@ class SpeakerButton extends ConsumerWidget {
     this.tooltip,
     this.color,
     this.slow = false,
+    this.dense = false,
   });
+
+  /// Tighter padding, for a pair that sits inside a line of text (ADR-119).
+  final bool dense;
 
   /// Identifies this utterance. Two buttons speaking different things must use
   /// different ids, or both would light up together.
@@ -63,6 +67,12 @@ class SpeakerButton extends ConsumerWidget {
         foregroundColor: playing ? tint : context.colors.onSurface,
         backgroundColor:
             playing ? tint.withValues(alpha: 0.12) : Colors.transparent,
+        // Through the style, not IconButton's own padding and constraints:
+        // Material 3 pads every icon button to a 48-point tap target, which
+        // is what kept a dense pair from fitting beside a question.
+        padding: dense ? const EdgeInsets.all(AppSpacing.xxs) : null,
+        minimumSize: dense ? Size.square(size + AppSpacing.sm) : null,
+        tapTargetSize: dense ? MaterialTapTargetSize.shrinkWrap : null,
       ),
       icon: Icon(
         // A distinct stop icon, not a differently-coloured speaker: the learner
@@ -94,7 +104,11 @@ class WordSpeakerButtons extends StatelessWidget {
     required this.text,
     this.size = 20,
     this.color,
+    this.dense = false,
   });
+
+  /// See [SpeakerButton.dense].
+  final bool dense;
 
   /// Identifies this word's utterances. The slow one derives from it, so a
   /// caller never has to remember to make them differ.
@@ -109,7 +123,8 @@ class WordSpeakerButtons extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        SpeakerButton(id: id, text: text, size: size, color: color),
+        SpeakerButton(
+            id: id, text: text, size: size, color: color, dense: dense),
         SpeakerButton(
           id: 'slow:$id',
           text: text,
@@ -117,6 +132,7 @@ class WordSpeakerButtons extends StatelessWidget {
           size: size,
           color: color,
           slow: true,
+          dense: dense,
         ),
       ],
     );

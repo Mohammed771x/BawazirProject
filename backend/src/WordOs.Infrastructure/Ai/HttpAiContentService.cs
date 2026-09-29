@@ -286,10 +286,11 @@ public sealed class HttpAiContentService(
         var response = await PostAsync<SpeakingDto>("/ai/speaking/turn", payload, ct);
 
         return new SpeakingObservation(
-            response.Reply, response.WordsOnlyNamed, FromFallback: false,
+            response.Reply, response.WordsOnlyNamed ?? [], FromFallback: false,
             PromptVersion: response.PromptVersion,
             Model: response.Model,
-            Tokens: response.Tokens);
+            Tokens: response.Tokens,
+            LearnerIntent: response.LearnerIntent ?? string.Empty);
     }
 
     public async Task<SpeakingEvaluation> EvaluateSpeakingAsync(
@@ -475,10 +476,12 @@ public sealed class HttpAiContentService(
 
     private sealed record SpeakingDto(
         string Reply,
-        List<string> WordsOnlyNamed,
+        List<string>? WordsOnlyNamed,
         string PromptVersion,
         string Model,
-        int Tokens);
+        int Tokens,
+        // Absent from a service older than ADR-113.
+        string? LearnerIntent = null);
 
     private sealed record SpeakingEvalDto(
         List<SpeakingEvalWordDto> Words,

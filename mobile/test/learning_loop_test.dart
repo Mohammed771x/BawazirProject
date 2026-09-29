@@ -590,6 +590,39 @@ void main() {
       });
     }
 
+    test('a chosen start overrides the level, for every word (ADR-115)', () {
+      engine.addWord(user, candidate('research'));
+      engine.addWord(user, candidate('book'));
+      _advanceTo(engine, user, SkillType.spelling);
+      engine.updateSkillLevel(user, SkillType.reading, CefrLevel.a1);
+
+      engine.updateSpellingHintStart(user, SpellingClueKind.definitionEn);
+      final chosen = engine.startSession(user, SkillType.spelling).items;
+
+      // Every word opens on the chosen rung — the second starts at the top
+      // again, not where the first one's hints ran out.
+      expect(chosen, hasLength(2));
+      for (final task in chosen) {
+        expect(task.clueKind, SpellingClueKind.definitionEn);
+        expect(task.hints.last.kind, SpellingClueKind.letterCount);
+      }
+    });
+
+    test('automatic says what it means, and the letter count is no start', () {
+      engine.updateSkillLevel(user, SkillType.reading, CefrLevel.b1);
+
+      final hints = engine.profile(user).spellingHints;
+      expect(hints.start, isNull);
+      expect(hints.automaticStart, SpellingClueKind.synonym);
+
+      expect(
+        () => engine.updateSpellingHintStart(
+            user, SpellingClueKind.letterCount),
+        throwsA(isA<ApiException>()
+            .having((e) => e.code, 'code', 'INVALID_HINT_START')),
+      );
+    });
+
     test('clue and input mode follow the level, and a hint is always offered',
         () {
       engine.addWord(user, candidate('research'));

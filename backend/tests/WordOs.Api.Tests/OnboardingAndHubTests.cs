@@ -525,4 +525,31 @@ public class OnboardingAndHubTests(PostgresFixture db) : IAsyncLifetime
 
         Assert.True(response.GetProperty("pageSize").GetInt32() <= 100);
     }
+
+    [SkippableFact]
+    public async Task Changing_a_daily_target_does_not_move_the_skill()
+    {
+        // ADR-114: the levels came back in the database's row order, and
+        // PostgreSQL returns an updated row last — so the skill just changed
+        // jumped to the bottom of Settings under the learner's finger.
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        string[] pipeline = ["READING", "LISTENING", "SPEAKING", "SPELLING", "WRITING"];
+
+        foreach (var skill in new[] { "reading", "listening", "speaking" })
+        {
+            var changed = await Client.PatchAsJsonAsync(
+                "/api/settings/daily-target", new { skill, target = 7 });
+            changed.EnsureSuccessStatusCode();
+
+            foreach (var path in new[] { "/api/me", "/api/settings" })
+            {
+                var body = await Client.GetFromJsonAsync<JsonElement>(path);
+                var order = body.GetProperty("skillLevels").EnumerateArray()
+                    .Select(l => l.GetProperty("skill").GetString())
+                    .ToArray();
+                Assert.Equal(pipeline, order);
+            }
+        }
+    }
 }

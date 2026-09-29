@@ -34,6 +34,15 @@ class SessionScreen extends ConsumerStatefulWidget {
 class _SessionScreenState extends ConsumerState<SessionScreen> {
   final TextEditingController _freeText = TextEditingController();
   final TextEditingController _chatInput = TextEditingController();
+
+  /// The conversation's list, kept at its newest line as lines arrive — a
+  /// message sent and not seen until the reply pushes it into view is not a
+  /// conversation.
+  final ScrollController _chatScroll = ScrollController();
+
+  /// A fresh conversation's opening line, held back until its voice is ready
+  /// so the two arrive together (ADR-116).
+  String? _heldOpening;
   final List<_ChatMessage> _chat = [];
   final List<String> _tiles = [];
 
@@ -104,6 +113,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   /// Captured for the same reason as [_api]: `ref` must not be touched once
   /// teardown has started, and the conversation loop outlives a frame.
   late final SpeechService _speech;
+
+  /// A recorded turn is on its way to the server to be written down
+  /// (ADR-107) — distinct from the tutor thinking about its reply.
+  bool _transcribing = false;
   late final SpeechRecognitionService _mic;
 
   @override
@@ -128,6 +141,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     _speech.stop().ignore();
     _freeText.dispose();
     _chatInput.dispose();
+    _chatScroll.dispose();
     super.dispose();
   }
 
@@ -193,6 +207,42 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   bool get _answered => _lastAnswer != null || _lastWriting != null;
 
   /// The target word's surface form, so the context passage can highlight it.
+  /// Fetches the voice of everything this session will say, in the order it
+  /// will be heard, starting from the question the learner is on (ADR-110).
+  ///
+  /// So play answers at once, on a slow connection too. The audio arrives in
+  /// the background while the learner reads and answers — the first
+  /// question's first, then the next question's — rather than on each press.
+  /// Only the phone's voice is asked for nothing: [SpeechService.prepare] is
+  /// a no-op there.
+  void _prepareVoice(SkillSession session, String? fromItemId) {
+    final speech = ref.read(speechServiceProvider);
+    final items = session.items;
+    final from = items.indexWhere((i) => i.id == fromItemId);
+    final ordered = from <= 0
+        ? items
+        : [...items.sublist(from), ...items.sublist(0, from)];
+
+    for (final item in ordered) {
+      final sentence = item.audioText;
+      if (sentence != null && sentence.trim().isNotEmpty) {
+        speech.prepare('sentence:${sentence.hashCode}', sentence);
+      }
+      // The word button under a Reading or Listening word question
+      // (_multipleChoice).
+      if (_offersWordAudio(item)) {
+        final word = _targetTextFor(item);
+        if (word != null && word.trim().isNotEmpty) {
+          speech.prepare('pronounce:$word', word);
+        }
+      }
+    }
+    // Speaking opens on these, before the conversation.
+    for (final word in session.warmup) {
+      speech.prepare('warmup:${word.wordId}', word.text);
+    }
+  }
+
   String? _targetTextFor(SessionItem item) {
     final session = _session;
     if (session == null || item.wordId == null) return null;
@@ -267,9 +317,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           final turns = session.conversation!.turns;
           _chat.clear();
           if (turns.isEmpty) {
-            _chat.add(
-              _ChatMessage(session.conversation!.opening, fromAi: true),
-            );
+            // Held, not shown: it appears with its voice (ADR-116).
+            _heldOpening = session.conversation!.opening;
           } else {
             _chat.addAll(
               turns.map((t) => _ChatMessage(t.text, fromAi: t.fromAi)),
@@ -289,11 +338,23 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           if (_warmupQueue.isEmpty) _speakingBriefed = true;
         }
       });
+      // After this frame, so a passage the screen opens on — which asks for
+      // its own voice as it is built — is fetched ahead of the questions.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _prepareVoice(session, progress.nextItemId);
+      });
+
       // The conversation starts speaking on its own — but only once the
       // learner has seen which words it is about (§26). A resumed conversation
       // has been briefed already and simply carries on.
-      if (widget.skill == SkillType.speaking && _chat.isNotEmpty) {
+      if (widget.skill == SkillType.speaking &&
+          (_chat.isNotEmpty || _heldOpening != null)) {
+        // Fetched now, so a learner who spends a minute on the warm-up words
+        // does not then wait for the greeting's voice as well.
+        final opening = _heldOpening;
+        if (opening != null) _speech.prepare(_tutorId(opening), opening);
         if (_speakingBriefed) _resumeSpeaking();
+        _scrollToEnd();
       }
 
       // Every question answered, and the session never closed — the app was
@@ -336,12 +397,56 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     return progress.nextItemId == null && progress.remaining == 0;
   }
 
-  /// Picks the conversation back up from whatever the tutor last said.
+  /// Picks the conversation back up from whatever the tutor last said — or,
+  /// for a conversation that has not started, opens it.
   void _resumeSpeaking() {
+    final opening = _heldOpening;
+    if (opening != null) {
+      unawaited(_openConversation(opening));
+      return;
+    }
     final lastFromAi = _chat.isNotEmpty && _chat.last.fromAi
         ? _chat.last.text
         : null;
     if (lastFromAi != null) unawaited(_speakThenListen(lastFromAi));
+  }
+
+  String _tutorId(String line) => 'tutor:${line.hashCode}';
+
+  /// The greeting, shown and spoken together.
+  Future<void> _openConversation(String opening) async {
+    if (mounted) setState(() => _voice = _VoicePhase.thinking);
+    await _showTutorLine(opening, spoken: true);
+    if (!mounted) return;
+    setState(() => _heldOpening = null);
+    await _speakThenListen(opening);
+  }
+
+  /// Adds one of the tutor's lines to the conversation — once its voice is
+  /// ready, when it is going to be spoken (ADR-116).
+  ///
+  /// The product owner's report: the text arrived and the voice followed
+  /// seconds later, so the learner read the line in silence and then heard
+  /// it again. A tutor who speaks is heard and read at the same moment. The
+  /// wait is bounded by the voice's own limits: if the server's voice fails
+  /// or is late, the phone says the line, and the text appears with that.
+  Future<void> _showTutorLine(String line, {required bool spoken}) async {
+    if (spoken) await _speech.ready(_tutorId(line), line);
+    if (!mounted) return;
+    setState(() => _chat.add(_ChatMessage(line, fromAi: true)));
+    _scrollToEnd();
+  }
+
+  /// Brings the newest line into view once it has been laid out.
+  void _scrollToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_chatScroll.hasClients) return;
+      unawaited(_chatScroll.animateTo(
+        _chatScroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      ));
+    });
   }
 
   Future<void> _answer(SessionItem item, String answer) async {
@@ -433,7 +538,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     if (!mounted) return;
     setState(() => _voice = _VoicePhase.speaking);
 
-    await _speech.speakToCompletion('tutor:${text.hashCode}', text);
+    await _speech.speakToCompletion(_tutorId(text), text);
     if (!mounted || _speakingFinished) return;
 
     // A device that cannot listen falls back to typing rather than showing a
@@ -503,8 +608,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   Future<void> _stopAndReview() async {
     if (!mounted || _voice != _VoicePhase.listening) return;
 
-    setState(() => _voice = _VoicePhase.thinking);
+    setState(() {
+      _voice = _VoicePhase.thinking;
+      _transcribing = true;
+    });
+    // Never throws: a failure comes back as null with `lastFailure` set.
     final said = await _mic.stopAndRead();
+    _transcribing = false;
     if (!mounted) return;
 
     if (said == null || said.trim().isEmpty) {
@@ -514,6 +624,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         _voice = _VoicePhase.idle;
         _heard = '';
       });
+      // The server could not listen (ADR-107) — said so, rather than left
+      // looking like the learner said nothing.
+      if (_mic.lastFailure != null) _snack(_s.couldNotListen);
       return;
     }
 
@@ -553,13 +666,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     final text = (spoken ?? _chatInput.text).trim();
     if (text.isEmpty || _busy) return;
 
+    // Sent the moment it is sent: their line joins the conversation and the
+    // box empties at once, the way every messenger behaves.
+    final sentMessage = _ChatMessage(text, fromAi: false);
     setState(() {
-      _chat.add(_ChatMessage(text, fromAi: false));
+      _chat.add(sentMessage);
       _chatInput.clear();
       _heard = '';
       _busy = true;
       _voice = _VoicePhase.thinking;
     });
+    _scrollToEnd();
 
     try {
       final turn = await _api.submitSpeakingTurn(
@@ -567,8 +684,14 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         transcript: text,
       );
       if (!mounted) return;
+
+      // Shown with its voice, if it is going to be spoken (ADR-116). The
+      // last line always is; the others when the learner is talking rather
+      // than typing.
+      await _showTutorLine(turn.aiMessage,
+          spoken: turn.isFinal || _voiceMode);
+      if (!mounted) return;
       setState(() {
-        _chat.add(_ChatMessage(turn.aiMessage, fromAi: true));
         _speakingFinished = turn.isFinal;
         _busy = false;
       });
@@ -579,7 +702,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         // result — and only then is the session completed and evaluated.
         setState(() => _voice = _VoicePhase.speaking);
         await _speech.speakToCompletion(
-          'tutor:${turn.aiMessage.hashCode}',
+          _tutorId(turn.aiMessage),
           turn.aiMessage,
         );
         if (mounted) await _complete();
@@ -595,7 +718,19 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     } catch (rawError) {
       final e = ApiException.from(rawError);
       _snack(_s.apiError(e.code, e.message));
-      if (mounted) setState(() => _voice = _VoicePhase.idle);
+      // Not sent, so not left looking sent: the line comes back out of the
+      // conversation and into the box, ready to send again — never lost.
+      if (mounted) {
+        setState(() {
+          if (_chat.isNotEmpty && identical(_chat.last, sentMessage)) {
+            _chat.removeLast();
+          }
+          _chatInput.text = text;
+          _chatInput.selection =
+              TextSelection.collapsed(offset: _chatInput.text.length);
+          _voice = _voiceMode ? _VoicePhase.reviewing : _VoicePhase.idle;
+        });
+      }
     } finally {
       if (mounted && _busy) setState(() => _busy = false);
     }
@@ -1163,16 +1298,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     );
   }
 
+  /// Whether a question offers its word to be heard, at both speeds.
+  ///
+  /// Only the questions about a word: the comprehension questions have no word
+  /// of their own (ADR-081). Reading as well as Listening (ADR-119): the
+  /// product owner asked to hear the word Reading is asking about, normally
+  /// and slowly — seeing a word spelled is not knowing how it sounds.
+  bool _offersWordAudio(SessionItem item) =>
+      (widget.skill == SkillType.listening ||
+          widget.skill == SkillType.reading) &&
+      item.type == SessionItemType.targetWord;
+
   Widget _multipleChoice(AppStrings s, SessionItem item, Color color) {
     final result = _lastAnswer;
-    // Listening only, and only on the questions that are about a word: the
-    // comprehension questions have no word of their own, and Reading already
-    // shows the word spelled out in its sentences (ADR-081).
-    final pronounce =
-        widget.skill == SkillType.listening &&
-            item.type == SessionItemType.targetWord
-        ? _targetTextFor(item)
-        : null;
+    final pronounce = _offersWordAudio(item) ? _targetTextFor(item) : null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1203,13 +1342,31 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         // Direction follows the text: rendered in the Arabic interface's
         // direction, the question mark of `What does "fan" mean here?` moved
         // to the front of the sentence.
-        AutoDirectionText(
-          _instruction(s, item),
-          style: context.text.titleMedium?.copyWith(fontSize: 18, height: 1.45),
-        ),
-        // Under the question, above the options: the learner has just been
-        // asked about a word, and this is the moment they want to hear it.
-        if (pronounce != null && pronounce.trim().isNotEmpty) ...[
+        // Reading: the speakers ride at the end of the question itself, in
+        // its line (ADR-119). Beside it as a separate column they took the
+        // width the question needed, so it broke onto two lines and pushed
+        // the last option below the fold; inline, they sit level with the
+        // words and only wrap when the question would have anyway.
+        if (widget.skill == SkillType.reading &&
+            pronounce != null &&
+            pronounce.trim().isNotEmpty)
+          _QuestionWithSpeakers(
+            question: _instruction(s, item),
+            word: pronounce,
+            color: color,
+          )
+        else
+          AutoDirectionText(
+            _instruction(s, item),
+            style:
+                context.text.titleMedium?.copyWith(fontSize: 18, height: 1.45),
+          ),
+        // Listening: under the question, above the options — the learner has
+        // just been asked about a word they have only heard, and this is the
+        // moment they want to hear it again. Never spelled (ADR-085).
+        if (widget.skill == SkillType.listening &&
+            pronounce != null &&
+            pronounce.trim().isNotEmpty) ...[
           const SizedBox(height: AppSpacing.sm),
           WordPronunciation(word: pronounce, color: color),
         ],
@@ -1695,10 +1852,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         ),
         Expanded(
           child: ListView.builder(
+            controller: _chatScroll,
             padding: const EdgeInsets.all(AppSpacing.md),
-            itemCount: _chat.length,
-            itemBuilder: (context, index) =>
-                _ChatBubble(message: _chat[index], color: color),
+            // One more while the tutor is preparing a line: the dots a
+            // messenger shows, so a reply being written is visible where the
+            // reply will appear.
+            itemCount: _chat.length + (_tutorPreparing ? 1 : 0),
+            itemBuilder: (context, index) => index < _chat.length
+                ? _ChatBubble(message: _chat[index], color: color)
+                : const _TypingBubble(),
           ),
         ),
         if (!_speakingFinished)
@@ -1709,6 +1871,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       ],
     );
   }
+
+  /// The tutor is writing, or fetching the voice for, its next line — and
+  /// not the recogniser writing down the learner's (ADR-107).
+  bool get _tutorPreparing =>
+      _voice == _VoicePhase.thinking && !_transcribing;
 
   /// The voice panel.
   ///
@@ -1735,9 +1902,19 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           Row(
             children: [
               Expanded(
+                // Grows with what they type, up to a few lines, instead of
+                // scrolling one line sideways out of sight. English, so left
+                // to right whatever the interface is.
                 child: TextField(
                   controller: _chatInput,
-                  decoration: InputDecoration(hintText: s.yourTurn),
+                  minLines: 1,
+                  maxLines: 4,
+                  textDirection: TextDirection.ltr,
+                  textInputAction: TextInputAction.send,
+                  decoration: InputDecoration(
+                    hintText: s.yourTurn,
+                    hintTextDirection: Directionality.of(context),
+                  ),
                   onSubmitted: (_) => _sendChat(),
                 ),
               ),
@@ -1773,7 +1950,13 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         Icons.edit_rounded,
         false,
       ),
-      _VoicePhase.thinking => (s.thinking, Icons.more_horiz_rounded, true),
+      // After a recorded turn this is the server writing it down (ADR-107);
+      // "Thinking…" read as though the tutor were already answering.
+      _VoicePhase.thinking => (
+        _transcribing ? s.transcribing : s.thinking,
+        Icons.more_horiz_rounded,
+        true,
+      ),
       _ => (s.tapToSpeak, Icons.mic_none_rounded, false),
     };
 
@@ -1785,10 +1968,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         if (phase == _VoicePhase.reviewing) ...[
           TextField(
             controller: _chatInput,
-            maxLines: null,
+            minLines: 1,
+            maxLines: 5,
             autofocus: false,
+            textDirection: TextDirection.ltr,
             textInputAction: TextInputAction.newline,
-            decoration: InputDecoration(hintText: s.yourTurn),
+            decoration: InputDecoration(
+              hintText: s.yourTurn,
+              hintTextDirection: Directionality.of(context),
+            ),
           ),
           const SizedBox(height: AppSpacing.sm),
           Row(
@@ -1999,7 +2187,41 @@ class _ChatBubble extends StatelessWidget {
                 : color.withValues(alpha: 0.3),
           ),
         ),
-        child: Text(message.text, style: context.text.bodyMedium),
+        // English reads left to right even in the Arabic interface — the
+        // question mark of "…in your answer?" belongs at the end.
+        child: AutoDirectionText(message.text, style: context.text.bodyMedium),
+      ),
+    );
+  }
+}
+
+/// The tutor's line on its way: three dots where the reply will appear.
+class _TypingBubble extends StatelessWidget {
+  const _TypingBubble();
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Container(
+        key: const ValueKey('tutor-typing'),
+        margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.sm,
+        ),
+        decoration: BoxDecoration(
+          color: context.colors.surface,
+          borderRadius: const BorderRadius.all(AppRadii.md),
+          border: Border.all(color: context.palette.border),
+        ),
+        child: Text(
+          '•••',
+          style: context.text.titleMedium?.copyWith(
+            color: context.colors.onSurface.withValues(alpha: 0.45),
+            letterSpacing: 2,
+          ),
+        ),
       ),
     );
   }
@@ -2166,6 +2388,7 @@ class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
     speech: ref.read(speechServiceProvider),
     text: widget.text,
     idPrefix: 'listening',
+    prepareEarly: true,
   )..addListener(_repaint);
 
   @override
@@ -2387,6 +2610,52 @@ class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// A word question with the word's two speakers at the end of its own line
+/// (ADR-119).
+class _QuestionWithSpeakers extends StatelessWidget {
+  const _QuestionWithSpeakers({
+    required this.question,
+    required this.word,
+    required this.color,
+  });
+
+  final String question;
+  final String word;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final direction =
+        AutoDirectionText.directionOf(question) ?? Directionality.of(context);
+    return SizedBox(
+      width: double.infinity,
+      child: Directionality(
+        textDirection: direction,
+        child: Text.rich(
+          TextSpan(
+            style:
+                context.text.titleMedium?.copyWith(fontSize: 18, height: 1.45),
+            children: [
+              TextSpan(text: '$question '),
+              WidgetSpan(
+                alignment: PlaceholderAlignment.middle,
+                child: WordSpeakerButtons(
+                  id: 'pronounce:$word',
+                  text: word,
+                  size: 22,
+                  color: color,
+                  dense: true,
+                ),
+              ),
+            ],
+          ),
+          textAlign: TextAlign.start,
+        ),
       ),
     );
   }

@@ -4,6 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
+import '../api/api_providers.dart';
+import 'server_speech_recognition_service.dart';
+
 /// Speech recognition — the learner's side of a spoken conversation.
 ///
 /// The learner talks; this turns it into the text the backend already knows how
@@ -68,6 +71,15 @@ class SpeechRecognitionService {
   /// False when this device cannot listen at all — no permission, no
   /// recogniser, or a simulator. The UI offers typing instead.
   bool get isAvailable => _available;
+
+  /// Why the last turn produced nothing, when it was a failure rather than
+  /// silence — an API error code such as `SPEECH_UNAVAILABLE`.
+  ///
+  /// Always null here: the phone's recogniser either hears words or it does
+  /// not. The server recogniser (ADR-107) can also fail to be reached, and
+  /// the learner deserves to be told that differently from "I didn't catch
+  /// that".
+  String? get lastFailure => null;
 
   /// Asks for permission and checks that a recogniser exists.
   ///
@@ -397,11 +409,37 @@ class SpeechRecognitionService {
   }
 }
 
+/// Which recogniser listens (ADR-107).
+///
+/// Against the real backend, the server: the phone records and Gemini — or
+/// Groq when Gemini will not — writes the transcript. Against the mock there
+/// is no server to listen, so the phone's own recogniser does, as it always
+/// did; that is also what the widget tests exercise.
 final speechRecognitionProvider =
     Provider<SpeechRecognitionService>((ref) {
-  final service = SpeechRecognitionService();
+  final env = ref.watch(appEnvironmentProvider);
+  final SpeechRecognitionService service;
+  if (env.useMockBackend) {
+    service = SpeechRecognitionService();
+  } else {
+    // Read at the moment of sending, not watched: a screen holds this service
+    // for its whole life, and rebuilding it would release the recorder under
+    // a turn that is still being recorded.
+    service = ServerSpeechRecognitionService(
+      transcribe: (audio, mimeType) => ref
+          .read(wordOsApiProvider)
+          .transcribeSpeech(audio, mimeType: mimeType),
+    );
+  }
 
-  ref.onDispose(service.cancel);
+  ref.onDispose(() {
+    // The server recogniser owns a native recorder that must be released;
+    // cancelling first discards any turn still being recorded.
+    final pending = service.cancel();
+    if (service is ServerSpeechRecognitionService) {
+      pending.whenComplete(service.dispose);
+    }
+  });
 
   return service;
 });

@@ -9,6 +9,7 @@ everything provider-specific lives in this one file.
 
 from __future__ import annotations
 
+import base64
 import json
 import urllib.error
 import urllib.request
@@ -46,6 +47,7 @@ class GeminiClient:
         system_instruction: str | None = None,
         json_schema: dict | None = None,
         temperature: float = 0.7,
+        audio: tuple[bytes, str] | None = None,
     ) -> GeminiResponse:
         """Sends one prompt and returns the model's text.
 
@@ -53,8 +55,18 @@ class GeminiClient:
         which is what makes the output parseable rather than prose we have to
         guess at (rule R2: the backend decides, so it needs structured data).
         """
+        parts: list[dict] = [{"text": prompt}]
+        if audio is not None:
+            # Inline rather than the Files API: a spoken turn is well under the
+            # inline limit, and one request is one round trip (ADR-107).
+            data, mime_type = audio
+            parts.append({"inline_data": {
+                "mime_type": mime_type,
+                "data": base64.b64encode(data).decode("ascii"),
+            }})
+
         body: dict = {
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [{"parts": parts}],
             "generationConfig": {"temperature": temperature},
         }
 
@@ -124,3 +136,70 @@ class GeminiClient:
             raise GeminiError(
                 f"Gemini returned unparseable JSON: {response.text[:200]}"
             ) from exc
+
+
+@dataclass(frozen=True)
+class GeminiSpeech:
+    """Raw speech from a Gemini TTS model: 16-bit little-endian mono PCM."""
+
+    pcm: bytes
+    sample_rate: int
+    model: str
+
+
+def generate_speech(
+    api_key: str,
+    model: str,
+    text: str,
+    voice: str,
+    timeout: float,
+) -> GeminiSpeech:
+    """Speaks ``text`` in ``voice`` with a Gemini TTS model (ADR-108).
+
+    The text is sent **alone** — no "say warmly:" style prefix. Measured: the
+    TTS model read such a prefix aloud as part of the speech, which in a
+    Listening passage is words the learner hears and the page does not show.
+    """
+    body = {
+        "contents": [{"parts": [{"text": text}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}},
+            },
+        },
+    }
+    request = urllib.request.Request(
+        f"{_BASE}/{model}:generateContent",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:300]
+        raise GeminiError(f"Gemini TTS returned {exc.code}: {detail}",
+                          status=exc.code) from exc
+    except OSError as exc:  # URLError, a reset, or a bare socket timeout
+        raise GeminiError(f"Could not reach Gemini TTS: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise GeminiError("Gemini TTS returned unparseable JSON") from exc
+
+    try:
+        part = payload["candidates"][0]["content"]["parts"][0]["inlineData"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise GeminiError("Gemini TTS returned no audio") from exc
+
+    pcm = base64.b64decode(part.get("data") or "")
+    if len(pcm) < 2:
+        raise GeminiError("Gemini TTS returned empty audio")
+
+    # "audio/L16;codec=pcm;rate=24000" — the rate is read, never assumed.
+    rate = 24000
+    for piece in str(part.get("mimeType", "")).split(";"):
+        key, _, value = piece.strip().partition("=")
+        if key == "rate" and value.isdigit():
+            rate = int(value)
+    return GeminiSpeech(pcm=pcm, sample_rate=rate, model=model)

@@ -22,12 +22,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated, NamedTuple
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from starlette.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .config import ConfigurationError, load_settings
 from .gemini import GeminiClient, GeminiError
+from .speech import SpeechSettings, Transcriber, TranscriptionError
+from .tts import SynthesisError, Synthesizer, TtsSettings, encode_audio
 from . import prompts
 
 logging.basicConfig(
@@ -42,6 +45,17 @@ except ConfigurationError as exc:  # pragma: no cover - startup failure path
     raise SystemExit(f"\n{exc}\n") from exc
 
 CLIENT = GeminiClient(SETTINGS.gemini_api_key, SETTINGS.gemini_model)
+
+# Optional, unlike the text key: a service without speech keys still writes
+# every lesson, and Speaking answers 503 to a recording so the learner types
+# instead (ADR-107).
+SPEECH_SETTINGS = SpeechSettings.from_env()
+TRANSCRIBER = Transcriber(SPEECH_SETTINGS)
+
+# The voice for the tutor and Listening: Edge first, then Gemini (ADR-108,
+# ADR-110). Edge needs no key; if every provider fails the app speaks with
+# the phone's voice, as it always did.
+SYNTHESIZER = Synthesizer(TtsSettings.from_env())
 
 app = FastAPI(title="WordOS AI Service", version="1.0.0")
 
@@ -279,6 +293,9 @@ class SpeakingRequest(BaseModel):
 
 class SpeakingResponse(BaseModel):
     reply: str
+    # What the learner's last message was: answer, new_question, explain or
+    # other (ADR-113). The backend's second check on whether a word was used.
+    learner_intent: str = "answer"
     # The one judgement a reader of the transcript cannot make: whether a word
     # that appears there was used or merely named (ADR-048). Usually empty.
     words_only_named: list[str]
@@ -297,7 +314,9 @@ class SpeakingEvalRequest(BaseModel):
     learner_name: str = Field(max_length=120)
     level: str = Field(max_length=8)
     words: list[EvalTargetWord] = Field(min_length=1, max_length=15)
-    transcript: list[TranscriptTurn] = Field(min_length=1, max_length=60)
+    # The latest lines; the backend sends at most 120 (ADR-113), because a
+    # conversation now runs until every word is used.
+    transcript: list[TranscriptTurn] = Field(min_length=1, max_length=160)
     feedback_language: str = Field(default="ar", max_length=8)
 
 
@@ -369,7 +388,188 @@ class SpeakingEvalResponse(BaseModel):
 def health() -> dict:
     """Liveness. Deliberately does not call Gemini — that would bill a request
     for every health check."""
-    return {"status": "ok", "model": SETTINGS.gemini_model}
+    return {
+        "status": "ok",
+        "model": SETTINGS.gemini_model,
+        "speech": {
+            "gemini": bool(SPEECH_SETTINGS.gemini_api_key),
+            "groq": bool(SPEECH_SETTINGS.groq_api_key),
+            "voice": SYNTHESIZER.configured,
+            "voices": list(SYNTHESIZER.settings.providers),
+        },
+    }
+
+
+class SynthesisRequest(BaseModel):
+    text: str
+
+
+class TimedWordOut(BaseModel):
+    start_ms: int
+    end_ms: int
+    char_start: int
+    char_end: int
+
+
+class SynthesisResponse(BaseModel):
+    audio: str  # base64
+    mime_type: str
+    duration_ms: int
+    words: list[TimedWordOut]
+    timing: str
+    model: str
+
+
+@app.post(
+    "/ai/synthesize",
+    response_model=SynthesisResponse,
+    dependencies=[Depends(require_service_token)],
+)
+def synthesize(request: SynthesisRequest) -> SynthesisResponse:
+    """Speaks a tutor reply or a piece of a Listening passage (ADR-108).
+
+    The audio comes back with a time on every word of the text — Edge's own
+    word marks, or Whisper's for Gemini — so the app can draw the playhead
+    and the clock as it did with the phone's voice. A failure here is not the learner's problem: the app
+    speaks with the phone's voice instead.
+    """
+    if not SYNTHESIZER.configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "VOICE_UNAVAILABLE",
+                    "message": "The voice is not configured."},
+        )
+
+    text = request.text.strip()
+    if not text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "EMPTY_TEXT", "message": "Nothing to say."},
+        )
+    if len(text) > SYNTHESIZER.settings.max_chars:
+        raise HTTPException(
+            status_code=413,  # named differently across Starlette versions
+            detail={"code": "TEXT_TOO_LONG",
+                    "message": "That text is too long to speak at once."},
+        )
+
+    if not _in_flight.acquire(timeout=_ADMISSION_WAIT_SECONDS):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "AI_BUSY",
+                    "message": "The AI service is at capacity. Try again shortly."},
+        )
+    started = time.perf_counter()
+    try:
+        result = SYNTHESIZER.synthesize(request.text)
+    except SynthesisError as exc:
+        log.warning("synthesize failed: %s", exc)
+        raise _upstream("The voice is unavailable") from exc
+    finally:
+        _in_flight.release()
+
+    log.info(
+        "synthesize model=%s chars=%d audio_ms=%d bytes=%d timing=%s ms=%d%s",
+        result.model, len(request.text), result.duration_ms, len(result.audio),
+        result.timing, (time.perf_counter() - started) * 1000,
+        f" rejected={result.rejected}" if result.rejected else "",
+    )
+    return SynthesisResponse(
+        audio=encode_audio(result.audio),
+        mime_type=result.mime_type,
+        duration_ms=result.duration_ms,
+        words=[TimedWordOut(start_ms=w.start_ms, end_ms=w.end_ms,
+                            char_start=w.char_start, char_end=w.char_end)
+               for w in result.words],
+        timing=result.timing,
+        model=result.model,
+    )
+
+
+class TranscriptionResponse(BaseModel):
+    text: str
+    engine: str
+    fallback_reason: str | None = None
+
+
+# Formats both engines accept. Anything else is refused here rather than
+# forwarded to fail upstream with a less useful message.
+_AUDIO_TYPES = {
+    "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac", "audio/wav",
+    "audio/x-wav", "audio/ogg", "audio/webm", "audio/mpeg", "audio/flac",
+}
+
+
+@app.post(
+    "/ai/transcribe",
+    response_model=TranscriptionResponse,
+    dependencies=[Depends(require_service_token)],
+)
+async def transcribe(request: Request) -> TranscriptionResponse:
+    """Turns one spoken turn into text: Gemini, then Groq (ADR-107).
+
+    The body is the raw audio, typed by its Content-Type — no multipart, so
+    no extra dependency and nothing to parse but bytes. Nothing is stored:
+    the audio lives for the length of this request.
+    """
+    if not TRANSCRIBER.configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "SPEECH_UNAVAILABLE",
+                    "message": "Speech recognition is not configured."},
+        )
+
+    mime_type = (request.headers.get("content-type") or "").split(";")[0]
+    mime_type = mime_type.strip().lower()
+    if mime_type not in _AUDIO_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={"code": "UNSUPPORTED_AUDIO",
+                    "message": f"Unsupported audio type '{mime_type}'."},
+        )
+
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "EMPTY_AUDIO", "message": "No audio was sent."},
+        )
+    if len(audio) > SPEECH_SETTINGS.max_audio_bytes:
+        raise HTTPException(
+            status_code=413,  # named differently across Starlette versions
+            detail={"code": "AUDIO_TOO_LARGE",
+                    "message": "That recording is too long."},
+        )
+
+    def run() -> TranscriptionResponse:
+        # The same ceiling every other provider call waits behind: a burst of
+        # recordings must not starve lesson generation, or the reverse.
+        if not _in_flight.acquire(timeout=_ADMISSION_WAIT_SECONDS):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "AI_BUSY",
+                        "message": "The AI service is at capacity. Try again shortly."},
+            )
+        started = time.perf_counter()
+        try:
+            result = TRANSCRIBER.transcribe(audio, mime_type)
+        except TranscriptionError as exc:
+            log.warning("transcribe failed: %s", exc)
+            raise _upstream("Speech recognition is unavailable") from exc
+        finally:
+            _in_flight.release()
+        log.info(
+            "transcribe engine=%s bytes=%d ms=%d fallback=%s",
+            result.engine, len(audio),
+            (time.perf_counter() - started) * 1000, result.fallback_reason,
+        )
+        return TranscriptionResponse(
+            text=result.text,
+            engine=result.engine,
+            fallback_reason=result.fallback_reason,
+        )
+
+    return await run_in_threadpool(run)
 
 
 @app.post(
@@ -916,11 +1116,23 @@ def speaking_turn(request: SpeakingRequest) -> SpeakingResponse:
     )
 
     payload, tokens = generated
-    log.info("speaking remaining=%d tokens=%d",
-             len(request.remaining_words), tokens)
+    reply = str(payload.get("reply", ""))
+    first_words = len(reply.split())
+    if prompts.speaking_too_long(reply, request.level):
+        reply, extra = _shorten_turn(reply, request.level)
+        tokens += extra
+    # The reply's length beside its band, so a tutor drifting long shows in
+    # the log rather than in a learner's complaint (ADR-117).
+    log.info("speaking level=%s remaining=%d reply_words=%d first_words=%d "
+             "tokens=%d", request.level, len(request.remaining_words),
+             len(reply.split()), first_words, tokens)
 
+    intent = str(payload.get("learner_intent", "answer")).strip().lower()
     return SpeakingResponse(
-        reply=str(payload.get("reply", "")),
+        reply=reply,
+        # Anything outside the four is read as an answer: the backend's own
+        # check still stands, and an unknown label must not unmark a word.
+        learner_intent=intent if intent in prompts.LEARNER_INTENTS else "answer",
         words_only_named=[
             str(w) for w in payload.get("words_only_named", [])
         ],
@@ -928,6 +1140,32 @@ def speaking_turn(request: SpeakingRequest) -> SpeakingResponse:
         model=SETTINGS.gemini_model,
         tokens=tokens,
     )
+
+
+def _shorten_turn(reply: str, level: str) -> tuple[str, int]:
+    """One rewrite of a turn far past its band's length (ADR-117).
+
+    The closing "Try to use the word …" line is set aside and put back exactly
+    as it was, so a rewrite can never lose or change which word is asked for.
+    Anything that goes wrong keeps the original: a long turn is a worse turn,
+    not a broken one, and it is never worth failing the learner's reply over.
+    """
+    body, try_line = prompts.split_try_line(reply)
+    try:
+        payload, tokens = _generate_json(
+            prompts.speaking_shorten_prompt(body=body, level=level),
+            prompts.SPEAKING_SHORTEN_SCHEMA,
+            temperature=0.3,
+        )
+    except HTTPException as exc:
+        log.warning("speaking shorten failed (%s); keeping the long turn",
+                    exc.status_code)
+        return reply, 0
+
+    shorter, _ = prompts.split_try_line(str(payload.get("reply", "")))
+    if not shorter or len(shorter.split()) >= len(body.split()):
+        return reply, tokens
+    return (f"{shorter} {try_line}".strip(), tokens)
 
 
 # ── Provider plumbing ────────────────────────────────────────────────────────

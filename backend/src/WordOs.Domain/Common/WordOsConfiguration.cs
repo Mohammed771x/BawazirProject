@@ -195,6 +195,28 @@ public sealed record WordOsConfiguration
     /// <summary>How many times one item may be asked within a single session.</summary>
     public int MaxAttemptsPerItem { get; init; } = 3;
 
+    /// <summary>
+    /// A safety stop for a Speaking conversation, in learner turns per word
+    /// (ADR-113). A conversation ends when every word has been used — never on
+    /// a count — so this is not a rule about learning. It bounds the model calls
+    /// one conversation can spend if a learner never uses a word; at ten turns a
+    /// word no genuine conversation comes near it.
+    /// </summary>
+    public int SpeakingMaxLearnerTurnsPerWord { get; init; } = 10;
+
+    /// <summary>
+    /// How many of the latest conversation lines the tutor is sent each turn.
+    /// It reads only the last few; the rest would be tokens and, past the AI
+    /// service's limit, a refused request.
+    /// </summary>
+    public int SpeakingTranscriptWindow { get; init; } = 20;
+
+    /// <summary>
+    /// The most conversation lines the end-of-session evaluation is sent —
+    /// the latest ones, where every word's last and best attempt is.
+    /// </summary>
+    public int SpeakingEvaluationTranscriptMax { get; init; } = 120;
+
     /// <summary>Comprehension questions per Reading/Listening session.</summary>
     public int ComprehensionQuestionCount { get; init; } = 5;
 
@@ -316,6 +338,20 @@ public sealed record WordOsConfiguration
     }
 
     public SkillType FirstSkill => SkillsOrder[0];
+
+    /// <summary>
+    /// Where <paramref name="skill"/> sits in the pipeline — the order every
+    /// list of skills is shown in (ADR-114). A skill missing from a
+    /// misconfigured order sorts last rather than throwing.
+    /// </summary>
+    public int PipelineRank(SkillType skill)
+    {
+        var index = SkillsOrder.ToList().IndexOf(skill);
+        return index < 0 ? int.MaxValue : index;
+    }
+
+    /// <summary>The default pipeline, for code that holds no configuration.</summary>
+    public static WordOsConfiguration Default { get; } = new();
 
     /// <summary>
     /// Where a skill sits in the pipeline — for sorting anything shown to a

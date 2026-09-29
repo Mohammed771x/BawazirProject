@@ -790,7 +790,8 @@ public static class SessionEndpoints
                     .ToDictionary(x => x.Id, x => x.Synonym!);
 
                 SessionContentBuilder.BuildSpellingItems(
-                    session, due, contentLevel, random, synonyms);
+                    session, due, contentLevel, random, synonyms,
+                    start: user.SpellingHintStart);
                 break;
             }
 
@@ -996,6 +997,7 @@ public static class SessionEndpoints
         ClaimsPrincipal principal,
         WordOsDbContext db,
         IAiContentService ai,
+        WordOsConfiguration config,
         TimeProvider clock,
         CancellationToken ct)
     {
@@ -1060,17 +1062,23 @@ public static class SessionEndpoints
         var siblings = await SiblingFormsAsync(db, words, ct);
         var reminders = new List<SpeakingFormReminder>();
 
+        // The part of the turn that answers, without the sentences that ask
+        // the tutor for something — "another question using football", "what
+        // does football mean". Those name a word and use none of it (ADR-113).
+        var answer = LearnerRequests.AnswerPart(
+            transcript, words.Select(w => w.Text));
+
         foreach (var word in words.Where(w => remaining.Contains(
                      w.Text, StringComparer.OrdinalIgnoreCase)))
         {
-            if (SpokenIn(transcript, word.Text,
+            if (SpokenIn(answer, word.Text,
                     allowPlural: mayPluralise.GetValueOrDefault(word.Text)))
                 continue;
 
             if (!siblings.TryGetValue(word.Text, out var others)) continue;
 
             var said = others.FirstOrDefault(f =>
-                SpokenIn(transcript, f, allowPlural: false));
+                SpokenIn(answer, f, allowPlural: false));
 
             if (said is null) continue;
 
@@ -1078,10 +1086,17 @@ public static class SessionEndpoints
                 word.Text, WordForms.FormOf(word) ?? "form", said));
         }
 
+        // The latest lines only: the tutor reads the last few, and a long
+        // conversation — which now runs until every word is used — would
+        // otherwise outgrow what the AI service accepts.
+        var recent = history
+            .TakeLast(Math.Max(2, config.SpeakingTranscriptWindow))
+            .Select(h => new SpeakingTranscriptTurn(h.FromAi, h.Text))
+            .ToList();
+
         var turn = await ai.SpeakingTurnAsync(new SpeakingTurnRequest(
             user.DisplayName, session.LevelUsed, remaining, alreadyUsed,
-            history.Select(h => new SpeakingTranscriptTurn(h.FromAi, h.Text))
-                .ToList(),
+            recent,
             user.Interests.Select(i => i.Interest).ToList(),
             RemainingShapes: shapes
                 .Where(w => remaining.Contains(w.Text, StringComparer.OrdinalIgnoreCase))
@@ -1105,13 +1120,39 @@ public static class SessionEndpoints
         // Grouped by spelling, not keyed by it: a learner may hold two senses
         // of the same word — `book` the object and `book` the verb — and a
         // transcript cannot tell them apart. One spelling is one thing to say.
-        var confirmed = words
-            .Select(w => w.Text)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(text => SpokenIn(transcript, text,
-                allowPlural: mayPluralise.GetValueOrDefault(text)))
-            .Where(text => !turn.WordsOnlyNamed.Contains(text, StringComparer.OrdinalIgnoreCase))
-            .ToList();
+        //
+        // Two independent checks that a word was *used* rather than asked
+        // about (ADR-113): it must appear in a sentence that answers — not in
+        // one asking for a question, a meaning or an explanation — and the
+        // model must not have called it only named. And a turn the model reads
+        // as a request for a question or an explanation, in one breath with no
+        // sentence of its own, uses nothing, whatever the patterns missed.
+        //
+        // Where the two disagree on a turn that plainly does both — sentences
+        // the patterns read as answers *and* sentences they read as requests
+        // — the sentence-by-sentence reading wins. Measured: "I play football
+        // with my brother every Friday. Can you give me another question?"
+        // came back from the model as only naming football, because the turn
+        // ended on a request; the learner had used it, in a sentence of their
+        // own. The model's veto is kept for what it is for: a request the
+        // patterns did not recognise at all.
+        var targetTexts = words.Select(w => w.Text).ToList();
+        var sentences = LearnerRequests.Sentences(transcript);
+        var patternsFoundARequest = sentences.Any(
+            sentence => LearnerRequests.IsRequest(sentence, targetTexts));
+        var onlyAsked = sentences.Count <= 1
+            && turn.LearnerIntent is "new_question" or "explain";
+
+        var confirmed = onlyAsked
+            ? []
+            : words
+                .Select(w => w.Text)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(text => SpokenIn(answer, text,
+                    allowPlural: mayPluralise.GetValueOrDefault(text)))
+                .Where(text => patternsFoundARequest
+                    || !turn.WordsOnlyNamed.Contains(text, StringComparer.OrdinalIgnoreCase))
+                .ToList();
 
         if (confirmed.Count > 0)
         {
@@ -1138,8 +1179,15 @@ public static class SessionEndpoints
         // Whether a word was used well is not settled here and does not belong
         // here: the end-of-session evaluation says what went wrong, kindly and
         // in detail. The conversation itself finishes the way conversations do.
+        //
+        // It ends when every word has been used, and only then (ADR-113): the
+        // product owner's rule is that no word is left undiscussed. It used to
+        // end after the word count plus three turns, which cut off exactly the
+        // learner who needed longer. What remains is a safety stop on model
+        // calls, far past anything a real conversation reaches.
         var learnerTurns = history.Count(t => !t.FromAi);
-        var isFinal = remaining.Count == 0 || learnerTurns >= words.Count + 3;
+        var isFinal = remaining.Count == 0
+            || learnerTurns >= words.Count * Math.Max(1, config.SpeakingMaxLearnerTurnsPerWord);
 
         if (isFinal)
         {
@@ -1154,8 +1202,7 @@ public static class SessionEndpoints
             {
                 var closing = await ai.SpeakingTurnAsync(new SpeakingTurnRequest(
                     user.DisplayName, session.LevelUsed, [], alreadyUsed,
-                    history.Select(h => new SpeakingTranscriptTurn(h.FromAi, h.Text))
-                        .ToList(),
+                    recent,
                     user.Interests.Select(i => i.Interest).ToList(),
                     UnusedWords: remaining), ct);
 
@@ -1248,7 +1295,11 @@ public static class SessionEndpoints
                         learner.DisplayName,
                         session.LevelUsed,
                         await DescribeWordsAsync(db, spokenWords, ct),
+                        // The latest lines, where each word's last and best
+                        // attempt is; a conversation that ran long would
+                        // otherwise outgrow what the evaluator accepts.
                         transcript
+                            .TakeLast(Math.Max(2, config.SpeakingEvaluationTranscriptMax))
                             .Select(t => new SpeakingTranscriptTurn(t.FromAi, t.Text))
                             .ToList(),
                         LearnerLanguage.From(http)),

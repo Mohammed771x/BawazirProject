@@ -81,6 +81,44 @@ class SkillLevel {
       );
 }
 
+/// Where Spelling's hints start (ADR-115).
+///
+/// [start] is null for automatic, which starts where the learner's level puts
+/// them — and [automaticStart] is where that is, as the server decided it, so
+/// the settings screen can say it without working it out (R1).
+class SpellingHints {
+  const SpellingHints({this.start, required this.automaticStart});
+
+  /// The learner's choice, or null for automatic.
+  final SpellingClueKind? start;
+
+  /// The rung automatic means for this learner right now.
+  final SpellingClueKind automaticStart;
+
+  static const automatic = SpellingHints(
+    automaticStart: SpellingClueKind.arabicMeaning,
+  );
+
+  static const _auto = 'AUTO';
+
+  factory SpellingHints.fromJson(Map<String, dynamic>? json) {
+    if (json == null) return automatic;
+    final start = json['start'] as String?;
+    return SpellingHints(
+      start: start == null || start == _auto
+          ? null
+          : SpellingClueKind.fromWire(start),
+      automaticStart:
+          SpellingClueKind.fromWire(json['automaticStart'] as String?),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'start': start?.wire ?? _auto,
+        'automaticStart': automaticStart.wire,
+      };
+}
+
 class UserProfile {
   const UserProfile({
     required this.id,
@@ -91,6 +129,7 @@ class UserProfile {
     required this.interests,
     required this.skillLevels,
     required this.createdAt,
+    this.spellingHints = SpellingHints.automatic,
   });
 
   final String id;
@@ -101,6 +140,7 @@ class UserProfile {
   final List<String> interests;
   final List<SkillLevel> skillLevels;
   final DateTime createdAt;
+  final SpellingHints spellingHints;
 
   SkillLevel levelFor(SkillType skill) => skillLevels.firstWhere(
         (l) => l.skill == skill,
@@ -129,6 +169,8 @@ class UserProfile {
         createdAt:
             DateTime.tryParse(json['createdAt'] as String? ?? '')?.toUtc() ??
                 DateTime.now().toUtc(),
+        spellingHints: SpellingHints.fromJson(
+            json['spellingHints'] as Map<String, dynamic>?),
       );
 
   Map<String, dynamic> toJson() => {
@@ -140,6 +182,7 @@ class UserProfile {
         'interests': interests,
         'skillLevels': skillLevels.map((e) => e.toJson()).toList(),
         'createdAt': createdAt.toIso8601String(),
+        'spellingHints': spellingHints.toJson(),
       };
 
   UserProfile copyWith({
@@ -147,6 +190,7 @@ class UserProfile {
     List<String>? interests,
     List<SkillLevel>? skillLevels,
     String? displayName,
+    SpellingHints? spellingHints,
   }) =>
       UserProfile(
         id: id,
@@ -157,6 +201,7 @@ class UserProfile {
         interests: interests ?? this.interests,
         skillLevels: skillLevels ?? this.skillLevels,
         createdAt: createdAt,
+        spellingHints: spellingHints ?? this.spellingHints,
       );
 }
 

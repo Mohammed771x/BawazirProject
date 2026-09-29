@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using WordOs.Application.Abstractions;
 using WordOs.Domain.Common;
+using WordOs.Domain.Sessions;
 
 namespace WordOs.Infrastructure.Ai;
 
@@ -457,8 +458,13 @@ public sealed class ResilientAiContentService(
     {
         var last = request.Transcript.LastOrDefault(t => !t.FromAi)?.Text ?? string.Empty;
 
+        // Whether a word was used is the endpoint's to settle, from the
+        // transcript (ADR-048, ADR-113). This used to pass the words it had
+        // *used* as the words only *named*, so with the model down no word
+        // could ever count.
         var usedNow = request.RemainingWords
-            .Where(w => last.Contains(w, StringComparison.OrdinalIgnoreCase))
+            .Where(w => LearnerRequests.AnswerPart(last, request.RemainingWords)
+                .Contains(w, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         var next = request.RemainingWords
@@ -469,6 +475,6 @@ public sealed class ResilientAiContentService(
             : $"Thank you. Could you say a little more about that, and use "
               + $"\"{next}\" in your answer?";
 
-        return new SpeakingObservation(reply, usedNow, FromFallback: true);
+        return new SpeakingObservation(reply, [], FromFallback: true);
     }
 }

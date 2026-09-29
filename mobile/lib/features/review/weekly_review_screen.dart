@@ -13,8 +13,13 @@ import '../../core/widgets/app_widgets.dart';
 ///
 /// Wrong answers return to the end of the queue until every word is cleared.
 /// It measures retention and **never** changes pipeline state (rule R9).
+///
+/// With [practice], the same loop over the last finished review's words,
+/// recorded as nothing (ADR-120).
 class WeeklyReviewScreen extends ConsumerStatefulWidget {
-  const WeeklyReviewScreen({super.key});
+  const WeeklyReviewScreen({super.key, this.practice = false});
+
+  final bool practice;
 
   @override
   ConsumerState<WeeklyReviewScreen> createState() => _WeeklyReviewScreenState();
@@ -44,7 +49,10 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
       _error = null;
     });
     try {
-      final session = await ref.read(wordOsApiProvider).startWeeklyReview();
+      final api = ref.read(wordOsApiProvider);
+      final session = widget.practice
+          ? await api.startWeeklyReviewPractice()
+          : await api.startWeeklyReview();
       if (!mounted) return;
       setState(() {
         _session = session;
@@ -130,13 +138,19 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
     });
   }
 
+  /// What this round does and does not count for.
+  String _note(AppStrings s) =>
+      widget.practice ? s.practiceDoesNotCount : s.reviewDoesNotChange;
+
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(stringsProvider);
     final color = context.palette.review;
 
     return Scaffold(
-      appBar: AppBar(title: Text(s.weeklyReview)),
+      appBar: AppBar(
+        title: Text(widget.practice ? s.practiceTitle : s.weeklyReview),
+      ),
       body: SafeArea(child: _body(s, color)),
     );
   }
@@ -150,7 +164,7 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
         // In the learner's language, like every other failure (ADR-035); this
         // showed the server's English sentence.
         title: s.apiError(_error!.code, _error!.message),
-        message: s.reviewDoesNotChange,
+        message: _note(s),
         action: OutlinedButton(
           onPressed: () => Navigator.of(context).maybePop(),
           child: Text(s.backToHub),
@@ -174,7 +188,7 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                s.reviewDoesNotChange,
+                _note(s),
                 style: context.text.bodySmall?.copyWith(
                   color: context.colors.onSurface.withValues(alpha: 0.6),
                 ),
@@ -296,7 +310,10 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
                       ),
                     ),
                     const SizedBox(height: AppSpacing.md),
-                    Text(s.weeklyScore, style: context.text.titleMedium),
+                    Text(
+                      result.isPractice ? s.practiceScore : s.weeklyScore,
+                      style: context.text.titleMedium,
+                    ),
                   ],
                 ),
               ),
@@ -318,7 +335,7 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
               ),
               const SizedBox(height: AppSpacing.md),
               Text(
-                s.reviewDoesNotChange,
+                _note(s),
                 textAlign: TextAlign.center,
                 style: context.text.bodySmall?.copyWith(
                   color: context.colors.onSurface.withValues(alpha: 0.6),

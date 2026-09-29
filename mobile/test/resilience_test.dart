@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -154,6 +156,17 @@ class FlakyWordOsApi implements WordOsApi {
           sessionId: sessionId, transcript: transcript);
 
   @override
+  Future<String> transcribeSpeech(
+    Uint8List audio, {
+    String mimeType = 'audio/mp4',
+  }) =>
+      _inner.transcribeSpeech(audio, mimeType: mimeType);
+
+  @override
+  Future<SynthesizedSpeech> synthesizeSpeech(String text) =>
+      _inner.synthesizeSpeech(text);
+
+  @override
   Future<void> abandonSession(String sessionId) =>
       _inner.abandonSession(sessionId);
 
@@ -179,6 +192,10 @@ class FlakyWordOsApi implements WordOsApi {
     required CefrLevel level,
   }) =>
       _inner.updateSkillLevel(skill: skill, level: level);
+
+  @override
+  Future<SpellingHints> updateSpellingHintStart(SpellingClueKind? start) =>
+      _inner.updateSpellingHintStart(start);
 
   @override
   Future<SkillLevel> updateDailyTarget({

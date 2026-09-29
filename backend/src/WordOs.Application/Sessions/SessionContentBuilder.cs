@@ -141,17 +141,22 @@ public static class SessionContentBuilder
     /// difficulty lives where it always belonged — in the hint ladder, which is
     /// already entered at the rung that suits the level.
     /// </remarks>
+    /// <param name="start">
+    /// The rung the learner chose to start on in Settings, or null for the one
+    /// their level suggests (ADR-115).
+    /// </param>
     public static void BuildSpellingItems(
         SkillSession session,
         IReadOnlyList<Word> words,
         CefrLevel level,
         Random random,
-        IReadOnlyDictionary<Guid, string>? synonyms = null)
+        IReadOnlyDictionary<Guid, string>? synonyms = null,
+        SpellingClueKind? start = null)
     {
         foreach (var word in words)
         {
             var ladder = BuildHintLadder(
-                word, level, synonyms?.GetValueOrDefault(word.Id));
+                word, start ?? HintStartFor(level), synonyms?.GetValueOrDefault(word.Id));
 
             session.AddItem(SessionItem.SpellingTask(
                 wordId: word.Id,
@@ -190,24 +195,28 @@ public static class SessionContentBuilder
     /// lexicon simply has one fewer step. The translation is always present, so
     /// the ladder can never come back empty.
     /// </remarks>
+    /// <summary>
+    /// The rung a learner at <paramref name="level"/> starts on when they have
+    /// not chosen one (ADR-115): A1–A2 the Arabic meaning, B1 a synonym, B2 the
+    /// simplified definition, C1–C2 the dictionary's own.
+    /// </summary>
+    public static SpellingClueKind HintStartFor(CefrLevel level) => level.Rank() switch
+    {
+        var r when r >= CefrLevel.C1.Rank() => SpellingClueKind.DefinitionEn,
+        var r when r >= CefrLevel.B2.Rank() => SpellingClueKind.SimplifiedDefinition,
+        var r when r >= CefrLevel.B1.Rank() => SpellingClueKind.Synonym,
+        _ => SpellingClueKind.ArabicMeaning,
+    };
+
     private static List<(SpellingClueKind Kind, string Text)> BuildHintLadder(
         Word word,
-        CefrLevel level,
+        SpellingClueKind entry,
         string? synonym)
     {
-        var rank = level.Rank();
-
         // Where this learner joins. Anything above their rung is skipped, not
-        // shown later — climbing back up is not what a hint is for.
-        var entry = rank switch
-        {
-            var r when r >= CefrLevel.C1.Rank() => SpellingClueKind.DefinitionEn,
-            var r when r >= CefrLevel.B2.Rank() =>
-                SpellingClueKind.SimplifiedDefinition,
-            var r when r >= CefrLevel.B1.Rank() => SpellingClueKind.Synonym,
-            _ => SpellingClueKind.ArabicMeaning,
-        };
-
+        // shown later — climbing back up is not what a hint is for. Every word
+        // gets its own ladder from this same rung, so the next word starts at
+        // the top again, not where the last one's hints ran out (ADR-115).
         var ladder = new List<(SpellingClueKind, string)>();
 
         void Rung(SpellingClueKind kind, string? text)

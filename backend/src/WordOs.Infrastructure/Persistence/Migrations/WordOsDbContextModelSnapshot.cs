@@ -306,6 +306,9 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsComplete")
                         .HasColumnType("boolean");
 
+                    b.Property<bool>("IsPractice")
+                        .HasColumnType("boolean");
+
                     b.Property<DateTimeOffset>("PeriodEnd")
                         .HasColumnType("timestamp with time zone");
 
@@ -746,6 +749,10 @@ namespace WordOs.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
+
+                    b.Property<string>("SpellingHintStart")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.Property<string>("TimeZone")
                         .IsRequired()

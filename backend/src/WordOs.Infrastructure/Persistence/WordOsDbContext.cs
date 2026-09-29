@@ -137,6 +137,8 @@ public class WordOsDbContext(
             e.Property(x => x.OnboardingStage)
                 .HasConversion<string>().HasMaxLength(16);
             e.Property(x => x.TimeZone).HasMaxLength(64);
+            e.Property(x => x.SpellingHintStart)
+                .HasConversion<string>().HasMaxLength(32);
 
             e.HasMany(x => x.Interests)
                 .WithOne().HasForeignKey(x => x.UserId)

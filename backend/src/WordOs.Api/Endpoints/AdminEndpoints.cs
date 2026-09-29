@@ -962,7 +962,8 @@ public static class AdminEndpoints
                     ? null
                     : $"+{user.PhoneCountryCode}{user.PhoneNumber}"),
             interests = user.Interests.Select(i => i.Interest).ToList(),
-            levels = user.SkillLevels.Select(AuthEndpoints.ToSkillLevelResponse)
+            levels = AuthEndpoints.InPipelineOrder(user.SkillLevels)
+                .Select(AuthEndpoints.ToSkillLevelResponse)
                 .ToList(),
             // Spelling is measured but unlevelled (ADR-008): its diagnostic is
             // accuracy and input mode, never a CEFR band.

@@ -5291,3 +5291,567 @@ Configuration stays at the default (`True-Client-IP`, entry 0). The log line and
 on the next platform. Lesson for any future probe of a per-caller limit: the
 second caller must be a different network — a phone on mobile data — never a
 tool running on the same machine.
+
+---
+
+## ADR-107 — The server writes down what the learner said
+
+**Date:** 2026-09-29 · **Status:** Accepted (local; not yet deployed)
+
+Reported from students, Android above all: in Speaking the phone's recogniser
+wrote down something other than what they said. ADR-104 stopped it *losing*
+words; it could not make it *hear* better. Speaking is judged on the
+transcript, so a wrong transcript is a wrong verdict. Editing the draft
+(ADR-069) was the stopgap; the product owner reported it was still wrong too
+often to rely on.
+
+**Measured before building.** A bench in `labs/stt_lab/bench/` ran the same 64
+clips — four accents including an Arabic voice speaking English, clean and with
+noise — through four engines:
+
+| Engine | Answered | Word error | Median time |
+|---|---|---|---|
+| Groq `whisper-large-v3-turbo` | 64/64 | 6.8% | 0.5 s |
+| Groq `whisper-large-v3` | 64/64 | 5.7% | 0.5 s |
+| Gemini 3.1 Flash-Lite (free tier) | 47/53 (6 × 503) | 2.9% | 5.7 s |
+| Gemini 3 Flash preview | 8/21 | 0.9% | 7.8 s |
+
+Gemini was the most accurate and the least available; Groq never refused.
+Both kept learners' grammar mistakes almost always — Gemini "corrected" `he
+don't` → `he doesn't` once in sixteen, Whisper never did (its misses were
+mishearings). The noisy Arabic voice defeated both.
+
+**Decided.** The phone records (16 kHz mono AAC, `record` package) and the
+server writes it down: `POST /api/speech/transcribe` → AI service
+`/ai/transcribe` → **Gemini** (one retry on 429/5xx) → **Groq
+`whisper-large-v3`** when Gemini fails, times out, or is not configured. The
+text comes back as the same editable draft as before; nothing about the turn,
+the tutor or the verdict changed.
+
+* **A separate, free Gemini key** (`STT_GEMINI_API_KEY`) — the product owner's
+  instruction, so audio never spends on the paid key that writes lessons. It is
+  never defaulted to `GEMINI_API_KEY`, and a test pins that.
+* **The prompt forbids correcting the learner** — verbatim, mistakes kept.
+* **Silence is not failure.** Gemini is asked for `[NO_SPEECH]`; Whisper
+  segments it rates as probably silence (`no_speech_prob ≥ 0.6`) are dropped,
+  because Whisper hallucinates polite phrases over an empty clip. Either way
+  the learner is offered the microphone again.
+* **Failure is said.** Both engines down → 503 `SPEECH_UNAVAILABLE`, and the
+  app says *"We couldn't listen just now. Try again, or type your answer."*
+  rather than looking as though the learner said nothing.
+* **Behind the same AI gate** (ADR-051) and the `Expensive` rate limit; a far
+  side at capacity is `AI_BUSY`, not a failure.
+* **Only this endpoint** may exceed the 256 KB body limit, up to
+  `Capacity:MaxAudioBytes` (8 MB — over half an hour at 4 KB/s).
+* **Nothing is stored.** The recording is a temporary file on the phone,
+  deleted after the upload, and lives on the server for one request.
+* **Against the mock** the phone's recogniser still listens, which is what the
+  widget suite exercises.
+
+**What it costs the learner.** The words no longer appear while they speak,
+and the draft takes 4–10 s with Gemini (under 1 s when Groq answers). The
+product owner chose right-and-later over live-and-wrong. Every number —
+timeouts, retries, models, thresholds — is configuration (rule R3).
+
+**Verified locally:** the demo account in the iOS Simulator recorded a
+sentence spoken by the Mac, Gemini returned it word for word in 4.6 s, and the
+tutor answered it. Tests: 21 AI-service, 13 API, 12 service + 1 widget in
+Flutter. Not yet deployed: production needs `STT_GEMINI_API_KEY` and
+`GROQ_API_KEY` on the AI service.
+
+---
+
+## ADR-108 — The tutor and Listening speak in Gemini's voice
+
+**Date:** 2026-09-29 · **Status:** Accepted (local; not yet deployed)
+
+The phone's voice sounded like a screen reader. The product owner heard
+Gemini's TTS on the free key, chose the **Kore** voice, and decided: the
+**tutor** and **Listening** (passage, sentence beside a question, replay after
+the result) speak in Gemini's voice; **single words and the placement test keep
+the phone's**. Storing a recording per word was considered and rejected by the
+product owner.
+
+**The hard part is what the phone gave for free.** Listening highlights the
+word being spoken and draws a playhead (ADR-068, ADR-082); Gemini returns audio
+and nothing else. So:
+
+1. **Gemini speaks** (`gemini-3.8-flash-tts` → `-lite-tts` → `2.5-flash-preview-tts`;
+   the free tier's limits are per model, so a refusal from one is not one from
+   the next). The text is sent **alone** — measured: a style prefix ("Say
+   warmly: …") was read aloud as part of the speech.
+2. **Groq's Whisper times every word** of that audio (`timestamp_granularities[]=word`,
+   ~0.5 s, free).
+3. **The words are aligned to the text** (`difflib`), giving each word of the
+   page a start time and a character span; a word Whisper missed is placed
+   between its neighbours by length.
+4. **The alignment is also the check.** Under 85 % of the text heard, or over
+   15 % extra words heard, and the audio is refused and the next model tried —
+   a passage that says what the page does not show is worse than the phone.
+   Groq down → the audio is kept with timings estimated by word length.
+5. **MP3 at 48 kbit/s** (`lameenc`): 29 KB where WAV was 221 KB.
+6. **A cache of minutes**, in memory, spares regenerating what the learner
+   replays or slows down. Nothing is stored.
+
+**In the app nothing above the voice changed.** A new `HybridSpeechProvider`
+sits behind the existing `SpeechProvider` seam: it is told who is speaking
+(`tutor:`, `listening:`, `sentence:`, `replay:` → Gemini; anything else → the
+phone) and keeps the phone's contract — `speak` one sentence, report each word
+start, report the end. A passage is fetched in a few pieces (the first short),
+ahead of time, and each sentence is played as its slice of the piece that holds
+it (`ClippingAudioSource`, from its first word's time to its last). Long tutor
+replies are split the same way — measured, the voice started after 5.9 s
+instead of 8.5 s, with the second piece ready before the first ended. Slow is
+the same audio at 0.65× (the phone's own slow ratio). Any fetch that fails or
+exceeds 20 s is spoken by the phone; three failures in a row leave the cloud
+alone for three minutes.
+
+**One real bug found on the way:** a Listening clip's clock counted the fetch
+as speaking time (0:27 shown for 15.5 s of audio). Sentences are now timed
+from the first word the voice reports (`SpeechService.wordEvents`).
+
+**And one in the local stack:** `./wordos` started the AI service with
+`.venv/bin/uvicorn`, whose first line named the interpreter of the checkout the
+venv was copied from — so it had been running on another project's packages.
+It now runs `.venv/bin/python -m uvicorn`.
+
+Verified in the iOS Simulator against the local stack: a Listening sentence
+clip played in Gemini's voice with the playhead following it to the end, and
+the tutor's reply was spoken by Gemini. Tests: 19 AI service, 9 API, 21 Flutter.
+Not yet deployed: production needs the voice keys (the free
+`STT_GEMINI_API_KEY` doubles as the voice key) and `lameenc` in the image.
+
+## ADR-109 — Silence noise bursts at a voice clip's edges; the free voice quota is ten a day
+
+**Date:** 2026-09-29 · **Status:** Accepted (local only, not deployed)
+
+**What the product owner heard.** A radio-like "tsh" in the tutor's voice
+after "running well" and again at the end of the reply. Listening sounded fine.
+
+**Cause, measured.** `gemini-3.8-flash-tts` had run out of free requests, so
+the tutor fell to `gemini-3.8-flash-lite-tts`. That model ends every clip with
+~125 ms of near-full-scale static (10 ms RMS over 15,000, peaks at 32,767)
+after 250 ms of silence, and opens some clips with a 5 ms click. A long tutor
+reply is fetched in pieces, so the burst sounded at the end of each piece.
+Listening plays each sentence as a slice between its first and last word, so
+it never reached the burst.
+
+**Decision.** `clean_edges` in `ai-service/app/tts.py` runs on every clip
+before it is timed or encoded, whatever the model. An edge run of sound is
+silenced when a silence (≥ 100 ms) separates it from the speech and it is
+either a click (≤ 30 ms) or short and loud throughout (≤ 300 ms, mean ≥ 12,000
+RMS). Real speech measured at most ~10,500 mean over 50 ms, and a final word
+after a pause is longer or quieter than that. The clip keeps its length, so
+the timings still hold, and both ends fade over 8 ms so the cut never clicks.
+Every threshold is configuration (`TTS_BURST_*`, `TTS_CLICK_MAX_MS`).
+Checked against the 64 recorded speech clips from the STT bench, including the
+noisy ones: none changed.
+
+**Also found — a blocker for deploying ADR-108 on the free key.** Google's
+429 names the quota: `GenerateRequestsPerDayPerProjectPerModel-FreeTier`,
+value **10**. Ten requests a day per voice model, three models: about thirty
+tutor pieces or Listening pieces a day for the whole app. Past that, every
+line falls back to the phone's voice. This works as designed, but it is not
+a Gemini voice for learners. Serving learners needs a billed key for the voice,
+chosen by the product owner.
+
+## ADR-110 — Edge's "Ava Multilingual" voice first, Gemini behind it, as a list
+
+**Date:** 2026-09-29 · **Status:** Accepted (local only, not deployed)
+
+**Context.** Gemini's free voice allows ten requests a day per model
+(ADR-109), not enough for learners. The product owner compared voices by ear
+in `labs/tts_lab` (Edge, Azure, Google Cloud, Gemini, Groq Orpheus) and chose
+Edge's `en-US-AvaMultilingualNeural`. They accepted that Edge is unofficial
+(the read-aloud service behind Microsoft Edge, reached through the `edge-tts`
+package) and may stop working any day. They asked that replacing it then be
+easy.
+
+**Decision.**
+
+1. **Providers are a list in configuration**: `TTS_PROVIDERS=edge,gemini`.
+   Each is tried in order for every request, so an Edge failure falls to
+   Gemini, and if that fails too the app uses the phone's voice (ADR-108,
+   unchanged). Replacing a provider means changing a setting, not shipping
+   a release. An unknown name is skipped, never fatal.
+2. **Edge reports its own word marks**, so Groq is not asked. The marks go
+   through the same `align` as Whisper's (100% matched on every measured
+   passage). If they ever fit the text poorly (numbers, symbols), the audio is
+   kept and only the timings are estimated. Edge reads exactly what it is
+   given, so a poor match is a problem with the timings, not with the audio.
+3. **A sentence at a time, four at once, joined.** Edge generates speech at
+   about the pace it is spoken. Measured as one request: 180 characters in
+   7.2 s, 450 in 14.2 s, 1,400 in 56.8 s, which is past the app's 20 s wait.
+   Split into sentences and fetched four at a time: 450 in 2–4.5 s and
+   1,400 in 10.7–15.7 s. Eight at a time was slower, so Edge seems to throttle.
+   The pieces are bare MP3 frames and are simply joined. Each piece's word
+   marks are shifted by the length of the pieces before it, counted frame by
+   frame (`mp3_duration_ms`) rather than guessed from the size.
+4. **Nothing else changes.** The API contract, the app, the phone-voice
+   fallback, Gemini's burst cleaning (ADR-109) and the cache are the same.
+   Single words and placement still use the phone's voice.
+
+**Verified.** 22 new AI-service tests (184 pass). Through the real API: a
+tutor reply in 2.9 s and a 176-character Listening piece in 0.9 s, both Edge,
+all words aligned. In the iOS Simulator: the tutor's reply (the same "…running well" reply
+that had the static) was spoken by Edge in two pieces, ready in 4.1 s, and the
+microphone opened when it ended. A Listening sentence played with the clock
+reading 0:23 of 0:23 (audio 22.7 s) and the bar running to the end. Slow mode
+showed 0:35 and fetched nothing new.
+
+## ADR-111 — One voice for every word, and a session's audio fetched before it is asked for
+
+**Date:** 2026-09-29 · **Status:** Accepted (local only, not deployed)
+
+**Context.** Now that the voice is free (ADR-110), the product owner asked
+for every word button to use it too, at both speeds. That reverses ADR-108's
+"single words keep the phone's voice". They also asked that play in Listening
+answer at once: no wait on each question, even on a weak connection.
+
+**Decision.**
+
+1. **Every utterance with an id is the server's voice** (`cloudSpeaks`). This
+   covers the tutor, Listening, word buttons (list, detail, lookup, weekly
+   review, warm-up, the word under a Listening question) and placement. It
+   is a rule for everything rather than a list of callers, so a button added
+   later cannot quietly keep the phone's voice. A call with no id still goes
+   to the phone.
+2. **A word is never cut out of a longer clip.** Only Listening's sentence
+   ids (`listening:`, `sentence:`, `replay:`) may be played as a slice of a
+   passage (`slicedFromLonger`). Looking a word up by substring would have
+   played "tea" out of "green tea. It" — with the sentence's rhythm and the
+   start of the next word. A word is fetched and played as its own clip. The
+   slow button replays that same clip at 0.65×, with no second request.
+3. **A word waits at most 6 s** (`shortTextTimeout`, texts ≤ 40 characters)
+   before the phone says it. A passage still waits 20 s.
+4. **A session fetches its audio when it opens**, in the order the learner
+   will hear it: the passage the screen opens on (which asks for itself as
+   it is built), then from the current question onwards each question's
+   sentence and word, and Speaking's warm-up words. Two downloads run at
+   once and the rest queue. Nothing is *played* early; ADR-080 stands.
+5. **What the learner presses jumps the queue.** A line asked for now is
+   moved to the front of the waiting fetches, so a tap never waits behind
+   the background ones.
+6. **The voice has its own rate limit** (`RateLimits:VoicePermitsPerMinute`,
+   120). Opening a Listening session is about twenty requests in its first
+   minute. On the AI budget (30) that would have left the tutor and the
+   microphone refused.
+
+The app keeps up to 80 clips (was 40) in the temporary folder; a word is a
+few kilobytes.
+
+**Verified.** Flutter +9 tests (537 pass): routing, words fetched whole and
+never sliced, slow reusing the clip, the short timeout, fetch order, a press
+jumping the queue, a failed prefetch retried on play, and a widget test that
+opening Listening prepares the passage and then every question in order
+without playing any. API: a test that the voice has its own budget and does
+not spend the microphone's.
+
+## ADR-112 — A meaning the checker rejects is never saved
+
+**Date:** 2026-09-29 · **Status:** Accepted (local only, not deployed). Reverses the override in ADR-074.
+
+**Context.** The product owner's review: a learner could add a word with a
+wrong or random Arabic meaning by tapping "save it as I wrote it" under the
+checker's objection. The word list is the foundation of the app, and
+Reading, Listening, Speaking, Spelling and Writing all mark answers against
+that meaning. A wrong one is five sessions teaching the wrong thing.
+
+**Decision.** `acceptAnyway` is gone from `POST /api/words` and from
+`PATCH /api/words/{id}/meaning`. A `MEANING_REJECTED` refusal is final. It
+carries the checker's note and the meanings it would accept, and nothing is
+stored until the learner writes a wording the checker accepts or picks one of
+its suggestions. An older app that still sends `acceptAnyway: true` is
+refused the same way, because the server no longer reads the field. The app
+shows the suggestions as one-tap choices, with a line under them saying the
+word is saved once its meaning is right. On the word page, the suggestions
+are chips in the dialog. `MeaningCheckResult.Overridden` stays in the enum so
+words saved that way before still read back.
+
+## ADR-113 — Speaking ends when every word is used, and a request is not an answer
+
+**Date:** 2026-09-29 · **Status:** Accepted (local only, not deployed)
+
+**Context.** The product owner's review of Speaking:
+1. The session ended before every word had been discussed. It ended at the
+   word count plus three learner turns.
+2. "Can you give me another question using football?", "Can you explain what
+   football means?" and "How can I use football in a sentence?" were counted
+   as using *football*. They are requests.
+3. Questions must suit the learner's level. A scientific or technical word
+   ("tissue") must be asked about simply, not with questions that need the
+   field, especially when it is outside the learner's interests.
+4. "Give me another question" must get a new, easy question.
+
+**Decision.**
+1. **The conversation ends when every word has been used.** The only other
+   stop is a safety limit on model calls,
+   `SpeakingMaxLearnerTurnsPerWord` × words (10 each), far past any real
+   conversation. Two limits that a longer conversation would have hit are
+   handled: the tutor is sent only the latest `SpeakingTranscriptWindow` (20)
+   lines, and the evaluator the latest `SpeakingEvaluationTranscriptMax`
+   (120). The AI service now accepts 160.
+2. **Two independent checks that a word was used rather than asked about.**
+   - `LearnerRequests` (domain, C#, no model) splits the turn into sentences
+     and drops the ones that ask the tutor for something: another, new or
+     easier question; what a word means; how to use or say it; "in a
+     sentence"; "the word X"; "explain X"; "What is X?" said on its own;
+     "I don't understand the word". A word counts only if it appears in a
+     sentence that answers. The patterns name the act of asking, never a
+     topic, so "Do you like football?" and "I can explain why football is
+     popular" still count. 38 domain tests cover this, including the product
+     owner's own three examples.
+   - The model reports `learner_intent` (`answer`, `new_question`,
+     `explain`, `other`) and `words_only_named`. A word it names is not
+     counted. A single-sentence turn it reads as `new_question` or `explain`
+     counts nothing, which catches phrasings the patterns don't know.
+3. **The prompt (speaking-v7)** classifies the message first and acts on it.
+   `new_question`: a new question about the same word, in a different
+   everyday situation, easier than the last. `explain`: one simple sentence
+   of explanation at the learner's level, one tiny example, then an easy
+   question. Every question is pitched at the learner's level and everyday
+   life. A scientific, medical or technical word is met where an ordinary
+   person meets it, never through specialist knowledge. After a question the
+   learner could not answer, the next one is easier.
+4. **Fixed on the way:** the fallback tutor (model down) passed the words the
+   learner *used* as the words only *named*, so with the model down no word
+   could ever count.
+
+## ADR-114 — Skill lists are always in the pipeline's order
+
+**Date:** 2026-09-29 · **Status:** Accepted (local only, not deployed)
+
+**Context.** Changing a daily target in Settings moved skills around. The
+levels were returned in the database's row order, and PostgreSQL returns an
+updated row after the others, so the skill just edited jumped to the bottom.
+The cards also had no keys, so Flutter matched each slider's state to a card
+by position, and a value could appear on another skill.
+
+**Decision.** Every endpoint that returns skill levels (`/api/me`,
+`/api/settings`, the Owner's user view) sorts them by the pipeline order
+(`WordOsConfiguration.PipelineRank`). The Settings cards are keyed by skill.
+An API test changes three daily targets and checks the order after each. It
+fails without the fix and passes with it.
+
+## ADR-115 — The learner chooses where Spelling's hints start
+
+**Date:** 2026-09-29 · **Status:** Accepted (local only, not deployed)
+
+**Context.** The ladder already existed (dictionary definition → simplified
+definition → synonyms → Arabic meaning → letter count), entered by level. The
+product owner asked for a setting that decides where each word starts.
+
+**Decision.** `users.SpellingHintStart` (nullable; migration
+`SpellingHintStart`). Null is **automatic**: A1–A2 start at the Arabic
+meaning, B1 at synonyms, B2 at the simplified definition, and C1–C2 at the
+dictionary definition, taken from the Reading level that Spelling follows.
+`PATCH /api/settings/spelling-hints {start}` takes `AUTO` or one of the four
+rungs. The letter count is refused, because it is the last hint and a word
+that opened on it would have nothing left to give. `/api/me` returns
+`spellingHints {start, automaticStart}`, so Settings can say what automatic
+means for this learner without working it out (R1). Every word's ladder
+starts at the same rung, so the next word starts at the top again. In the
+app, each new word resets the hint count. A change takes effect from the next
+Spelling session.
+
+## ADR-116 — The tutor's line is shown with its voice, and the chat behaves like a messenger
+
+**Date:** 2026-09-29 · **Status:** Accepted (local only, not deployed)
+
+**Context.** The product owner's report: in Speaking, the tutor's text
+appeared and its voice followed seconds later, so the learner read the line
+in silence and then heard it again. They asked that text and voice always
+arrive together, even when the voice is slow. The same review asked for the
+chat to behave like WhatsApp: a sent line becomes its own message and the
+box clears.
+
+**Decision.**
+1. **`SpeechService.ready(id, text)`** completes when the line can start
+   speaking at once: its first piece has been fetched. It also completes when
+   the line never will, because the fetch failed or ran past the line's own
+   time limit and the phone will say it instead. It never throws, and never
+   waits longer than speaking the line would. The tutor's replies, and the
+   opening greeting, are added to the conversation only after `ready`, and
+   speaking starts in the same moment. The greeting's voice is fetched while
+   the learner does the warm-up words. In typing mode a reply is not spoken,
+   so it is shown at once.
+2. **Messenger behaviour.** The learner's line is added and the box cleared
+   the moment they send. The list scrolls to the newest line whenever one
+   arrives. While the tutor's line is on its way, three dots stand where it
+   will appear. If a send fails, the line comes out of the conversation and
+   back into the box, so it can be sent again and is never lost. English
+   messages and the input box are laid out left to right in the Arabic
+   interface, so the question mark is at the end. The box grows to four lines
+   instead of scrolling one line sideways out of sight.
+3. **Edge connections are capped for the whole process** at four
+   (`TTS_EDGE_PARALLEL`), not per request. Measured: the app's two pieces of
+   one reply, each split into sentences, put eight in flight, and a 146-character
+   piece took 14 s. With the cap, both pieces of the same reply took about 1 s.
+   A request that times out while waiting for a slot frees nothing it never
+   took.
+
+**On "the input box piles up".** With the phone's recogniser (still used in
+production), Android builds a turn by joining segments, and some Samsung
+recognisers repeat earlier words in every result, so text piled up in the
+box. The server recogniser (ADR-107) records each turn fresh, so this cannot
+happen there. The single-line box, which scrolled long text sideways, is the
+other half, and is fixed above.
+
+**Verified in the simulator** against the local stack. A spoken answer
+appeared as its own message at once, with the dots in the tutor's place. The
+reply's text appeared at the moment its voice began (reply written at 41.8 s,
+voice ready at 44.5 s, both shown then). A request ("another question using
+environment") was not counted and got an easier question about the same
+word. The next real answer counted it.
+
+## ADR-117 — How long the tutor speaks and how long a passage runs follow the learner's band
+
+**Date:** 2026-09-30 · **Status:** Accepted (local only, not deployed)
+
+**Context.** The product owner's report: at A2 the tutor "brings long
+speech", and length should follow the level everywhere: A1–A2 simple, B1–B2
+intermediate, C1–C2 advanced. Measured against Gemini before changing
+anything, with the same conversation at every band:
+
+- **Speaking.** Replies ran 28–46 words at A1–A2 over three to five
+  sentences, against 37–71 at C1–C2. `_REGISTER` said how hard each sentence
+  is, and nothing said how many. Explaining a word was three fixed parts
+  (definition, example, question) whatever the band. A new question about
+  a hard word set a scene first. And a B1 "new question" about body
+  *tissue* drifted to a paper tissue for a cold, because the everyday rule
+  allowed "its everyday meaning".
+- **Reading and Listening.** The per-band table was right, but the floor for
+  the target words was a flat 30 words a word, which is a B2 sentence pair.
+  With five words, an A1 passage came back at 168 words and 24 sentences,
+  twice its band, A1 listening was as long as A1 reading, and B1 listening was
+  the same length as A2.
+
+**Decision.**
+1. **`_SPEAKING_LENGTH`**: sentences and words for a turn, by band. A1 2/16,
+   A2 2/20, B1 3/30, B2 3/38, C1 3/45, C2 4/55. Neither count includes the
+   closing "Try to use the word …" line, which the learner needs at any band.
+   The greeting, every turn and the goodbye each state it. An explanation and
+   a new question must fit inside it. The example is dropped when there is no
+   room, and "easier" now also means shorter. `speaking-v10`.
+2. **A rewrite past 1.5× the band** (`SPEAKING_SHORTEN_OVER`). The prompt
+   alone did not hold a new question about a hard word to A2's length. So a
+   turn that far over gets one short rewrite call at the learner's band, and
+   the "Try to use" line is set aside and put back word for word. A rewrite
+   that is no shorter, or a failed one, keeps the original. A long turn is
+   worse, but it is not broken. The log records `reply_words` and
+   `first_words` for every turn.
+3. **A specialist word keeps its sense** when made simple. It is met where
+   an ordinary person meets it *in this sense*, never through a commoner
+   sense of the same spelling.
+4. **The passage floor is two of the band's own sentences per target word**
+   (`20 + words × 2 × average sentence length`), not 30 words each.
+5. **A stalled Edge sentence is asked for again.** While measuring, the same
+   reply's voice took 0.85 s, 2.2 s and 10.9 s. The tutor's text waits for its
+   voice (ADR-116), so a stall held the whole reply. A sentence unfinished
+   after `TTS_EDGE_HEDGE_SECONDS` (2.0) plus `TTS_EDGE_HEDGE_PER_CHAR` (0.02)
+   per character is fetched a second time, and whichever copy finishes first
+   is used. The clock starts when the sentence has a connection, not while it
+   queues behind a long passage. 0 turns it off.
+
+**Measured after**, on the local stack against Gemini:
+- **Speaking**, two runs:
+  - A1–A2 replies are 24–34 words including the ~8-word "Try to use" line,
+    so about 17–25 words of speech.
+  - B1–B2 run 31–48, and C1–C2 37–56.
+  - Every *tissue* question stayed with the body.
+  - A reply takes about 1.4 s; with the rewrite (seen once, A2, 40→26 words),
+    2.7 s.
+- **Reading/Listening** with five words:
+
+  | | A1 | A2 | B1 | B2 |
+  |---|---|---|---|---|
+  | Reading (words) | 95 | 150 | 235 | 433 |
+  | Listening (words) | 84 | 120 | 167 | 233 |
+
+  Sentences averaged 7–8 words at A1, 10 at A2, 13–14 at B1 and 17–18 at B2.
+- **Voice:** with the backup request, twelve three-sentence replies took
+  2.4–3.8 s with no stall. Raw Edge was the same speed without our code, so
+  the rest of the time is Edge's own network. The app waits only for a line's
+  first piece.
+
+## ADR-118 — A profile build may call the API on a private network over http
+
+**Date:** 2026-09-30 · **Status:** Accepted (local only)
+
+**Context.** The product owner asked for an Android APK that a friend could
+test against the API on the Mac before release. A debug build is the wrong
+thing to hand a tester who is judging speed, so the APK was built in profile
+mode, which is compiled like a release build. Every sign-in then showed "حدث
+خطأ ما" and never reached the server. `assertTransportIsSafe` allowed http to
+a private address only when `kDebugMode` was true, so a profile build was
+refused inside the app before any request left the phone.
+
+**Decision.** The exception now applies to any build that is not a release
+build (`!kReleaseMode`), and still only for a private-network host. A release
+build sends tokens over TLS or not at all, as before (`docs/07-SECURITY.md`
+§2). `android/app/src/profile/` has the same network security config as
+`src/debug`, which allows cleartext only to the listed private addresses, so
+Android also lets these requests through. Verified on the Pixel 8 emulator
+(Android 16): the same APK signed in, showed all five skills, and opened a
+Spelling session from the Mac's API.
+
+## ADR-119 — Reading's word questions can be heard, at both speeds
+
+**Date:** 2026-09-30 · **Status:** Accepted (local only)
+
+**Context.** The product owner asked that Reading, when it asks about a word,
+offer a button to hear that word, normally and slowly. Listening already had
+this (`WordPronunciation`, ADR-081). ADR-085 had deliberately kept Reading
+without it: the word is spelled on screen there, and the control carries a
+`revealSpelling` switch for exactly this future use.
+
+**Decision.** Reading's word questions put the speaker pair
+(`WordSpeakerButtons`, normal and slow, `dense`) at the end of the question's
+own line, inline in its text, level with the words. They do not use
+Listening's card: on a phone the card pushed the answer options below the
+fold. A separate column beside the question also failed on a real
+screen: it took the width the question needed, so the question broke onto
+two lines. `dense` works through the button's style, because Material 3 pads
+every icon button to a 48-point tap target otherwise. Checked on the iPhone
+17 Pro simulator and the Pixel 8 emulator: the question and both speakers
+sit on one line, and all four options stay visible. The word is on screen already,
+so the control only has to sound it. The comprehension questions still carry
+none, since they have no word of their own. The word's voice is fetched ahead
+with the session, as Listening's is. Listening is unchanged and still never
+shows the word.
+
+## ADR-120 — A finished weekly review can be practised, and the practice records nothing
+
+**Date:** 2026-09-30 · **Status:** Accepted (local only, not deployed)
+
+**Context.** After this week's challenge, the hub card locked until words
+ripened again. When every word had been recalled, it disappeared. The product
+owner asked that a learner who comes back later in the week can go over the
+words again. It should not be the weekly review, which still comes once a
+week, and it should not lock.
+
+**Decision.**
+1. **`POST /api/weekly-review/practice/start`** builds a round over the words
+   of the learner's latest finished review, leaving out any deleted since.
+   It is played through the same `answer` and `complete` calls. The row is a
+   `WeeklyReview` with `IsPractice` (migration `WeeklyReviewPractice`).
+2. **A practice records nothing (R9).**
+   - It marks no word reviewed or passed, so the next challenge opens on the
+     same day and asks about the same words.
+   - It counts no exposure.
+   - It logs no `ReviewCompleted`, so the reminders do not think the week's
+     review was done.
+   - Its score is shown as "practice score" and never kept as the weekly
+     score.
+   - Starting one replaces an unfinished practice, never an unfinished
+     review.
+3. **The hub** sends `practiceAvailable` and `practiceWordCount`, but only
+   while no challenge is open. Then the card says the week is done, offers
+   its words again, and still names the next challenge's date. When a
+   challenge is open, the card is the challenge.
+
+Tests pin all three on both sides. On the server, the ripening fields, the
+exposures and the logged reviews are identical before and after a practice
+that includes a wrong answer, and the next challenge still opens on its day.
+The app has the same check on the mock, plus a walk from the hub card
+through a practice to its result.

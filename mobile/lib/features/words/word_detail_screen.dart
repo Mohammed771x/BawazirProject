@@ -72,21 +72,12 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
     await _saveMeaning(word, typed, s);
   }
 
-  Future<void> _saveMeaning(
-    Word word,
-    String meaning,
-    AppStrings s, {
-    bool acceptAnyway = false,
-  }) async {
+  Future<void> _saveMeaning(Word word, String meaning, AppStrings s) async {
     setState(() => _savingMeaning = true);
     try {
       await ref
           .read(wordOsApiProvider)
-          .changeWordMeaning(
-            wordId: wordId,
-            meaning: meaning,
-            acceptAnyway: acceptAnyway,
-          );
+          .changeWordMeaning(wordId: wordId, meaning: meaning);
 
       if (!mounted) return;
       setState(() => _savingMeaning = false);
@@ -102,9 +93,10 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
       if (!mounted) return;
       setState(() => _savingMeaning = false);
 
-      // The checker could not name another owner for it, so this is the
-      // objection the learner is allowed to overrule.
-      final keep = await showDialog<bool>(
+      // Final (ADR-112): the word keeps the meaning it had. What the learner
+      // can do is take one the checker would accept — offered as buttons, so
+      // the way forward is one tap rather than retyping.
+      final picked = await showDialog<String>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: Text(s.meaningLooksWrong),
@@ -117,29 +109,34 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
                 const SizedBox(height: AppSpacing.sm),
                 Text(s.meaningSuggestions, style: context.text.labelMedium),
                 const SizedBox(height: AppSpacing.xxs),
-                Text(
-                  e.suggestions.join('، '),
-                  textDirection: TextDirection.rtl,
+                Wrap(
+                  spacing: AppSpacing.xs,
+                  runSpacing: AppSpacing.xs,
+                  children: [
+                    for (final suggestion in e.suggestions)
+                      ActionChip(
+                        label: Text(
+                          suggestion,
+                          textDirection: TextDirection.rtl,
+                        ),
+                        onPressed: () =>
+                            Navigator.of(dialogContext).pop(suggestion),
+                      ),
+                  ],
                 ),
               ],
             ],
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
+              onPressed: () => Navigator.of(dialogContext).pop(),
               child: Text(s.cancel),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: Text(s.keepMyMeaning),
             ),
           ],
         ),
       );
 
-      if (keep == true && mounted) {
-        await _saveMeaning(word, meaning, s, acceptAnyway: true);
-      }
+      if (picked != null && mounted) await _saveMeaning(word, picked, s);
     } catch (rawError) {
       final e = ApiException.from(rawError);
       if (!mounted) return;

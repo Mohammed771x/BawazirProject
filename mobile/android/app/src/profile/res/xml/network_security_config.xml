@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug and profile builds only. This directory is `src/debug` (and its copy
+  `src/profile`, for a release-speed test APK against this Mac), so it is never merged into a
+  release APK — a release build still refuses cleartext, which is the property
+  CLAUDE.md states and which must not become a lie because of this file.
+
+  Android has blocked cleartext by default since API 28, so a debug build
+  pointed at `http://<this Mac>:5199/api` fails with no network error the
+  learner can act on. The iOS side has always had the equivalent: the device
+  defines in `ios/Flutter/Debug.xcconfig` carry an http URL.
+
+  Scoped to private address ranges rather than opened globally: a development
+  build should still refuse cleartext to the public internet.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>   <!-- the emulator's host -->
+        <domain includeSubdomains="true">192.168.0.0</domain>
+        <domain includeSubdomains="true">192.168.1.45</domain>
+        <domain includeSubdomains="true">192.168.1.38</domain>
+    </domain-config>
+</network-security-config>

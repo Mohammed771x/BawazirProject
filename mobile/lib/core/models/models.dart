@@ -10,5 +10,6 @@ export 'placement.dart';
 export 'reminder.dart';
 export 'review.dart';
 export 'session.dart';
+export 'speech.dart';
 export 'user.dart';
 export 'word.dart';

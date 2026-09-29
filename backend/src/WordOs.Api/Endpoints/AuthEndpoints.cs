@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using WordOs.Application.Abstractions;
+using WordOs.Application.Sessions;
 using WordOs.Domain.Common;
 using WordOs.Domain.Levels;
 using WordOs.Domain.Users;
@@ -61,7 +62,18 @@ public static class AuthEndpoints
         IReadOnlyList<SkillLevelResponse> SkillLevels,
         string? PhoneCountryCode,
         string? PhoneNumber,
-        DateTimeOffset CreatedAt);
+        DateTimeOffset CreatedAt,
+        SpellingHintsResponse SpellingHints);
+
+    /// <summary>Where Spelling's hints start (ADR-115).</summary>
+    /// <param name="Start">
+    /// What the learner chose: <c>AUTO</c>, or the rung's wire name.
+    /// </param>
+    /// <param name="AutomaticStart">
+    /// The rung <c>AUTO</c> means for this learner right now — decided here,
+    /// from their level, so the client can say it without working it out.
+    /// </param>
+    public sealed record SpellingHintsResponse(string Start, string AutomaticStart);
 
     /// <summary>
     /// One skill's levels. Both bands are null for Spelling — measured, but
@@ -400,10 +412,26 @@ public static class AuthEndpoints
             user.Role.ToWire(),
             user.OnboardingStage.ToWire(),
             user.Interests.Select(i => i.Interest).ToList(),
-            user.SkillLevels.Select(ToSkillLevelResponse).ToList(),
+            InPipelineOrder(user.SkillLevels).Select(ToSkillLevelResponse).ToList(),
             user.PhoneCountryCode,
             user.PhoneNumber,
-            user.CreatedAt);
+            user.CreatedAt,
+            new SpellingHintsResponse(
+                user.SpellingHintStart?.ToWire() ?? "AUTO",
+                SessionContentBuilder.HintStartFor(user.SpellingContentLevel()).ToWire()));
+
+    /// <summary>
+    /// Skill levels in the pipeline's order, always (ADR-114).
+    /// </summary>
+    /// <remarks>
+    /// They were sent in whatever order the database returned the rows, and
+    /// PostgreSQL returns an updated row after the others. So changing one
+    /// skill's daily target moved that skill to the bottom of Settings, under
+    /// the learner's finger. An order that never depends on what was edited
+    /// last is the fix; the client renders it as given (R1).
+    /// </remarks>
+    public static IEnumerable<SkillLevel> InPipelineOrder(IEnumerable<SkillLevel> levels) =>
+        levels.OrderBy(l => WordOsConfiguration.Default.PipelineRank(l.Skill));
 
     public static SkillLevelResponse ToSkillLevelResponse(SkillLevel level) =>
         new(level.Skill.ToWire(),

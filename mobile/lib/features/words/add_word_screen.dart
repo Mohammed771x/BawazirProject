@@ -553,9 +553,8 @@ class _WriteMeaningSheetState extends ConsumerState<_WriteMeaningSheet> {
 
   /// The checker's objection to the *word*, which is a different conversation.
   ///
-  /// It has no "keep mine": a meaning is the learner's to insist on and a
-  /// spelling is not, because nothing downstream can teach a string that is not
-  /// a word.
+  /// Neither refusal can be overruled (ADR-112): nothing downstream can teach
+  /// a string that is not a word, and every skill would teach a wrong meaning.
   WordRejectedException? _wordRejection;
 
   /// Anything else that went wrong, already localized.
@@ -567,7 +566,7 @@ class _WriteMeaningSheetState extends ConsumerState<_WriteMeaningSheet> {
     super.dispose();
   }
 
-  Future<void> _submit({bool acceptAnyway = false}) async {
+  Future<void> _submit() async {
     final meaning = _controller.text.trim();
     if (meaning.isEmpty || _saving) return;
 
@@ -576,14 +575,13 @@ class _WriteMeaningSheetState extends ConsumerState<_WriteMeaningSheet> {
       _saving = true;
       _error = null;
       _wordRejection = null;
-      if (!acceptAnyway) _rejection = null;
+      _rejection = null;
     });
 
     try {
       final word = await ref.read(wordOsApiProvider).addWordWithMeaning(
             text: _word,
             meaning: meaning,
-            acceptAnyway: acceptAnyway,
           );
       if (mounted) Navigator.of(context).pop(word);
     } on WordRejectedException catch (rejection) {
@@ -613,9 +611,8 @@ class _WriteMeaningSheetState extends ConsumerState<_WriteMeaningSheet> {
 
   /// Takes one of the checker's suggestions and saves it.
   ///
-  /// Sent as a fresh meaning rather than as an override: it is the checker's
-  /// own wording, so it will be accepted, and it is recorded as approved —
-  /// which is true, and is what makes `Overridden` mean something.
+  /// Sent as a fresh meaning: it is the checker's own wording, so it will be
+  /// accepted, and it is recorded as approved.
   void _useSuggestion(String suggestion) {
     _controller.text = suggestion;
     setState(() => _rejection = null);
@@ -680,26 +677,22 @@ class _WriteMeaningSheetState extends ConsumerState<_WriteMeaningSheet> {
                 onUse: _saving ? null : _useSpelling,
               ),
               const SizedBox(height: AppSpacing.sm),
-              // No "save it anyway" beneath this one, deliberately. The
-              // learner may overrule a meaning (ADR-074); they may not
-              // overrule "that is not a word", because five sessions would
-              // then be spent teaching a typo.
+              // No "save it anyway" beneath either verdict (ADR-112): five
+              // sessions would then be spent teaching a typo, or a wrong
+              // meaning.
             ] else if (_rejection case final rejection?) ...[
               const SizedBox(height: AppSpacing.xs),
               _CheckerVerdict(
                 rejection: rejection,
                 onUse: _saving ? null : _useSuggestion,
               ),
-              const SizedBox(height: AppSpacing.sm),
-              // Below the suggestions, and quieter than them: the checker is
-              // usually right, and the learner is allowed to know better
-              // (ADR-074).
-              Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: TextButton(
-                  onPressed:
-                      _saving ? null : () => _submit(acceptAnyway: true),
-                  child: Text(s.keepMyMeaning),
+              const SizedBox(height: AppSpacing.xs),
+              // What to do next, since there is no way past it: pick one
+              // above, or correct the wording in the field.
+              Text(
+                s.meaningFixToSave,
+                style: context.text.bodySmall?.copyWith(
+                  color: context.colors.onSurface.withValues(alpha: 0.7),
                 ),
               ),
             ] else ...[

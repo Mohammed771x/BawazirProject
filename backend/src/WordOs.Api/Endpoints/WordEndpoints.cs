@@ -39,12 +39,6 @@ public static class WordEndpoints
     /// word: the checker is asked, and a string it does not recognise as
     /// English is refused with the spelling it thinks was meant.
     /// </param>
-    /// <param name="AcceptAnyway">
-    /// Save the written meaning even though the checker rejected it (ADR-074).
-    /// Set only after the learner has been shown what the checker said and has
-    /// chosen to keep their own wording — the check still ran, and the
-    /// disagreement is recorded.
-    /// </param>
     /// <param name="FromSessionId">
     /// Add the word with the meaning it carries <i>in this session's passage</i>
     /// (ADR-073). The meaning is read from the glossary this server stored when
@@ -57,8 +51,11 @@ public static class WordEndpoints
         [property: MaxLength(128)] string? Text,
         [property: MaxLength(256)] string? Meaning,
         [property: MaxLength(256)] string? CustomMeaning = null,
-        Guid? FromSessionId = null,
-        bool AcceptAnyway = false);
+        Guid? FromSessionId = null);
+    // No "accept anyway" (ADR-112). A meaning the checker rejects is never
+    // stored: every skill marks answers against it, so a wrong one is five
+    // sessions teaching the wrong thing. An older app still sending
+    // `acceptAnyway` is refused like any other — the field is simply ignored.
 
     /// <summary>
     /// One row of a stored passage glossary, as <c>SessionEndpoints</c> wrote it.
@@ -128,16 +125,9 @@ public static class WordEndpoints
     /// removed and that sense is added in its place, starting from the
     /// beginning of the pipeline (ADR-101).
     /// </param>
-    /// <param name="AcceptAnyway">
-    /// Keep the wording even though the checker did not recognise it as a
-    /// meaning of this word (ADR-074). It has no effect on the refusal that
-    /// names another English word — there the dictionary knows whose meaning it
-    /// is, and insisting would quietly turn one word into another.
-    /// </param>
     public sealed record ChangeMeaningRequest(
         [property: Required, MaxLength(256)] string Meaning,
-        [property: MaxLength(64)] string? ReplaceWithSenseId = null,
-        bool AcceptAnyway = false);
+        [property: MaxLength(64)] string? ReplaceWithSenseId = null);
 
     public sealed record WordEventResponse(
         string Type,
@@ -567,11 +557,11 @@ public static class WordEndpoints
                     statusCode: StatusCodes.Status409Conflict);
             }
 
-            if (!verdict.Matches && !request.AcceptAnyway)
+            if (!verdict.Matches)
             {
-                // Not an error — a second question. The learner is shown what
-                // the checker said and what it would accept, and may still
-                // insist, which comes back with `acceptAnyway`.
+                // Final (ADR-112). The learner is shown what the checker said
+                // and the meanings it would accept, and saves one of those —
+                // or a wording of their own the checker agrees with.
                 return Results.Json(
                     new
                     {
@@ -592,8 +582,7 @@ public static class WordEndpoints
             // misspelling would teach it.
             if (verdict.Matches
                 && verdict.Corrected is { Length: > 0 } corrected
-                && !string.Equals(corrected, custom, StringComparison.Ordinal)
-                && !request.AcceptAnyway)
+                && !string.Equals(corrected, custom, StringComparison.Ordinal))
             {
                 return Results.Json(
                     new
@@ -633,12 +622,8 @@ public static class WordEndpoints
             level = facts?.CefrLevel ?? CefrLevelExtensions.TryFromWire(
                 verdict.Level?.Trim().ToUpperInvariant());
             source = MeaningSource.Learner;
-            // Recorded, not just acted on: "the model said no and the learner
-            // said yes anyway" is the fact that explains a word failing
-            // Spelling a fortnight later.
-            check = verdict.Matches
-                ? MeaningCheckResult.Approved
-                : MeaningCheckResult.Overridden;
+            // Only an approved meaning reaches this line (ADR-112).
+            check = MeaningCheckResult.Approved;
             senseId = CustomSenses.For(storedText, storedMeaning);
         }
         else
@@ -1130,7 +1115,7 @@ public static class WordEndpoints
                 "Could not check that meaning just now. Try again in a moment.");
         }
 
-        if (!verdict.Matches && !request.AcceptAnyway)
+        if (!verdict.Matches)
         {
             return Results.Json(
                 new
@@ -1159,9 +1144,7 @@ public static class WordEndpoints
         word.ChangeMeaning(
             meaning,
             MeaningSource.Learner,
-            verdict.Matches
-                ? MeaningCheckResult.Approved
-                : MeaningCheckResult.Overridden,
+            MeaningCheckResult.Approved,
             now,
             definitionEn: definition,
             partOfSpeech: sense?.PartOfSpeech);

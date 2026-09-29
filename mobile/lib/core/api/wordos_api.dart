@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../models/models.dart';
 
 /// The complete contract between the app and the WordOS backend.
@@ -111,9 +113,9 @@ abstract class WordOsApi {
   /// marks answers against this string, so an English one makes its own
   /// questions unanswerable.
   /// Throws [MeaningRejectedException] when the checker disagrees (ADR-074),
-  /// carrying what it would accept. Pass [acceptAnyway] to save the learner's
-  /// wording regardless — only after they have seen what it said and chosen to
-  /// keep theirs. The check still runs; the disagreement is recorded.
+  /// carrying what it would accept. That is final (ADR-112): nothing is saved
+  /// until the learner writes a meaning the checker accepts or picks one of
+  /// its suggestions — a wrong meaning would be taught by every skill.
   ///
   /// Throws `MEANING_CHECK_UNAVAILABLE` when the checker cannot be reached.
   /// Nothing is saved: there is no fallback for "does this Arabic mean what
@@ -122,7 +124,6 @@ abstract class WordOsApi {
   Future<Word> addWordWithMeaning({
     required String text,
     required String meaning,
-    bool acceptAnyway = false,
   });
 
   /// Adds [word] with the meaning it carries **in this session's passage**
@@ -155,13 +156,11 @@ abstract class WordOsApi {
   /// silently becomes another.
   ///
   /// Throws [MeaningRejectedException] when the dictionary has never seen the
-  /// wording and the checker does not believe it fits this word. That refusal
-  /// cannot name another owner, so it is the softer one and [acceptAnyway]
-  /// overrules it — the same bargain ADR-074 struck on the way in.
+  /// wording and the checker does not believe it fits this word — final, as
+  /// on the way in (ADR-112), with the meanings it would accept.
   Future<Word> changeWordMeaning({
     required String wordId,
     required String meaning,
-    bool acceptAnyway = false,
   });
 
   /// Swaps this word for the sense the learner actually meant (ADR-101).
@@ -259,12 +258,37 @@ abstract class WordOsApi {
     required String transcript,
   });
 
+  /// Turns one recorded Speaking turn into text (ADR-107).
+  ///
+  /// The server listens — Gemini, then Groq when Gemini will not — because
+  /// the phone's own recogniser misheard learners too often for a skill that
+  /// is judged on the transcript. What comes back is a **draft**: the learner
+  /// reads it and corrects it before [submitSpeakingTurn] sends anything.
+  ///
+  /// Empty when nobody spoke. Throws [ApiException] `SPEECH_UNAVAILABLE` when
+  /// no engine could listen, so the screen can offer typing instead.
+  Future<String> transcribeSpeech(
+    Uint8List audio, {
+    String mimeType = 'audio/mp4',
+  });
+
+  /// Speaks [text] in Gemini's voice, with a time on every word (ADR-108).
+  ///
+  /// For the tutor's replies and Listening only; single words keep the
+  /// phone's voice. Throws [ApiException] `VOICE_UNAVAILABLE` when no voice
+  /// could speak it — the caller then uses the phone's voice for that line.
+  Future<SynthesizedSpeech> synthesizeSpeech(String text);
+
   Future<SessionResult> completeSession(String sessionId);
 
   Future<void> abandonSession(String sessionId);
 
   // ── Weekly review ─────────────────────────────────────────────────────────
   Future<WeeklyReviewSession> startWeeklyReview();
+
+  /// The last finished review's words again, as practice (ADR-120). Answered
+  /// and completed through the same two calls as a review.
+  Future<WeeklyReviewSession> startWeeklyReviewPractice();
 
   Future<ReviewAnswerResult> answerWeeklyReview({
     required String reviewId,
@@ -284,6 +308,11 @@ abstract class WordOsApi {
     required SkillType skill,
     required int target,
   });
+
+  /// Chooses the rung every Spelling word starts on, or null for automatic —
+  /// where the learner's level puts them (ADR-115). Takes effect from the next
+  /// Spelling session. The letter count is refused: it is the last hint.
+  Future<SpellingHints> updateSpellingHintStart(SpellingClueKind? start);
 
   Future<PublicConfig> config();
 

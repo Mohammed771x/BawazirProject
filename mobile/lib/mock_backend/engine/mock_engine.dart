@@ -499,6 +499,11 @@ class MockEngine {
             .map((s) => user.levels[s]!)
             .toList(growable: false),
         createdAt: user.createdAt,
+        spellingHints: SpellingHints(
+          start: user.spellingHintStart,
+          automaticStart: MockContentGenerator.hintStartFor(
+              _contentLevelFor(user, SkillType.spelling)),
+        ),
       );
 
   UserProfile profile(MockUser user) => _profile(user);
@@ -634,7 +639,6 @@ class MockEngine {
     MockUser user, {
     required String text,
     required String meaning,
-    bool acceptAnyway = false,
   }) {
     final word = text.trim();
     final written = meaning.trim();
@@ -676,14 +680,14 @@ class MockEngine {
     // accepts any meaning the dictionary already lists for this word, and
     // rejects the rest with those meanings as suggestions.
     //
-    // That is enough to exercise every path the real one has: accepted,
-    // rejected, and overridden. It is deliberately *not* a guess at Arabic
+    // That is enough to exercise both paths the real one has: accepted and
+    // rejected — and rejected is final (ADR-112). It is deliberately *not* a guess at Arabic
     // correctness, because a mock that pretended to judge language would teach
     // whoever develops against it that the checker is cleverer than it is.
     //
     // A word the dictionary does not have is skipped: there is no list of
     // meanings to compare against, so there is nothing to disagree with.
-    if (!acceptAnyway && facts.senses.isNotEmpty) {
+    if (facts.senses.isNotEmpty) {
       final known = facts.senses.map((s) => s.meaning.trim()).toList();
       if (!known.contains(written)) {
         throw MeaningRejectedException(
@@ -707,9 +711,8 @@ class MockEngine {
       partOfSpeech: base?.partOfSpeech ?? '',
       form: null,
       level: base?.suggestedLevel ?? CefrLevel.b1,
-      // Recorded the same way the server records it: whether the learner took
-      // the checker's word for it or their own.
-      checkOverridden: acceptAnyway,
+      // Only an accepted meaning gets this far (ADR-112).
+      checkOverridden: false,
     );
   }
 
@@ -967,7 +970,6 @@ class MockEngine {
     MockUser user,
     String wordId, {
     required String meaning,
-    bool acceptAnyway = false,
   }) {
     final word = user.words.where((w) => w.id == wordId).firstOrNull;
     if (word == null) {
@@ -1012,10 +1014,10 @@ class MockEngine {
       // The stand-in for the checker (ADR-074), the same one `addWordWithMeaning`
       // uses: it cannot judge Arabic, so it accepts what the dictionary lists
       // for this word and rejects the rest. Since the wording is not listed for
-      // *any* word here, a word the dictionary knows means this is a refusal —
-      // and the learner may overrule it, because nothing can name another owner.
+      // *any* word here, a word the dictionary knows means this is a refusal,
+      // and a final one (ADR-112).
       final known = MockDictionary.define(word.text).senses;
-      if (known.isNotEmpty && !acceptAnyway) {
+      if (known.isNotEmpty) {
         throw MeaningRejectedException(
           message: 'المعنى "$wanted" ليس من معاني كلمة "${word.text}".',
           suggestions:
@@ -1024,7 +1026,7 @@ class MockEngine {
         );
       }
 
-      word.checkOverridden = known.isNotEmpty;
+      word.checkOverridden = false;
     } else {
       word.definitionEn = sameWord.definitionEn;
       word.partOfSpeech = sameWord.partOfSpeech;
@@ -1291,6 +1293,8 @@ class MockEngine {
         nextAvailableAt: reviewReady ? null : _reviewOpensAt(user),
         wordsWaitingAfterThis:
             (ripe.length - periodWords.length).clamp(0, ripe.length),
+        practiceAvailable: !reviewReady && _practiceWords(user).isNotEmpty,
+        practiceWordCount: reviewReady ? 0 : _practiceWords(user).length,
       ),
       vocabulary: VocabularyCounts(
         learning:
@@ -1374,6 +1378,7 @@ class MockEngine {
           words: targetWords,
           definitions: definitions,
           level: level,
+          start: user.spellingHintStart,
         );
       case SkillType.speaking:
         generated = GeneratedSession(
@@ -1814,11 +1819,20 @@ class MockEngine {
   /// replaces the scripted reply with the AI service; the *shape* — a message
   /// plus, on the final turn, one structured evaluation per word — is the
   /// contract that stays.
+  /// Refuses the next Speaking turn as an unreachable AI would — a test hook
+  /// for what the screen does with a line that could not be sent.
+  bool failNextSpeakingTurn = false;
+
   SpeakingTurn submitSpeakingTurn(
     MockUser user,
     String sessionId,
     String transcript,
   ) {
+    if (failNextSpeakingTurn) {
+      failNextSpeakingTurn = false;
+      throw const ApiException(
+          'AI_UNAVAILABLE', 'The tutor is unavailable.', statusCode: 502);
+    }
     final session = _requireSession(user, sessionId);
 
     if (transcript.trim().isEmpty) {
@@ -2209,6 +2223,55 @@ class MockEngine {
     return pending.map(_ripensAt).reduce((a, b) => a.isBefore(b) ? a : b);
   }
 
+  /// The last finished review's words the learner still has (ADR-120).
+  List<MockWord> _practiceWords(MockUser user) => [
+        for (final w in user.words)
+          if (user.lastReviewWordIds.contains(w.id)) w,
+      ];
+
+  /// Mirrors `POST /weekly-review/practice/start`: the same words, recorded
+  /// as nothing (ADR-120).
+  WeeklyReviewSession startWeeklyReviewPractice(MockUser user) {
+    final words = _practiceWords(user);
+    if (words.isEmpty) {
+      throw const ApiException(
+        'PRACTICE_NOTHING_TO_PRACTISE',
+        'Finish a weekly review first; its words can then be practised.',
+        statusCode: 409,
+      );
+    }
+    final allMeanings = words.map((w) => w.meaning).toList();
+    final review = _MockReview(
+      id: _newId('wp'),
+      userId: user.id,
+      periodStart:
+          now.subtract(Duration(days: configuration.weeklyReviewPeriodDays)),
+      totalWords: words.length,
+      isPractice: true,
+    );
+    for (final w in words) {
+      final item = _content.buildReviewItem(
+        wordId: w.id,
+        text: w.text,
+        meaning: w.meaning,
+        otherMeanings: allMeanings.where((m) => m != w.meaning).toList(),
+      );
+      review.queue.add(item);
+      review.correct[item.id] = w.meaning.trim().isEmpty ? '—' : w.meaning.trim();
+      review.wordIds.add(w.id);
+    }
+    review.queue.shuffle(_random);
+    _reviews[review.id] = review;
+
+    return WeeklyReviewSession(
+      id: review.id,
+      periodStart: review.periodStart,
+      totalWords: review.totalWords,
+      queue: List.of(review.queue),
+      isPractice: true,
+    );
+  }
+
   WeeklyReviewSession startWeeklyReview(MockUser user) {
     final words = _weeklyReviewWords(user);
     if (words.isEmpty) {
@@ -2244,6 +2307,7 @@ class MockEngine {
       );
       review.queue.add(item);
       review.correct[item.id] = w.meaning.trim().isEmpty ? '—' : w.meaning.trim();
+      review.wordIds.add(w.id);
     }
     review.queue.shuffle(_random);
     _reviews[review.id] = review;
@@ -2280,7 +2344,8 @@ class MockEngine {
     // not (ADR-099). A word missed here ripens again a week from now and comes
     // back; a word named right on the first attempt is finished with.
     final asked = review.queue.where((i) => i.id == itemId).firstOrNull;
-    if (asked != null) {
+    // A practice is recorded as nothing (ADR-120).
+    if (asked != null && !review.isPractice) {
       for (final w in user.words) {
         if (w.id != asked.wordId) continue;
         w.lastReviewedAt = now;
@@ -2316,10 +2381,14 @@ class MockEngine {
       throw const ApiException('REVIEW_NOT_FOUND', 'Review not found.',
           statusCode: 404);
     }
-    user.lastWeeklyReviewAt = now;
+    if (!review.isPractice) {
+      user.lastWeeklyReviewAt = now;
+      user.lastReviewWordIds = review.wordIds.toList();
+    }
     _reviews.remove(reviewId);
     // Note: no word state is touched here — measurement only (rule R9).
     return WeeklyReviewResult(
+      isPractice: review.isPractice,
       reviewId: review.id,
       totalWords: review.totalWords,
       firstPassCorrect: review.firstPassCorrect,
@@ -2347,6 +2416,19 @@ class MockEngine {
     user.levels[skill] = user.levels[skill]!.copyWith(userSelectedLevel: level);
     _recordManualLevelChange(user, skill, previous, level);
     return user.levels[skill]!;
+  }
+
+  /// Mirrors `PATCH /api/settings/spelling-hints` (ADR-115): null is
+  /// automatic, and the letter count is the last hint, never a start.
+  SpellingHints updateSpellingHintStart(
+      MockUser user, SpellingClueKind? start) {
+    if (start == SpellingClueKind.letterCount) {
+      throw const ApiException('INVALID_HINT_START',
+          'The letter count is the last hint, not a place to start.',
+          statusCode: 400);
+    }
+    user.spellingHintStart = start;
+    return _profile(user).spellingHints;
   }
 
   SkillLevel updateDailyTarget(MockUser user, SkillType skill, int target) {
@@ -2822,15 +2904,21 @@ class _MockReview {
     required this.userId,
     required this.periodStart,
     required this.totalWords,
+    this.isPractice = false,
   });
 
   final String id;
   final String userId;
   final DateTime periodStart;
   final int totalWords;
+  final bool isPractice;
 
   final List<ReviewItem> queue = [];
   final Map<String, String> correct = {};
+
+  /// Every word asked about, kept after the queue empties: practice goes
+  /// over them later (ADR-120).
+  final Set<String> wordIds = {};
   final Set<String> attempted = {};
   int firstPassCorrect = 0;
   int totalAttempts = 0;
@@ -2893,6 +2981,9 @@ class MockUser {
   OnboardingStage stage = OnboardingStage.interests;
   final List<String> interests = [];
   final Map<SkillType, SkillLevel> levels = {};
+
+  /// Where Spelling's hints start, or null for automatic (ADR-115).
+  SpellingClueKind? spellingHintStart;
   /// Every word this learner ever added, deleted ones included.
   ///
   /// The Owner's views read this; nothing the learner touches does. It mirrors
@@ -2910,6 +3001,10 @@ class MockUser {
   List<MockWord> get words =>
       [for (final w in allWords) if (w.state != WordState.deleted) w];
   DateTime? lastWeeklyReviewAt;
+
+  /// The words of the last finished review, which practice goes over
+  /// (ADR-120). Empty until one is finished.
+  List<String> lastReviewWordIds = [];
 
   /// What placement measured for Spelling instead of a CEFR band (ADR-008).
   SpellingDiagnostic? spellingDiagnostic;

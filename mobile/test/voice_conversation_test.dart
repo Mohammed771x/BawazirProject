@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:wordos/core/audio/cloud_speech_provider.dart';
 import 'package:wordos/core/audio/speech_provider.dart';
 import 'package:wordos/core/widgets/app_widgets.dart';
 import 'package:wordos/core/audio/speech_recognition_service.dart';
@@ -78,6 +81,85 @@ void main() {
       // actually sent when the learner approved them.
       expect(tts.spoken.length, greaterThanOrEqualTo(2),
           reason: 'the tutor should have replied to the spoken turn');
+    });
+
+    testWidgets("the tutor's text appears with its voice, not before (ADR-116)",
+        (tester) async {
+      // The product owner's report: the text came, then the voice, seconds
+      // apart. Here the voice is held back until the test lets it through.
+      final tts = _GatedTts();
+      // Without the target word, so the conversation carries on and the
+      // reply stays on screen rather than behind a finished session.
+      final speech = _FakeSpeech(
+        ['I like potatoes because they teach me new things.'],
+        tts: tts,
+      );
+      await _pumpSpeaking(tester, tts, speech);
+
+      // The greeting's voice is on its way: nothing said, nothing shown —
+      // only the dots where the line will appear.
+      expect(tts.spoken, isEmpty);
+      expect(find.byKey(const ValueKey('tutor-typing')), findsOneWidget);
+      final opening = tts.waitingFor.single;
+      expect(find.text(opening), findsNothing);
+
+      tts.release();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.text(opening), findsOneWidget);
+      expect(tts.spoken, [opening], reason: 'shown and spoken together');
+      expect(find.byKey(const ValueKey('tutor-typing')), findsNothing);
+
+      // A reply, the same way.
+      await tester.tap(find.bySemanticsLabel('voice'));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.tap(find.bySemanticsLabel('voice'));
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.tap(find.widgetWithText(FilledButton, 'Send'));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // Their line is in the conversation at once; the tutor's is not yet.
+      expect(find.textContaining('teach me new things', skipOffstage: false),
+          findsOneWidget);
+      expect(tts.spoken, hasLength(1));
+      expect(find.byKey(const ValueKey('tutor-typing'), skipOffstage: false),
+          findsOneWidget);
+      final reply = tts.waitingFor.last;
+      expect(find.text(reply, skipOffstage: false), findsNothing);
+
+      tts.release();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(find.text(reply, skipOffstage: false), findsOneWidget);
+      expect(tts.spoken.last, reply);
+    });
+
+    testWidgets('a turn that could not be sent comes back to be sent again',
+        (tester) async {
+      final tts = _FakeTts();
+      final speech = _FakeSpeech([], available: false, tts: tts);
+      final (engine, user) = await _pumpSpeaking(tester, tts, speech);
+
+      // Typing, and the server refuses the turn.
+      engine.failNextSpeakingTurn = true;
+      final field = find.byType(TextField);
+      await tester.enterText(field, 'I did some research on sleep.');
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // Not lost, and not left looking sent.
+      final box = tester.widget<TextField>(find.byType(TextField));
+      expect(box.controller!.text, 'I did some research on sleep.');
+      expect(find.text('I did some research on sleep.'), findsOneWidget,
+          reason: 'only in the box, not also as a sent message');
     });
 
     testWidgets('the recognised words can be corrected before they are sent',
@@ -275,6 +357,33 @@ void main() {
       // tutor, so the turn is offered again.
       expect(find.text('Tap to speak'), findsWidgets);
     });
+    testWidgets('a server that could not listen says so, and nothing is sent',
+        (tester) async {
+      // ADR-107: the transcript is written by the server now. When it cannot
+      // be reached the learner spoke perfectly well — they are told to try
+      // again or type, not left looking at an idle microphone.
+      final tts = _FakeTts();
+      final speech = _FakeSpeech([null], tts: tts)
+        ..failure = 'SPEECH_UNAVAILABLE';
+
+      await _pumpSpeaking(tester, tts, speech);
+
+      await tester.tap(find.bySemanticsLabel('voice'));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.tap(find.bySemanticsLabel('voice'));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(find.text("We couldn't listen just now. Try again, or type your answer."),
+          findsOneWidget);
+      expect(tts.spoken.length, 1,
+          reason: 'nothing reached the tutor, so it has not answered');
+      expect(find.text('Tap to speak'), findsWidgets);
+    });
+
     testWidgets('the words are recalled first, and nothing listens until then',
         (tester) async {
       final tts = _FakeTts();
@@ -481,6 +590,36 @@ class _FakeTts implements SpeechProvider {
   Future<void> dispose() async {}
 }
 
+/// A voice that is fetched before it plays, as the server's is — and that
+/// holds each line until the test calls [release].
+class _GatedTts extends _FakeTts implements RoutedSpeechProvider {
+  final List<String> waitingFor = [];
+  Completer<void> _gate = Completer<void>();
+
+  void release() {
+    final open = _gate;
+    _gate = Completer<void>();
+    open.complete();
+  }
+
+  @override
+  Future<void> ready(String id, String text) {
+    waitingFor.add(text);
+    return _gate.future;
+  }
+
+  @override
+  void prepare(String id, String text) {}
+
+  @override
+  Future<bool> speakFor(String id, String text,
+          {SpeechRate rate = SpeechRate.normal}) =>
+      speak(text, rate: rate);
+
+  @override
+  Duration get startupAllowance => Duration.zero;
+}
+
 /// Returns scripted phrases, one per listen, and records whether it was ever
 /// asked to listen while the voice was still playing.
 class _FakeSpeech implements SpeechRecognitionService {
@@ -498,6 +637,12 @@ class _FakeSpeech implements SpeechRecognitionService {
 
   @override
   bool get isListening => false;
+
+  @override
+  String? get lastFailure => failure;
+
+  /// Set to make the next turn fail the way an unreachable server does.
+  String? failure;
 
   @override
   String get heard => _pending ?? '';

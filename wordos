@@ -103,8 +103,13 @@ start() {
     # More than one worker, because the endpoints are synchronous and a model
     # call holds its thread for seconds: one worker serves one crowd badly
     # (ADR-051). Each worker keeps its own in-flight ceiling.
+    #
+    # `python -m uvicorn`, never `.venv/bin/uvicorn`: that script's first line
+    # names the interpreter of whichever folder the venv was created in, and
+    # this one was copied from another checkout — so the service ran on that
+    # checkout's packages, and a dependency installed here was silently absent.
     ( cd "$ROOT/ai-service" && \
-      nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$AI_PORT" \
+      nohup .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port "$AI_PORT" \
         --workers "${WORDOS_AI_WORKERS:-2}" \
         < /dev/null > "$LOGS/ai.log" 2>&1 & )
   fi

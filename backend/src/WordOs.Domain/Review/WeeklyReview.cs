@@ -45,6 +45,19 @@ public class WeeklyReview
 
     public Guid? CurrentItemId { get; private set; }
 
+    /// <summary>
+    /// A practice round over a finished review's words, not the review itself
+    /// (ADR-120).
+    /// </summary>
+    /// <remarks>
+    /// The learner asked to go over the week's words again after the challenge
+    /// had closed. A practice is played exactly like a review, and is recorded
+    /// as nothing: it marks no word reviewed, counts no exposure, logs no
+    /// completed review, and its score is shown and never reported. The weekly
+    /// review stays one measurement a week (rule R9).
+    /// </remarks>
+    public bool IsPractice { get; private set; }
+
     public IReadOnlyList<WeeklyReviewItem> Items => _items;
 
     public static WeeklyReview Start(
@@ -57,6 +70,20 @@ public class WeeklyReview
             PeriodStart = periodStart,
             PeriodEnd = now,
             StartedAt = now,
+        };
+
+    /// <summary>A practice round over <paramref name="of"/>'s words (ADR-120).</summary>
+    public static WeeklyReview StartPractice(
+        Guid userId,
+        WeeklyReview of,
+        DateTimeOffset now) =>
+        new()
+        {
+            UserId = userId,
+            PeriodStart = of.PeriodStart,
+            PeriodEnd = of.PeriodEnd,
+            StartedAt = now,
+            IsPractice = true,
         };
 
     public WeeklyReviewItem AddItem(WeeklyReviewItem item)

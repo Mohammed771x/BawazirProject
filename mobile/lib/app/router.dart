@@ -39,6 +39,7 @@ class Routes {
   static const settings = '/settings';
   static const addWord = '/add-word';
   static const weeklyReview = '/weekly-review';
+  static const weeklyReviewPractice = '/weekly-review?practice=1';
   static const developer = '/developer';
 
   static String developerUser(String id) => '/developer/users/$id';
@@ -178,7 +179,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: Routes.weeklyReview,
         parentNavigatorKey: _rootKey,
-        builder: (_, _) => const WeeklyReviewScreen(),
+        // `?practice=1` is the finished review's words again (ADR-120).
+        builder: (_, state) => WeeklyReviewScreen(
+          practice: state.uri.queryParameters['practice'] == '1',
+        ),
       ),
       GoRoute(
         path: Routes.developer,

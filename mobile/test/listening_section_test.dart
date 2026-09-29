@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wordos/app/wordos_app.dart';
+import 'package:wordos/core/audio/cloud_speech_provider.dart';
 import 'package:wordos/core/audio/speech_provider.dart';
 import 'package:wordos/core/audio/speech_service.dart';
 import 'package:wordos/core/widgets/app_widgets.dart';
+import 'package:wordos/core/widgets/speaker_button.dart';
 import 'package:wordos/features/session/session_widgets.dart';
 
 import 'support/test_harness.dart';
@@ -21,8 +23,9 @@ void main() {
   Future<void> openListening(
     WidgetTester tester, {
     Locale locale = const Locale('en'),
+    _FakeTts? voice,
   }) async {
-    tts = _FakeTts();
+    tts = voice ?? _FakeTts();
     tester.view.physicalSize = const Size(1200, 6000);
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
@@ -61,6 +64,43 @@ void main() {
       await tester.pumpAndSettle();
     }
   }
+
+  testWidgets('the voice of the whole session is fetched ahead, in order',
+      (tester) async {
+    // ADR-110: play answers at once because the audio was already asked for
+    // — the passage first, then each question's sentence and word, in the
+    // order the learner meets them — never on the press itself.
+    final voice = _FakeRoutedTts();
+    await openListening(tester, voice: voice);
+
+    final ids = voice.prepared.map((p) => p.id).toList();
+    expect(ids, isNotEmpty);
+    expect(ids.first, startsWith('listening:'),
+        reason: 'the passage on screen comes before the questions');
+
+    final sentences = voice.prepared
+        .where((p) => p.id.startsWith('sentence:'))
+        .map((p) => p.text)
+        .toList();
+    final words = voice.prepared
+        .where((p) => p.id.startsWith('pronounce:'))
+        .map((p) => p.text)
+        .toList();
+    expect(sentences, isNotEmpty);
+    expect(words, isNotEmpty);
+    expect(voice.spoken, isEmpty, reason: 'fetched ahead, never played ahead');
+
+    // The first word question's sentence is the first sentence asked for, so
+    // the question the learner reaches first is the one ready first.
+    await tester.tap(find.widgetWithText(FilledButton, 'I finished listening'));
+    await tester.pumpAndSettle();
+    await walkTo(tester, find.byType(SentencePlayer));
+    final shown = tester.widget<SentencePlayer>(find.byType(SentencePlayer));
+    expect(shown.text, sentences.first);
+    final pronounced =
+        tester.widget<WordPronunciation>(find.byType(WordPronunciation));
+    expect(pronounced.word, words.first);
+  });
 
   testWidgets('the header matches Reading exactly', (tester) async {
     await openListening(tester);
@@ -487,9 +527,11 @@ void main() {
     expect(find.byType(ContextPassage), findsOneWidget,
         reason: 'Reading shows the word inside its neighbouring sentences');
     expect(find.textContaining('mean here?'), findsOneWidget);
-    expect(find.byType(WordPronunciation), findsNothing,
-        reason: 'the hear-it control is Listening\'s, where the word is never '
-            'seen');
+    // Reading offers the word to be heard too since ADR-119 — as the compact
+    // speaker pair beside its question, not Listening's card, which is
+    // Listening's alone.
+    expect(find.byType(WordPronunciation), findsNothing);
+    expect(find.byType(WordSpeakerButtons), findsOneWidget);
   });
 
 
@@ -629,4 +671,23 @@ class _FakeTts implements SpeechProvider {
 
   @override
   Future<void> dispose() async {}
+}
+
+/// A voice that is told what is coming, as the server's voice is.
+class _FakeRoutedTts extends _FakeTts implements RoutedSpeechProvider {
+  final List<({String id, String text})> prepared = [];
+
+  @override
+  void prepare(String id, String text) => prepared.add((id: id, text: text));
+
+  @override
+  Future<void> ready(String id, String text) async => prepare(id, text);
+
+  @override
+  Future<bool> speakFor(String id, String text,
+          {SpeechRate rate = SpeechRate.normal}) =>
+      speak(text, rate: rate);
+
+  @override
+  Duration get startupAllowance => Duration.zero;
 }

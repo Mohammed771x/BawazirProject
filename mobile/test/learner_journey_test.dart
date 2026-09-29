@@ -51,8 +51,15 @@ void main() {
       if (find.text('Session complete').evaluate().isNotEmpty) break;
 
       // Answer with the first option — correctness does not matter here; what
-      // matters is that every item type renders and advances.
-      final options = find.byType(InkWell);
+      // matters is that every item type renders and advances. The options
+      // by type, not the first thing that takes a tap: a word question now
+      // has the word's speakers beside it (ADR-119).
+      // Scrolled to first: on this phone-sized surface they sit below it.
+      final options = find.byType(OptionTile);
+      if (options.evaluate().isNotEmpty) {
+        await tester.ensureVisible(options.at(0));
+        await tester.pumpAndSettle();
+      }
       await tester.tap(options.at(0), warnIfMissed: false);
       await tester.pumpAndSettle();
 

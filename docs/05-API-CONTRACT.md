@@ -211,9 +211,13 @@ handed one item at a time instead of a fixed list.
   // `nextAvailableAt` is the day the learner's first words ripen and is set
   // whenever `available` is false — the card waits in plain sight with the date
   // on it rather than disappearing for a week (ADR-089).
+  // `practiceAvailable` is true once a review is finished and no challenge is
+  // open: the card then offers that review's words again as practice rather
+  // than locking (ADR-120). `practiceWordCount` is how many.
   "weeklyReview": { "available": true, "wordCount": 23,
                     "wordsWaitingAfterThis": 13,
-                    "periodStart":"2026-08-05T00:00:00Z", "nextAvailableAt": null },
+                    "periodStart":"2026-08-05T00:00:00Z", "nextAvailableAt": null,
+                    "practiceAvailable": false, "practiceWordCount": 0 },
   "vocabulary": { "learning": 31, "active": 12, "archived": 0 }
 }
 ```
@@ -233,12 +237,12 @@ handed one item at a time instead of a fixed list.
 | GET | `/words/lookup?q=bo` | → `[WordCandidate]` (either language; spelling suggestions when nothing matches) |
 | GET | `/words/define?w=researching` | → `{query, matchedText, senses:[WordCandidate]}` |
 | POST | `/words` | `{senseId, text?, meaning?}` → `Word` — a lexicon sense |
-| POST | `/words` | `{text, customMeaning, acceptAnyway?}` → `Word` — a meaning the learner wrote, AI-checked (ADR-072, ADR-074) |
+| POST | `/words` | `{text, customMeaning}` → `Word` — a meaning the learner wrote, AI-checked; a rejected meaning is never saved (ADR-072, ADR-074, ADR-112) |
 | POST | `/words` | `{text, fromSessionId}` → `Word` — the meaning that passage gave it (ADR-073) |
 | GET | `/words?state=LEARNING\|ACTIVE\|ARCHIVED&q=&page=&pageSize=` | → `{items:[Word], total, page, pageSize, hasMore}` |
 | GET | `/words/{id}` | → `WordDetail` |
 | DELETE | `/words/{id}` | → `204` — the learner removes it (ADR-071) |
-| PATCH | `/words/{id}/meaning` | `{meaning, acceptAnyway?}` → `Word` — rewrite the Arabic meaning, keeping the journey (ADR-101) |
+| PATCH | `/words/{id}/meaning` | `{meaning}` → `Word` — rewrite the Arabic meaning, keeping the journey (ADR-101, ADR-112) |
 | PATCH | `/words/{id}/meaning` | `{meaning, replaceWithSenseId}` → `Word` — swap for the word that meaning belongs to, from the beginning |
 
 > **The meaning may change; the word may not** (ADR-101). Nothing about the
@@ -250,12 +254,10 @@ handed one item at a time instead of a fixed list.
 >
 > * **the dictionary**, when it recognises the wording — the only thing that can
 >   *name* the English word a meaning belongs to. `409
->   MEANING_IS_ANOTHER_WORD` carries `candidates: [WordCandidate]`, and
->   `acceptAnyway` does **not** override it: insisting is how one word would
->   silently become another;
-> * **the checker**, when the dictionary has never seen the wording. It can only
->   judge the pairing, so `409 MEANING_REJECTED` is the softer refusal
->   `acceptAnyway` does overrule (ADR-074), and the disagreement is recorded.
+>   MEANING_IS_ANOTHER_WORD` carries `candidates: [WordCandidate]`;
+> * **the checker**, when the dictionary has never seen the wording: `409
+>   MEANING_REJECTED` with the meanings it would accept. Final (ADR-112) — the
+>   word keeps the meaning it had.
 >
 > The sense id travels with the meaning when the new wording is another sense of
 > the same word, so the stored English definition still describes what the
@@ -325,9 +327,7 @@ handed one item at a time instead of a fixed list.
 >                "correctedWord": "receive" } }
 >   ```
 >
->   `acceptAnyway` does **not** reach this refusal. A meaning is the learner's
->   to insist on; a spelling is not, because nothing downstream can teach a
->   string that is not a word. A word the lexicon *does* hold is never
+>   Final: nothing downstream can teach a string that is not a word. A word the lexicon *does* hold is never
 >   re-judged — the model does not get to refuse a dictionary entry.
 >
 >   **This path, and only this path, is checked by the AI** (ADR-074). A
@@ -342,9 +342,11 @@ handed one item at a time instead of a fixed list.
 >                "corrected": null } }
 >   ```
 >
->   Re-post with `acceptAnyway: true` to save it regardless — the learner's
->   call, recorded as `Overridden`. If the checker is unreachable, nothing is
->   saved: `MEANING_CHECK_UNAVAILABLE` (503). There is no fallback, deliberately.
+>   Final (ADR-112): nothing is saved until the learner writes a wording the
+>   checker accepts or picks a suggestion. There is no `acceptAnyway`; an older
+>   client that sends it is ignored and refused the same way. If the checker is
+>   unreachable, nothing is saved: `MEANING_CHECK_UNAVAILABLE` (503). There is
+>   no fallback, deliberately.
 >
 >   The lexicon and passage paths are **not** checked: neither gloss is the
 >   learner's guess.
@@ -459,7 +461,9 @@ handed one item at a time instead of a fixed list.
 
 | POST | `/sessions/{id}/answer` | `{itemId, answer}` → `AnswerResult` |
 | POST | `/sessions/{id}/writing` | `{itemId, answer}` → `WritingEvaluation` |
-| POST | `/sessions/{id}/speaking/turn` | `{transcript}` → `SpeakingTurn` |
+| POST | `/sessions/{id}/speaking/turn` | `{transcript}` → `SpeakingTurn` — `isFinal` only once every word has been used (or the safety stop); a word counts only when used in an answer, never in a request for a question or an explanation (ADR-113) |
+| POST | `/speech/transcribe` | raw audio (`Content-Type: audio/mp4`, …) → `{text}` — a draft for the learner to correct (ADR-107) |
+| POST | `/speech/synthesize` | `{text}` → `{audio, mimeType, durationMs, words[{start, end, charStart, charEnd}], timing}` — Edge's Ava voice, Gemini behind it (ADR-108, ADR-110) |
 | POST | `/sessions/{id}/level` | `{level}` → `SkillSession` — re-levels the session (ADR-030, ADR-038) |
 | POST | `/sessions/{id}/complete` | — → `SessionResult` |
 | POST | `/sessions/{id}/abandon` | — → `204` |
@@ -513,8 +517,28 @@ when any are due, and expires after `PracticeSessionExpiryHours` (24). It is
 kept when nothing is due — being told there is nothing to do must not also cost
 the learner the practice they were half-way through.
 
-Rate limits: `start`, `writing` and `speaking/turn` cost Gemini tokens and carry
-the tight budget; `answer` and `complete` do not and are covered by the global
+> **`POST /speech/transcribe`** takes the recording itself as the body — no
+> multipart — typed `audio/mp4`, `audio/m4a`, `audio/aac`, `audio/wav`,
+> `audio/ogg`, `audio/webm`, `audio/mpeg` or `audio/flac`. It needs a signed-in
+> learner and no session, and changes nothing: the text is shown to the learner
+> to read and correct, and only what they send through `speaking/turn` counts.
+> `text` is empty when nobody spoke. Errors: `415 UNSUPPORTED_AUDIO`,
+> `400 EMPTY_AUDIO`, `413 AUDIO_TOO_LARGE` (over `Capacity:MaxAudioBytes`, 8 MB),
+> `503 SPEECH_UNAVAILABLE` (no engine answered — offer typing), `503 AI_BUSY`.
+
+> **`POST /speech/synthesize`** speaks a tutor reply or a piece of a Listening
+> passage (≤ `Capacity:MaxSpeechChars`, 1500). `audio` is base64 — MP3, or WAV
+> when the server has no encoder; `words` holds every word of `text` in order,
+> with its time in milliseconds and its character span **in the text exactly as
+> sent** (it is not trimmed). `timing` is `aligned` (from the voice's own word
+> marks, or measured from the audio) or `estimated`. Which voice spoke is
+> the server's choice (`TTS_PROVIDERS`, ADR-110) and is not part of the contract.
+> Errors: `400 EMPTY_TEXT`, `413 TEXT_TOO_LONG`, `503 VOICE_UNAVAILABLE` (the app
+> speaks with the phone's voice), `503 AI_BUSY`.
+
+Rate limits: `start`, `writing`, `speaking/turn`, `speech/transcribe` and
+`speech/synthesize` cost
+provider calls and carry the tight budget; `answer` and `complete` do not and are covered by the global
 per-user limiter.
 
 ```jsonc
@@ -677,6 +701,7 @@ substantial enough to judge (ADR-016).
 | Method | Path | Body → Response |
 |---|---|---|
 | POST | `/weekly-review/start` | — → `WeeklyReviewSession` |
+| POST | `/weekly-review/practice/start` | — → `WeeklyReviewSession` (`isPractice: true`) |
 | POST | `/weekly-review/{id}/answer` | `{itemId, answer}` → `ReviewAnswerResult` |
 | POST | `/weekly-review/{id}/complete` | — → `WeeklyReviewResult` |
 
@@ -692,6 +717,7 @@ substantial enough to judge (ADR-016).
 // everything — two situations, and only one of them has a date to wait for.
 { "id":"wr_1", "periodStart":"2026-08-05T00:00:00Z", "totalWords": 23,
   "wordsWaitingAfterThis": 13,     // ripe words behind the cap of fifty
+  "isPractice": false,
   "queue":[ {"id":"ri1","wordId":"w_1","prompt":"operating system",
              "options":["نظام تشغيل","كرة","قاعدة بيانات","متصفح"]} ] }
 
@@ -702,8 +728,16 @@ substantial enough to judge (ADR-016).
 
 // WeeklyReviewResult — measurement only, no pipeline change (R9)
 { "reviewId":"wr_1","totalWords":23,"firstPassCorrect":20,"weeklyScore":0.87,
-  "totalAttempts":29 }
+  "totalAttempts":29, "isPractice": false }
 ```
+
+**Practice (ADR-120).** `practice/start` goes over the words of the learner's
+latest finished review (those not deleted since), and is answered and completed
+through the same `answer` and `complete` calls. A practice records nothing:
+no word is marked reviewed or retired, no exposure is counted, no completed
+review is logged, and its score is returned for display only. Starting one
+replaces an unfinished practice and never an unfinished review. `409
+PRACTICE_NOTHING_TO_PRACTISE` before any review is finished.
 
 Every word added in the period is included, whatever state it reached: the
 question is what the learner remembers, not how far the word travelled. Wrong
@@ -721,6 +755,7 @@ limit (R8). `start` returns `409 NO_WORDS_IN_PERIOD` when the week was empty.
 | GET | `/settings` | → `UserSettings` |
 | PATCH | `/settings/skill-level` | `{skill, level}` → `SkillLevel` *(user-selected only; `SKILL_NOT_LEVELLED` 400 for `SPELLING`)* |
 | PATCH | `/settings/daily-target` | `{skill, target}` → `SkillLevel` |
+| PATCH | `/settings/spelling-hints` | `{start: "AUTO" \| "DEFINITION_EN" \| "SIMPLIFIED_DEFINITION" \| "SYNONYM" \| "ARABIC_MEANING"}` → `{start, automaticStart}` — where every Spelling word's hints start; `LETTER_COUNT` is refused (ADR-115). `/me` carries the same object as `spellingHints`. Skill levels everywhere come in pipeline order (ADR-114). |
 | PUT | `/me/interests` | `{interests:[…]}` → `UserProfile` |
 | GET | `/config` | → `PublicConfig` |
 

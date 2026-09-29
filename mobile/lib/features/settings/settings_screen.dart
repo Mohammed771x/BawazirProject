@@ -61,8 +61,12 @@ class SettingsScreen extends ConsumerWidget {
           _ProfileCard(user: user),
           const SizedBox(height: AppSpacing.lg),
           SectionHeader(title: s.skillLevels, subtitle: s.levelExplainer),
+          // Keyed by skill (ADR-114): these cards hold state — the slider's
+          // value, the level being changed — and Flutter matches state to
+          // widgets by position unless told otherwise. When the order moved,
+          // one skill's slider value appeared on another skill's card.
           for (final level in user.skillLevels) ...[
-            _SkillLevelCard(level: level),
+            _SkillLevelCard(key: ValueKey('level-${level.skill.name}'), level: level),
             const SizedBox(height: AppSpacing.xs),
           ],
           const SizedBox(height: AppSpacing.lg),
@@ -71,9 +75,19 @@ class SettingsScreen extends ConsumerWidget {
             subtitle: s.dailyTargetsExplainer,
           ),
           for (final level in user.skillLevels) ...[
-            _DailyTargetCard(level: level, config: config),
+            _DailyTargetCard(
+              key: ValueKey('target-${level.skill.name}'),
+              level: level,
+              config: config,
+            ),
             const SizedBox(height: AppSpacing.xs),
           ],
+          const SizedBox(height: AppSpacing.lg),
+          SectionHeader(
+            title: s.spellingHintsTitle,
+            subtitle: s.spellingHintsExplainer,
+          ),
+          _SpellingHintsCard(hints: user.spellingHints),
           const SizedBox(height: AppSpacing.lg),
           SectionHeader(title: s.interests),
           _InterestsCard(user: user),
@@ -191,7 +205,7 @@ class _ProfileCard extends ConsumerWidget {
 }
 
 class _SkillLevelCard extends ConsumerStatefulWidget {
-  const _SkillLevelCard({required this.level});
+  const _SkillLevelCard({super.key, required this.level});
 
   final SkillLevel level;
 
@@ -276,7 +290,7 @@ class _SkillLevelCardState extends ConsumerState<_SkillLevelCard> {
 }
 
 class _DailyTargetCard extends ConsumerStatefulWidget {
-  const _DailyTargetCard({required this.level, required this.config});
+  const _DailyTargetCard({super.key, required this.level, required this.config});
 
   final SkillLevel level;
   final PublicConfig config;
@@ -343,6 +357,99 @@ class _DailyTargetCardState extends ConsumerState<_DailyTargetCard> {
 /// Interests stay editable for the whole life of the account: tapping a chip
 /// toggles it and "Other" adds one that is not in the catalogue at all
 /// (demo review §12).
+/// Where every Spelling word's hints start (ADR-115).
+///
+/// Automatic first, because it is right for most learners and says what it
+/// means for them; then the four rungs a word can open on, hardest first — the
+/// order the hints themselves come in. The letter count is not offered: it is
+/// the last hint, and a word that opened on it would have nothing left to give.
+class _SpellingHintsCard extends ConsumerStatefulWidget {
+  const _SpellingHintsCard({required this.hints});
+
+  final SpellingHints hints;
+
+  @override
+  ConsumerState<_SpellingHintsCard> createState() => _SpellingHintsCardState();
+}
+
+class _SpellingHintsCardState extends ConsumerState<_SpellingHintsCard> {
+  static const _rungs = [
+    SpellingClueKind.definitionEn,
+    SpellingClueKind.simplifiedDefinition,
+    SpellingClueKind.synonym,
+    SpellingClueKind.arabicMeaning,
+  ];
+
+  /// The choice being saved, shown at once rather than after the round trip.
+  /// `_saving` distinguishes "saving automatic" (null) from "nothing pending".
+  SpellingClueKind? _pending;
+  bool _saving = false;
+
+  Future<void> _choose(SpellingClueKind? start) async {
+    if (_saving || start == widget.hints.start) return;
+    final s = ref.read(stringsProvider);
+    setState(() {
+      _pending = start;
+      _saving = true;
+    });
+    try {
+      await ref.read(wordOsApiProvider).updateSpellingHintStart(start);
+      await ref.read(sessionProvider.notifier).refresh();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(s.spellingHintsSaved)));
+      }
+    } catch (rawError) {
+      final e = ApiException.from(rawError);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(s.apiError(e.code, e.message))));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ref.watch(stringsProvider);
+    final selected = _saving ? _pending : widget.hints.start;
+
+    Widget option(SpellingClueKind? start, String label) {
+      final on = selected == start;
+      return ListTile(
+        key: ValueKey('hint-start-${start?.wire ?? 'AUTO'}'),
+        contentPadding: EdgeInsets.zero,
+        dense: true,
+        enabled: !_saving,
+        leading: Icon(
+          on ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+          color: on ? context.colors.primary : null,
+        ),
+        title: Text(label, style: context.text.bodyMedium),
+        onTap: () => _choose(start),
+      );
+    }
+
+    return AppCard(
+      // The tiles paint their ink on the nearest Material; the card's own
+      // colour would otherwise hide every tap.
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          children: [
+            option(null, s.spellingHintAutomatic(widget.hints.automaticStart)),
+            for (final rung in _rungs)
+              option(rung, s.spellingHintStartName(rung)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _InterestsCard extends ConsumerStatefulWidget {
   const _InterestsCard({required this.user});
 

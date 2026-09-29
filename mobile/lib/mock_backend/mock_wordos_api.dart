@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../core/api/wordos_api.dart';
 import '../core/models/models.dart';
 import 'engine/mock_engine.dart';
@@ -149,14 +151,12 @@ class MockWordOsApi implements WordOsApi {
   Future<Word> addWordWithMeaning({
     required String text,
     required String meaning,
-    bool acceptAnyway = false,
   }) =>
       _write(
         () => engine.addWordWithMeaning(
           _user,
           text: text,
           meaning: meaning,
-          acceptAnyway: acceptAnyway,
         ),
         _aiLatency,
       );
@@ -175,13 +175,11 @@ class MockWordOsApi implements WordOsApi {
   Future<Word> changeWordMeaning({
     required String wordId,
     required String meaning,
-    bool acceptAnyway = false,
   }) =>
       _write(() => engine.changeWordMeaning(
             _user,
             wordId,
             meaning: meaning,
-            acceptAnyway: acceptAnyway,
           ));
 
   @override
@@ -254,6 +252,30 @@ class MockWordOsApi implements WordOsApi {
         _aiLatency,
       );
 
+  /// The mock has no ears: against it the phone's own recogniser listens, as
+  /// it always did, and this is never called (ADR-107). Answering as a server
+  /// with no engine configured keeps any caller honest about that case.
+  @override
+  Future<String> transcribeSpeech(
+    Uint8List audio, {
+    String mimeType = 'audio/mp4',
+  }) async =>
+      throw const ApiException(
+        'SPEECH_UNAVAILABLE',
+        'The mock backend does not transcribe audio.',
+        statusCode: 503,
+      );
+
+  /// The mock has no voice of its own; the phone's speaks, as always
+  /// (ADR-108).
+  @override
+  Future<SynthesizedSpeech> synthesizeSpeech(String text) async =>
+      throw const ApiException(
+        'VOICE_UNAVAILABLE',
+        'The mock backend has no voice.',
+        statusCode: 503,
+      );
+
   @override
   Future<SpeakingTurn> submitSpeakingTurn({
     required String sessionId,
@@ -277,6 +299,10 @@ class MockWordOsApi implements WordOsApi {
       _write(() => engine.startWeeklyReview(_user), _aiLatency);
 
   @override
+  Future<WeeklyReviewSession> startWeeklyReviewPractice() =>
+      _write(() => engine.startWeeklyReviewPractice(_user), _aiLatency);
+
+  @override
   Future<ReviewAnswerResult> answerWeeklyReview({
     required String reviewId,
     required String itemId,
@@ -297,6 +323,10 @@ class MockWordOsApi implements WordOsApi {
     required CefrLevel level,
   }) =>
       _write(() => engine.updateSkillLevel(_user, skill, level));
+
+  @override
+  Future<SpellingHints> updateSpellingHintStart(SpellingClueKind? start) =>
+      _write(() => engine.updateSpellingHintStart(_user, start));
 
   @override
   Future<SkillLevel> updateDailyTarget({

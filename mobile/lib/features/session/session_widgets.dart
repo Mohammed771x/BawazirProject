@@ -406,24 +406,42 @@ class ContextPassage extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (context.before != null)
-            Text(
-              context.before!,
-              style: buildContext.text.bodyMedium?.copyWith(color: muted),
+          // The sentences are English, and are laid out as English whatever
+          // the interface language. Inheriting the Arabic direction put each
+          // sentence's full stop at its start (".I walk to the market") and
+          // right-aligned prose that reads left to right.
+          SizedBox(
+            width: double.infinity,
+            child: Directionality(
+              textDirection: TextDirection.ltr,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (context.before != null)
+                    Text(
+                      context.before!,
+                      style: buildContext.text.bodyMedium
+                          ?.copyWith(color: muted),
+                    ),
+                  if (context.before != null)
+                    const SizedBox(height: AppSpacing.xs),
+                  _Sentence(
+                    text: context.sentence,
+                    highlight: highlight,
+                    color: color,
+                  ),
+                  if (context.after != null) ...[
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      context.after!,
+                      style: buildContext.text.bodyMedium
+                          ?.copyWith(color: muted),
+                    ),
+                  ],
+                ],
+              ),
             ),
-          if (context.before != null) const SizedBox(height: AppSpacing.xs),
-          _Sentence(
-            text: context.sentence,
-            highlight: highlight,
-            color: color,
           ),
-          if (context.after != null) ...[
-            const SizedBox(height: AppSpacing.xs),
-            Text(
-              context.after!,
-              style: buildContext.text.bodyMedium?.copyWith(color: muted),
-            ),
-          ],
           const SizedBox(height: AppSpacing.sm),
           Row(
             children: [
@@ -441,6 +459,22 @@ class ContextPassage extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Where [word] stands as a word of its own in [text], or -1.
+///
+/// A whole word first: found by plain search, "deliver" lit up the front of
+/// "delivery" earlier in the same sentence, and the word being asked about
+/// went unmarked. The first plain match is kept only as a fallback, for a
+/// target the sentence spells as part of a longer word and nowhere else.
+int wholeWordIndex(String text, String word) {
+  if (word.isEmpty) return -1;
+  final whole = RegExp(
+    '(?<![A-Za-z])${RegExp.escape(word)}(?![A-Za-z])',
+    caseSensitive: false,
+  ).firstMatch(text);
+  if (whole != null) return whole.start;
+  return text.toLowerCase().indexOf(word.toLowerCase());
 }
 
 class _Sentence extends StatelessWidget {
@@ -462,7 +496,7 @@ class _Sentence extends StatelessWidget {
       return Text(text, style: base);
     }
 
-    final index = text.toLowerCase().indexOf(target.toLowerCase());
+    final index = wholeWordIndex(text, target);
     if (index < 0) return Text(text, style: base);
 
     return RichText(
@@ -603,9 +637,10 @@ class WordPronunciation extends ConsumerWidget {
   /// Whether the word may be shown as well as heard.
   ///
   /// False everywhere today, and the default, because Listening is the only
-  /// caller. It exists so a future Reading use — where the word is on screen
-  /// anyway — states that it is choosing to show it, rather than quietly
-  /// turning the rule off (ADR-085).
+  /// caller. It exists so a future use where the word is on screen anyway
+  /// states that it is choosing to show it, rather than quietly turning the
+  /// rule off (ADR-085). Reading does not use this card: it has the compact
+  /// speaker pair beside its question instead (ADR-119).
   final bool revealSpelling;
 
   /// Distinct ids per speed, so the two controls never light up together.

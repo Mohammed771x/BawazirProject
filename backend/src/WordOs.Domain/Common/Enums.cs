@@ -89,19 +89,21 @@ public enum MeaningSource
 /// Only ever set for <see cref="MeaningSource.Learner"/>. A lexicon gloss and a
 /// passage gloss are not the learner's guesses and are not checked.
 ///
-/// <para><see cref="Overridden"/> is the one that earns its place. The learner
-/// may save a meaning the checker rejected, because the checker is sometimes
-/// wrong and this whole feature exists to escape an automated source that was
-/// (ADR-072). But "the model said no and the learner said yes anyway" is
-/// exactly the fact that explains a word failing Spelling four times a fortnight
-/// later, and it is unrecoverable if it was never written down.</para>
+/// <para><see cref="Overridden"/> is history. Until ADR-112 a learner could
+/// save a meaning the checker rejected; that path is gone, because every skill
+/// marks answers against the meaning and a wrong one teaches the wrong thing.
+/// The value stays so words saved that way still read back, and the Owner can
+/// still find them.</para>
 /// </remarks>
 public enum MeaningCheckResult
 {
     /// <summary>The checker agreed the Arabic means what the word means.</summary>
     Approved,
 
-    /// <summary>The checker disagreed; the learner saved it regardless.</summary>
+    /// <summary>
+    /// The checker disagreed and the learner saved it regardless — possible
+    /// only before ADR-112.
+    /// </summary>
     Overridden,
 }
 

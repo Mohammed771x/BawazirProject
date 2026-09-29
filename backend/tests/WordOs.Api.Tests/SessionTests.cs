@@ -752,6 +752,107 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         }
     }
 
+    // ── Where the hints start (ADR-115) ──────────────────────────────────────
+
+    private async Task<List<string?>> FirstHintKindsAsync()
+    {
+        var session = await StartAsync("spelling");
+        var kinds = session.GetProperty("items").EnumerateArray()
+            .Select(i => i.GetProperty("clueKind").GetString())
+            .ToList();
+        (await Client.PostAsync(
+            $"/api/sessions/{session.GetProperty("id").GetGuid()}/abandon",
+            null)).EnsureSuccessStatusCode();
+        return kinds;
+    }
+
+    [SkippableFact]
+    public async Task Every_spelling_word_starts_on_the_rung_the_learner_chose()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AddWordAsync("several", "عدة");
+        await AdvanceToSpellingAsync();
+        (await Client.PatchAsJsonAsync("/api/settings/skill-level",
+            new { skill = "READING", level = "A1" })).EnsureSuccessStatusCode();
+
+        // Automatic: an A1 learner starts on the Arabic meaning.
+        var auto = await FirstHintKindsAsync();
+        Assert.All(auto, k => Assert.Equal("ARABIC_MEANING", k));
+
+        // Chosen: the dictionary definition, for every word — the second word
+        // starts at the top again, not where the first one's hints ran out.
+        var saved = await Client.PatchAsJsonAsync(
+            "/api/settings/spelling-hints", new { start = "DEFINITION_EN" });
+        saved.EnsureSuccessStatusCode();
+        var hints = await saved.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("DEFINITION_EN", hints.GetProperty("start").GetString());
+        Assert.Equal("ARABIC_MEANING", hints.GetProperty("automaticStart").GetString());
+
+        var chosen = await FirstHintKindsAsync();
+        Assert.Equal(2, chosen.Count);
+        Assert.All(chosen, k => Assert.Equal("DEFINITION_EN", k));
+
+        // And back to automatic.
+        (await Client.PatchAsJsonAsync("/api/settings/spelling-hints",
+            new { start = "auto" })).EnsureSuccessStatusCode();
+        Assert.All(await FirstHintKindsAsync(), k => Assert.Equal("ARABIC_MEANING", k));
+    }
+
+    [SkippableFact]
+    public async Task The_ladder_below_the_chosen_rung_is_all_still_there()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpellingAsync();
+        (await Client.PatchAsJsonAsync("/api/settings/spelling-hints",
+            new { start = "DEFINITION_EN" })).EnsureSuccessStatusCode();
+
+        var session = await StartAsync("spelling");
+        var kinds = session.GetProperty("items").EnumerateArray().Single()
+            .GetProperty("hints").EnumerateArray()
+            .Select(h => h.GetProperty("kind").GetString())
+            .ToList();
+
+        // Hardest first, easiest last, and the letter count at the very end.
+        Assert.Equal("DEFINITION_EN", kinds.First());
+        Assert.Contains("ARABIC_MEANING", kinds);
+        Assert.Equal("LETTER_COUNT", kinds.Last());
+    }
+
+    [SkippableFact]
+    public async Task The_profile_says_where_the_hints_start()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        (await Client.PatchAsJsonAsync("/api/settings/skill-level",
+            new { skill = "READING", level = "C1" })).EnsureSuccessStatusCode();
+
+        var me = await Client.GetFromJsonAsync<JsonElement>("/api/me");
+        var hints = me.GetProperty("spellingHints");
+
+        Assert.Equal("AUTO", hints.GetProperty("start").GetString());
+        // The server says what automatic means; the client does not work it out.
+        Assert.Equal("DEFINITION_EN", hints.GetProperty("automaticStart").GetString());
+    }
+
+    [SkippableTheory]
+    [InlineData("LETTER_COUNT")]
+    [InlineData("something")]
+    [InlineData("")]
+    public async Task A_hint_start_that_is_not_a_rung_is_refused(string start)
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var response = await Client.PatchAsJsonAsync(
+            "/api/settings/spelling-hints", new { start });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
     [SkippableFact]
     public async Task Spelling_gives_a_clue_and_letters_but_no_level()
     {
@@ -945,14 +1046,12 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         var session = await StartAsync("speaking");
         var sessionId = session.GetProperty("id").GetGuid();
 
-        // Talking around the word without ever saying it. The conversation
-        // ends on its turn limit rather than on the word being done — and that
-        // path used to stop dead on "try to use the word research", with the
-        // result screen appearing over the top of it. A learner who never
-        // managed their word hit it every time, so the conversation they got
-        // wrong was also the one that ended mid-sentence (ADR-070).
+        // Talking around the word without ever saying it, until the safety
+        // stop (ADR-113: ten learner turns a word). That path used to stop dead
+        // on "try to use the word research", with the result screen appearing
+        // over the top of it (ADR-070).
         JsonElement body = default;
-        for (var turn = 0; turn < 6; turn++)
+        for (var turn = 0; turn < 12; turn++)
         {
             var response = await Client.PostAsJsonAsync(
                 $"/api/sessions/{sessionId}/speaking/turn",
@@ -963,7 +1062,7 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         }
 
         Assert.True(body.GetProperty("isFinal").GetBoolean(),
-            "the conversation should have ended on its turn limit");
+            "the conversation should have ended on its safety stop");
 
         // The word was never used, and the conversation still closed properly:
         // the last thing asked of the tutor was a turn with nothing left to
@@ -974,6 +1073,153 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         Assert.Contains("research", Ai.LastUnusedWords);
         Assert.Contains("It was good talking to you",
             body.GetProperty("aiMessage").GetString() ?? string.Empty);
+    }
+
+    // ── Every word, and only answers (ADR-113) ─────────────────────────────
+
+    private async Task<JsonElement> SayAsync(Guid sessionId, string transcript)
+    {
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/speaking/turn", new { transcript });
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<JsonElement>();
+    }
+
+    private static List<string?> Remaining(JsonElement body) =>
+        body.GetProperty("remaining").EnumerateArray().Select(w => w.GetString()).ToList();
+
+    [SkippableFact]
+    public async Task A_conversation_does_not_end_while_a_word_is_left()
+    {
+        // The product owner's rule: the session is complete only once every
+        // word has been discussed and used. It used to end after the word
+        // count plus three turns — four turns, for one word.
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+        var sessionId = (await StartAsync("speaking")).GetProperty("id").GetGuid();
+
+        for (var turn = 0; turn < 6; turn++)
+        {
+            var body = await SayAsync(sessionId, "I am not sure what to say about that.");
+            Assert.False(body.GetProperty("isFinal").GetBoolean(),
+                $"ended on turn {turn + 1} with the word still unused");
+        }
+
+        var done = await SayAsync(sessionId, "I did some research about sleep.");
+        Assert.True(done.GetProperty("isFinal").GetBoolean());
+        Assert.Empty(Remaining(done));
+    }
+
+    [SkippableTheory]
+    [InlineData("Can you give me another question using research?")]
+    [InlineData("Can you explain what research means?")]
+    [InlineData("How can I use research in a sentence?")]
+    public async Task Asking_about_a_word_is_not_using_it(string request)
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+        var sessionId = (await StartAsync("speaking")).GetProperty("id").GetGuid();
+
+        var body = await SayAsync(sessionId, request);
+
+        Assert.False(body.GetProperty("isFinal").GetBoolean());
+        Assert.Contains("research", Remaining(body));
+        Assert.Empty(body.GetProperty("wordsUsed").EnumerateArray());
+        // And the tutor is asked about it again, not moved on.
+        Assert.Contains("research", Ai.LastRemainingWords);
+    }
+
+    [SkippableFact]
+    public async Task An_answer_followed_by_a_request_still_counts()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+        var sessionId = (await StartAsync("speaking")).GetProperty("id").GetGuid();
+
+        var body = await SayAsync(sessionId,
+            "I did some research about sleep. Can you give me another question?");
+
+        Assert.Contains("research", body.GetProperty("wordsUsed").EnumerateArray()
+            .Select(w => w.GetString()));
+    }
+
+    [SkippableFact]
+    public async Task A_model_confused_by_a_mixed_turn_does_not_unmark_the_answer()
+    {
+        // Measured against the real model: a turn that answers and then asks
+        // came back with the word "only named". The answer sentence counts.
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+        var sessionId = (await StartAsync("speaking")).GetProperty("id").GetGuid();
+
+        Ai.SpeakingIntent = "new_question";
+        Ai.SpeakingNamedAlways = ["research"];
+        var body = await SayAsync(sessionId,
+            "I did some research about sleep. Can you give me another question?");
+
+        Assert.Contains("research", body.GetProperty("wordsUsed").EnumerateArray()
+            .Select(w => w.GetString()));
+    }
+
+    [SkippableFact]
+    public async Task A_word_the_model_calls_named_in_a_turn_with_no_request_is_not_counted()
+    {
+        // The model's veto, where it earns its place: a phrasing no pattern
+        // recognises as a request.
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+        var sessionId = (await StartAsync("speaking")).GetProperty("id").GetGuid();
+
+        Ai.SpeakingNamedAlways = ["research"];
+        var body = await SayAsync(sessionId,
+            "Research. Hmm. I am thinking about it.");
+
+        Assert.Contains("research", Remaining(body));
+    }
+
+    [SkippableFact]
+    public async Task A_request_the_patterns_miss_is_caught_by_the_model()
+    {
+        // The second check: a phrasing no pattern knows, which the model reads
+        // as asking for an explanation. One sentence, nothing of their own.
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+        var sessionId = (await StartAsync("speaking")).GetProperty("id").GetGuid();
+
+        Ai.SpeakingIntent = "explain";
+        var body = await SayAsync(sessionId, "Research, I am lost with it");
+
+        Assert.Contains("research", Remaining(body));
+    }
+
+    [SkippableFact]
+    public async Task The_tutor_is_sent_the_latest_lines_not_the_whole_conversation()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AdvanceToSpeakingAsync();
+        var sessionId = (await StartAsync("speaking")).GetProperty("id").GetGuid();
+
+        for (var turn = 0; turn < 9; turn++)
+            await SayAsync(sessionId, $"Line number {turn} without the word.");
+
+        // 1 opening + 9 learner lines + 8 replies before the ninth = 18 lines;
+        // the window is 20, so this is everything so far — and it never grows
+        // past the window however long the conversation runs.
+        Assert.InRange(Ai.LastTranscriptLength, 1, 20);
     }
 
     [SkippableFact]
@@ -2211,6 +2457,141 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         Assert.Equal(
             "REVIEW_NOTHING_TO_REVIEW",
             problem.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    // ── Practice after the challenge (ADR-120) ──────────────────────────────
+
+    [SkippableFact]
+    public async Task A_finished_review_can_be_practised_and_the_practice_records_nothing()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        var userId = await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+        await AddWordAsync("theory", "نظرية");
+
+        var config = new WordOsConfiguration();
+        Clock.SkipDays(config.WeeklyReviewMaturityDays);
+
+        var review = await StartReviewAsync();
+        var reviewId = review.GetProperty("id").GetGuid();
+        Assert.False(review.GetProperty("isPractice").GetBoolean());
+        var queue = review.GetProperty("queue").EnumerateArray().ToList();
+        await AnswerReviewAsync(reviewId, queue[0], correct: true);
+        await AnswerReviewAsync(reviewId, queue[1], correct: false);
+        await AnswerReviewAsync(reviewId, queue[1], correct: true);
+        (await Client.PostAsync($"/api/weekly-review/{reviewId}/complete", null))
+            .EnsureSuccessStatusCode();
+
+        // The card does not lock: the challenge is closed, and its words are
+        // offered again as practice.
+        var hub = await Client.GetFromJsonAsync<JsonElement>("/api/hub");
+        var card = hub.GetProperty("weeklyReview");
+        Assert.False(card.GetProperty("available").GetBoolean());
+        Assert.True(card.GetProperty("practiceAvailable").GetBoolean());
+        Assert.Equal(2, card.GetProperty("practiceWordCount").GetInt32());
+
+        var before = await ReviewTraceAsync(userId);
+
+        // Practised later in the week, with a wrong answer in it.
+        Clock.SkipDays(2);
+        var start = await Client.PostAsync("/api/weekly-review/practice/start", null);
+        start.EnsureSuccessStatusCode();
+        var practice = await start.Content.ReadFromJsonAsync<JsonElement>();
+        var practiceId = practice.GetProperty("id").GetGuid();
+        Assert.True(practice.GetProperty("isPractice").GetBoolean());
+        Assert.Equal(2, practice.GetProperty("totalWords").GetInt32());
+
+        var items = practice.GetProperty("queue").EnumerateArray().ToList();
+        await AnswerReviewAsync(practiceId, items[0], correct: false);
+        await AnswerReviewAsync(practiceId, items[1], correct: true);
+        await AnswerReviewAsync(practiceId, items[0], correct: true);
+
+        var done = await Client.PostAsync($"/api/weekly-review/{practiceId}/complete", null);
+        done.EnsureSuccessStatusCode();
+        var result = await done.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(result.GetProperty("isPractice").GetBoolean());
+        Assert.Equal(1, result.GetProperty("firstPassCorrect").GetInt32());
+
+        // Rule R9: nothing the challenge reads changed — which words are
+        // finished with, when the rest ripen, how often each was met — and
+        // no second review was logged for the week.
+        Assert.Equal(before, await ReviewTraceAsync(userId));
+
+        // The next challenge still opens on the same day it would have.
+        var tooSoon = await Client.PostAsync("/api/weekly-review/start", null);
+        Assert.Equal(HttpStatusCode.Conflict, tooSoon.StatusCode);
+        Clock.SkipDays(config.WeeklyReviewMaturityDays - 2);
+        var next = await StartReviewAsync();
+        Assert.Equal(1, next.GetProperty("totalWords").GetInt32());
+    }
+
+    [SkippableFact]
+    public async Task There_is_nothing_to_practise_before_the_first_review()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        var hub = await Client.GetFromJsonAsync<JsonElement>("/api/hub");
+        Assert.False(hub.GetProperty("weeklyReview")
+            .GetProperty("practiceAvailable").GetBoolean());
+
+        var start = await Client.PostAsync("/api/weekly-review/practice/start", null);
+        Assert.Equal(HttpStatusCode.Conflict, start.StatusCode);
+        var problem = await start.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("PRACTICE_NOTHING_TO_PRACTISE",
+            problem.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [SkippableFact]
+    public async Task While_the_challenge_is_open_the_card_is_the_challenge()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        var config = new WordOsConfiguration();
+        Clock.SkipDays(config.WeeklyReviewMaturityDays);
+        var first = await StartReviewAsync();
+        var firstId = first.GetProperty("id").GetGuid();
+        await AnswerReviewAsync(firstId,
+            first.GetProperty("queue").EnumerateArray().First(), correct: false);
+        await AnswerReviewAsync(firstId,
+            first.GetProperty("queue").EnumerateArray().First(), correct: true);
+        (await Client.PostAsync($"/api/weekly-review/{firstId}/complete", null))
+            .EnsureSuccessStatusCode();
+
+        // A week on, the missed word is ripe again: the challenge is open,
+        // and practice is not offered beside it.
+        Clock.SkipDays(config.WeeklyReviewMaturityDays);
+        var hub = await Client.GetFromJsonAsync<JsonElement>("/api/hub");
+        var card = hub.GetProperty("weeklyReview");
+        Assert.True(card.GetProperty("available").GetBoolean());
+        Assert.False(card.GetProperty("practiceAvailable").GetBoolean());
+
+        // And a practice started anyway never discards an unfinished review.
+        var open = await StartReviewAsync();
+        (await Client.PostAsync("/api/weekly-review/practice/start", null))
+            .EnsureSuccessStatusCode();
+        var answer = await AnswerReviewAsync(open.GetProperty("id").GetGuid(),
+            open.GetProperty("queue").EnumerateArray().First(), correct: true);
+        Assert.True(answer.GetProperty("isCorrect").GetBoolean());
+    }
+
+    /// <summary>What the weekly challenge reads, for every word of this user.</summary>
+    private async Task<string> ReviewTraceAsync(Guid userId)
+    {
+        await using var context = db.CreateContext();
+        var words = await context.Words.Where(w => w.UserId == userId)
+            .OrderBy(w => w.Text)
+            .Select(w => $"{w.Text}:{w.ReviewPassedAt}:{w.LastReviewedAt}:{w.ExposureCount}")
+            .ToListAsync();
+        var ids = await context.Words.Where(w => w.UserId == userId)
+            .Select(w => w.Id).ToListAsync();
+        var reviewsLogged = await context.ActivityEvents
+            .CountAsync(e => e.UserId == userId && e.Type == ActivityType.ReviewCompleted);
+        var exposures = await context.WordExposures.CountAsync(e => ids.Contains(e.WordId));
+        return $"{string.Join("|", words)}#{reviewsLogged}#{exposures}";
     }
 
     private async Task<JsonElement> StartReviewAsync()

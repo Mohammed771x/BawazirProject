@@ -44,6 +44,9 @@ class _SpokenAnswerFieldState extends ConsumerState<SpokenAnswerField> {
   final _typed = TextEditingController();
 
   bool _listening = false;
+
+  /// The recording is with the server being written down (ADR-107).
+  bool _transcribing = false;
   bool? _micAvailable;
 
   /// The learner asked to type instead. Offered even when the recogniser says
@@ -108,15 +111,27 @@ class _SpokenAnswerFieldState extends ConsumerState<SpokenAnswerField> {
   }
 
   Future<void> _stopListening() async {
-    if (!_listening) return;
+    if (!_listening || _transcribing) return;
 
+    // The server writes the answer down after the microphone closes
+    // (ADR-107), which takes a few seconds; the button must not look like it
+    // is still recording while that happens.
+    setState(() => _transcribing = true);
+    // Never throws: a failure comes back as null with `lastFailure` set.
     final heard = await _recognition!.stopAndRead();
+    _transcribing = false;
     if (!mounted) return;
 
     setState(() => _listening = false);
     // Nothing usable: the prompt stands and the learner can try again. An empty
     // transcript must never be submitted as an answer.
-    if (heard != null && heard.trim().isNotEmpty) widget.onTranscript(heard);
+    if (heard != null && heard.trim().isNotEmpty) {
+      widget.onTranscript(heard);
+    } else if (_recognition!.lastFailure != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ref.read(stringsProvider).couldNotListen)),
+      );
+    }
   }
 
   @override
@@ -176,13 +191,16 @@ class _SpokenAnswerFieldState extends ConsumerState<SpokenAnswerField> {
           child: Column(
             children: [
               _MicButton(
-                listening: _listening,
-                enabled: widget.enabled && _micAvailable != null,
+                listening: _listening && !_transcribing,
+                enabled:
+                    widget.enabled && _micAvailable != null && !_transcribing,
                 onTap: _listening ? _stopListening : _startListening,
               ),
               const SizedBox(height: AppSpacing.sm),
               Text(
-                _listening
+                _transcribing
+                    ? s.transcribing
+                    : _listening
                     ? s.tapWhenDone
                     : widget.transcript.isEmpty
                         ? s.tapThenSpeak
