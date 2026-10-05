@@ -84,7 +84,7 @@ def test_a_passage_comes_back_whole(client, auth, stub_gemini):
     assert body["sentences"] == _payload()["sentences"]
     assert body["text"].startswith("The morning was quiet.")
     assert body["tokens"] == 456
-    assert body["prompt_version"] == "reading-v6"
+    assert body["prompt_version"] == "reading-v11"
     # The passage arrives with its own heading (ADR-066).
     assert body["title"] == "A Quiet Morning"
 

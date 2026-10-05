@@ -145,6 +145,7 @@ public sealed class HttpAiContentService(
             }),
             comprehension_count = request.ComprehensionCount,
             option_style = request.OptionStyle.ToWire(),
+            listening = request.Listening,
         };
 
         var response = await PostAsync<ContentDto>(

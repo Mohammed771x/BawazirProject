@@ -808,9 +808,15 @@ class AppStrings {
             'كلمة واحدة تنتظرك. هذه كل القائمة.',
           ),
 
-        ReminderMessage.wordsDueFiveMinutes => _(
-            'Five minutes now beats an hour on Friday.',
-            'خمس دقائق الآن خير من ساعة يوم الجمعة.',
+        // It said "five minutes now beats an hour on Friday", which in Arabic
+        // read as a saying about the day of Jumu'ah. The product owner asked
+        // for it gone (ADR-121): a reminder never borrows a religious frame.
+        // The server no longer sends this key; an old one says the count line.
+        ReminderMessage.wordsDueFiveMinutes => reminderWordsDue(count),
+
+        ReminderMessage.wordsDueShortSession => _(
+            'Five minutes today is enough to move your words forward.',
+            'خمس دقائق اليوم تكفي لتتقدّم كلماتك خطوة.',
           ),
 
         ReminderMessage.wordsDueMorning => _(

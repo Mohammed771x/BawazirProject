@@ -129,7 +129,9 @@ enum ReminderKind {
 enum ReminderMessage {
   wordsDueCount('WORDS_DUE_COUNT'),
   wordsDueOne('WORDS_DUE_ONE'),
+  // Never sent any more (ADR-121); kept so the wire value still parses.
   wordsDueFiveMinutes('WORDS_DUE_FIVE_MINUTES'),
+  wordsDueShortSession('WORDS_DUE_SHORT_SESSION'),
   wordsDueMorning('WORDS_DUE_MORNING'),
   wordsDueEvening('WORDS_DUE_EVENING'),
   wordsDueStreak('WORDS_DUE_STREAK'),

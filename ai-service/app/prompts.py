@@ -35,7 +35,7 @@ def system_instruction() -> str:
 
 # ── Reading / Listening content ──────────────────────────────────────────────
 
-READING_PROMPT_VERSION = "reading-v6"
+READING_PROMPT_VERSION = "reading-v11"
 
 READING_SCHEMA = {
     "type": "object",
@@ -510,20 +510,74 @@ DISTRACTOR_RULE = _ARABIC_DISTRACTORS
 #:
 #: The app asks for one passage with five comprehension questions, so these sit
 #: at the length of a single exam text, not of a whole paper.
+#:
+#: Listening is sized in **seconds**, not words (ADR-121, ADR-122). The product
+#: owner set them: a level and its "+" share one length, and each pair is ten
+#: seconds longer than the one below — A1/A1+ 24 s, A2/A2+ 34, B1/B1+ 44,
+#: B2/B2+ 54, C1/C1+ 64, C2 74. Inside a pair, what differs is the language:
+#: the sentence length and vocabulary the band calls for, not the clock.
+#:
+#: Reading follows the same pairing in words. An A1 learner meets a few lines,
+#: not a page, and A1+ meets the same few lines in slightly longer sentences.
 _PASSAGE_SHAPE = {
-    #            words  typical sentence length   average
-    "A1":       (80,    "6 to 9 words",           8),
-    "A1_PLUS":  (110,   "7 to 10 words",          9),
-    "A2":       (150,   "8 to 12 words",          10),
-    "A2_PLUS":  (190,   "9 to 13 words",          11),
-    "B1":       (240,   "11 to 15 words",         13),
-    "B1_PLUS":  (300,   "12 to 16 words",         14),
-    "B2":       (400,   "14 to 20 words",         17),
-    "B2_PLUS":  (480,   "15 to 21 words",         18),
-    "C1":       (560,   "17 to 24 words",         20),
-    "C1_PLUS":  (640,   "18 to 26 words",         22),
-    "C2":       (720,   "20 to 30 words",         25),
+    #           reading  listening  typical sentence length   average
+    #           (words)  (seconds)
+    "A1":       (60,     24,        "6 to 9 words",           8),
+    "A1_PLUS":  (60,     24,        "7 to 10 words",          9),
+    "A2":       (120,    34,        "8 to 12 words",          10),
+    "A2_PLUS":  (120,    34,        "9 to 13 words",          11),
+    "B1":       (210,    44,        "11 to 15 words",         13),
+    "B1_PLUS":  (210,    44,        "12 to 16 words",         14),
+    "B2":       (360,    54,        "14 to 20 words",         17),
+    "B2_PLUS":  (360,    54,        "15 to 21 words",         18),
+    "C1":       (520,    64,        "17 to 24 words",         20),
+    "C1_PLUS":  (520,    64,        "18 to 26 words",         22),
+    "C2":       (680,    74,        "20 to 30 words",         25),
 }
+
+#: How many words the voice says in a second, by band — measured, not assumed
+#: (ADR-122): Edge's voice reading generated passages sentence by sentence, as
+#: the app plays them, averaged over three runs. One passage to the next varies
+#: by about a tenth either way, so a clip lands within a few seconds of its
+#: target rather than on it.
+_WORDS_PER_SECOND = {"A1": 2.8, "A2": 3.2, "B1": 3.15, "B2": 2.9,
+                     "C1": 2.8, "C2": 2.7}
+
+
+#: How a passage's length follows its number of target words (ADR-124).
+#:
+#: The product owner's rule. Every passage starts from a minimum, so one word
+#: still gets a proper paragraph rather than a line — fifty words at A1 to A2+,
+#: rising up the ladder. It grows with each word and reaches the band's full
+#: length (the seconds or reading words in `_PASSAGE_SHAPE`) at the most words
+#: a session at that band can carry: ten up to A2+, fifteen from B1 — the same
+#: cap the backend applies (`WordOs:LowerBandMaxSessionWords`).
+_MIN_WORDS = {
+    "A1": 50, "A1_PLUS": 50, "A2": 50, "A2_PLUS": 50,
+    "B1": 70, "B1_PLUS": 70, "B2": 90, "B2_PLUS": 90,
+    "C1": 110, "C1_PLUS": 110, "C2": 130,
+}
+_LOWER_BANDS = {"A1", "A1_PLUS", "A2", "A2_PLUS"}
+_LOWER_BAND_MOST_WORDS = 10
+_MOST_WORDS = 15
+
+#: How far past its length a passage may run when it needs the room — the
+#: product owner allowed ten seconds over for listening (ADR-123); reading
+#: gets a fifth.
+_LISTENING_ROOM_SECONDS = 10
+_READING_ROOM = 0.2
+
+#: Fewer sentences than this is not a passage, whatever the word count.
+_MIN_SENTENCES = 4
+
+
+def _full_length(key: str, *, listening: bool) -> tuple[int, int]:
+    """A band's full length in words, and the most it may run past that."""
+    reading, seconds, _, _ = _PASSAGE_SHAPE.get(key, _PASSAGE_SHAPE["B1"])
+    if not listening:
+        return reading, round(reading * _READING_ROOM)
+    pace = _WORDS_PER_SECOND.get(key.removesuffix("_PLUS"), 2.6)
+    return round(seconds * pace), round(_LISTENING_ROOM_SECONDS * pace)
 
 
 def _passage_shape(
@@ -531,31 +585,46 @@ def _passage_shape(
 ) -> tuple[int, str, int]:
     """The target length in words, and the sentence length that goes with it.
 
-    A listening clip is heard once with nothing to go back to, so it is
-    deliberately shorter than the same content on a page (Part 2 §24) — but its
-    sentences keep their band's shape, because what makes listening hard is the
-    clause, not the paragraph.
+    A listening clip is heard once with nothing to go back to, so it is sized
+    by the clock (Part 2 §24) — but its sentences keep their band's shape,
+    because what makes listening hard is the clause, not the paragraph.
 
-    The floor is set by the words themselves: every target word must appear in
-    a sentence whose neighbours give a clue to its meaning — two of the band's
-    own sentences each. It used to be a flat thirty words a word, which is a
-    B2 sentence pair: measured with five words, an A1 passage came back at
-    168 words and 24 sentences, twice its band, and B1 listening was the same
-    length as A2 (ADR-117). An A1 clue sentence is eight words, not fifteen.
+    The length follows the number of target words (ADR-124): a band minimum
+    for one word — fifty at A1, so a single word is never a single line —
+    growing evenly to the band's full length at the most words a session at
+    that band carries (ten up to A2+, fifteen from B1). A practice passage, with
+    no words, gets the full length.
     """
-    words, sentence_length, average = _PASSAGE_SHAPE.get(
-        level.upper().replace("+", "_PLUS"), _PASSAGE_SHAPE["B1"])
+    key = level.upper().replace("+", "_PLUS")
+    _, _, sentence_length, average = _PASSAGE_SHAPE.get(
+        key, _PASSAGE_SHAPE["B1"])
+    full, _ = _full_length(key, listening=listening)
+    least = min(_MIN_WORDS.get(key, _MIN_WORDS["B1"]), full)
+    most = _LOWER_BAND_MOST_WORDS if key in _LOWER_BANDS else _MOST_WORDS
 
-    if listening:
-        words = int(words * 0.6)
-
-    words = max(words, 20 + word_count * 2 * average)
+    if word_count <= 0:
+        words = full
+    else:
+        step = (min(word_count, most) - 1) / (most - 1)
+        words = round(least + (full - least) * step)
 
     # A sentence count as well as a word count, because a word count alone is
     # not something a model can hold itself to: asked for 720 words at C2 it
     # returned 361, and asked for 29 sentences it returns something close to
     # 29. Counting is the instruction it can actually follow (ADR-066).
-    return words, sentence_length, max(4, round(words / average))
+    return words, sentence_length, max(_MIN_SENTENCES, round(words / average))
+
+
+def _passage_room(level: str, word_count: int, *, listening: bool) -> int:
+    """The most words a passage may run to when it needs the room.
+
+    A quarter past its own length, but never past the band's full length plus
+    its room — so three words cannot grow into a full clip.
+    """
+    key = level.upper().replace("+", "_PLUS")
+    length, _, _ = _passage_shape(level, word_count, listening=listening)
+    full, extra = _full_length(key, listening=listening)
+    return max(length, min(round(length * 1.25), full + extra))
 
 
 def wants_inline_glossary(
@@ -586,6 +655,7 @@ def reading_prompt(
     topic = ", ".join(interests[:3]) if interests else "everyday student life"
     length, sentence_length, sentence_count = _passage_shape(
         level, len(words), listening=listening)
+    room = _passage_room(level, len(words), listening=listening)
     word_lines = "\n".join(_target_line(w, option_style) for w in words)
 
     medium = (
@@ -674,9 +744,11 @@ Requirements:
   passage half this long is not the reading practice this level calls for, and
   a short one is the single most common way this task is got wrong.
 - Each sentence about {sentence_length}, so the passage comes to roughly
-  {length} words in total.
+  {length} words in total. That is the preferred length for this level; if the
+  passage needs a little more to read well, it may run to {room} words.
 - Each target word, if any, must appear in a sentence whose neighbours give a
-  real clue to its meaning, WITHOUT defining it.
+  real clue to its meaning, WITHOUT defining it. Leave none of them out: if
+  there are more target words than sentences, a sentence may carry two.
 {STRUCTURE_RULE if _wants_structure(level) else _SIMPLE_SHAPE_RULE}
 {GLOSSARY_RULE if inline_glossary else _NO_INLINE_GLOSSARY}
 - Write exactly {comprehension_count} comprehension questions about the passage.
@@ -1447,7 +1519,7 @@ do not reward length by itself."""
 
 # ── Re-telling a passage at another level ────────────────────────────────────
 
-RELEVEL_PROMPT_VERSION = "relevel-v4"
+RELEVEL_PROMPT_VERSION = "relevel-v8"
 
 
 def relevel_prompt(
@@ -1459,6 +1531,7 @@ def relevel_prompt(
     comprehension_count: int,
     inline_glossary: bool = True,
     option_style: str = ARABIC_MEANING,
+    listening: bool = False,
 ) -> str:
     """Re-tells one passage at a different CEFR level.
 
@@ -1479,8 +1552,13 @@ def relevel_prompt(
     )
 
     easier = to_level < from_level
+    # A Listening session re-told at another level is still a clip to be
+    # heard. This was hard-coded to reading, so moving a listening passage
+    # from B2+ to C1 produced a 27-sentence reading text — nearly five minutes
+    # of audio (ADR-122).
     length, sentence_length, sentence_count = _passage_shape(
-        to_level, len(words), listening=False)
+        to_level, len(words), listening=listening)
+    room = _passage_room(to_level, len(words), listening=listening)
 
     return f"""Re-tell this passage at CEFR level {to_level}. It is currently
 written at {from_level}.
@@ -1507,7 +1585,10 @@ Change only the language:
 - {"Shorter sentences, commoner words, fewer clauses." if easier else
    "Richer vocabulary, more varied sentence structure, more precise wording."}
 - **{sentence_count} sentences**, each about {sentence_length}, coming to
-  roughly {length} words. Count them.
+  roughly {length} words. Count them. That is the preferred length for this
+  level; if the passage needs a little more to read well, it may run to {room}
+  words. Leave no target word out: if there are more of them than sentences,
+  a sentence may carry two.
   {"Say the same things more plainly" if easier else
    "Say the same things with more detail and precision"} — the story does not
   change, only how fully it is told. Invent no new events, and drop none.

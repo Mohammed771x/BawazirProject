@@ -441,7 +441,10 @@ public static class SessionEndpoints
                 // questions, so the options move with the text (ADR-088) — a
                 // learner who dropped to A2 because the passage was too hard
                 // would otherwise keep answering it in English.
-                LevelBands.OptionStyleFor(level.Value)), ct);
+                LevelBands.OptionStyleFor(level.Value),
+                // Without it a listening passage moved from B2+ to C1 came back
+                // as a reading text — nearly five minutes of audio (ADR-122).
+                Listening: session.Skill == SkillType.Listening), ct);
         }
         catch (Exception e) when (e is AiServiceException or HttpRequestException
                                       or TaskCanceledException)
@@ -603,12 +606,20 @@ public static class SessionEndpoints
             .Include(w => w.Skills)
             .ToListAsync(ct);
 
+        // Spelling carries no CEFR band of its own, so its content difficulty
+        // follows Reading: whether an English definition is a usable clue is a
+        // reading-comprehension question (ADR-008).
+        var contentLevel = level.UserSelectedLevel
+                           ?? user.LevelFor(SkillType.Reading).UserSelectedLevel
+                           ?? CefrLevel.B1;
+
         var due = candidates
             .Where(w => w.IsEligibleFor(skillType, now))
             .OrderBy(w => w.SkillState(skillType).AvailableAt ?? w.AddedAt)
             .ThenBy(w => w.AddedAt)
-            // Capped by the learner's daily target for this skill.
-            .Take(level.DailyTargetWords)
+            // Capped by the learner's daily target for this skill, and at ten
+            // below B1 whatever the target says (ADR-126).
+            .Take(config.SessionWordCap(contentLevel, level.DailyTargetWords))
             .ToList();
 
         // Practice keeps a learner reading on a day when the pipeline is empty
@@ -644,13 +655,6 @@ public static class SessionEndpoints
             db.SkillSessions.Remove(open);
             await db.SaveChangesAsync(ct);
         }
-
-        // Spelling carries no CEFR band of its own, so its content difficulty
-        // follows Reading: whether an English definition is a usable clue is a
-        // reading-comprehension question (ADR-008).
-        var contentLevel = level.UserSelectedLevel
-                           ?? user.LevelFor(SkillType.Reading).UserSelectedLevel
-                           ?? CefrLevel.B1;
 
         var session = SkillSession.Start(
             userId.Value, skillType, contentLevel, now, isPractice);

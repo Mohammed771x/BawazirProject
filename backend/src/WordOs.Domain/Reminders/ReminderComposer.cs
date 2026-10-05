@@ -238,7 +238,12 @@ public static class ReminderComposer
                         ? ReminderMessage.WordsDueMorning
                         : ReminderMessage.WordsDueEvening);
 
-                yield return Of(ReminderMessage.WordsDueFiveMinutes);
+                // Not WordsDueFiveMinutes any more (ADR-121). Its line in every
+                // build already installed read, in Arabic, as a saying about
+                // Friday, and the text lives in the app — so the only way to
+                // stop it reaching a phone today is never to choose it. A new
+                // key, so an old build falls back on the kind instead.
+                yield return Of(ReminderMessage.WordsDueShortSession);
                 yield return Of(ReminderMessage.WordsDueCount, slot.WordsDue);
                 break;
 

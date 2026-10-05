@@ -5855,3 +5855,228 @@ exposures and the logged reviews are identical before and after a practice
 that includes a wrong answer, and the next challenge still opens on its day.
 The app has the same check on the mock, plus a walk from the hub card
 through a practice to its result.
+
+## ADR-121 — Listening and Reading are sized in seconds at the bottom of the ladder, and the Friday reminder is gone
+
+**Date:** 2026-10-03 · **Status:** Accepted (local only, not deployed)
+
+**Context.** Two reports from the product owner.
+
+- **An A1 listening clip ran 58 seconds.** The band table was fine. The cause
+  was the floor of two band sentences per target word (ADR-117). With the
+  default daily target of ten words, that floor alone came to
+  `20 + 10 × 2 × 8 = 180` words for A1, and listening was only ever 60% of
+  reading. The prompt also told the model that "a short one is the single most
+  common way this task is got wrong", so nothing pushed back on length. The
+  product owner wants A1 at about 20–25 seconds, growing a step at a time up
+  the ladder, and Reading kept short at the bottom in the same way.
+- **The reminder "خمس دقائق الآن خير من ساعة يوم الجمعة"** ("five minutes now
+  beats an hour on Friday") read in Arabic as a saying about Jumu'ah. It had to
+  go. Its text lives in the app, so changing the app alone would leave it on
+  every phone that has not updated.
+
+**Decision.**
+1. **`_PASSAGE_SHAPE` has its own listening column**, sized in seconds at
+   Edge's ~2.5 words a second: A1 50 words (~20 s), A1+ 70, A2 90, A2+ 110,
+   B1 135, B1+ 160, B2 200, B2+ 230, C1 260, C1+ 290, C2 320. Reading is cut
+   at the bottom: A1 60, A1+ 85, A2 120, A2+ 160, B1 210. B2 and above are
+   unchanged in spirit (B2 360, C1 520, C2 680). A1 sentences are now "5 to 7
+   words".
+2. **The floor is one band sentence per target word** (`words × average`).
+   The neighbours that hint at a word are the other words' sentences.
+3. **The prompt caps length both ways**: "not fewer, and NOT MORE", and
+   "never more than" the length plus 10%. `reading-v7`.
+4. **`WORDS_DUE_FIVE_MINUTES` is never chosen** by `ReminderComposer`. A new
+   key, `WORDS_DUE_SHORT_SESSION`, takes its place in the rotation with a plain
+   line: "خمس دقائق اليوم تكفي لتتقدّم كلماتك خطوة." A build that does not know
+   the new key falls back on the kind, so the Friday line stops on every
+   phone as soon as the server ships, with no app update. The old key stays
+   in both enums so the value still parses, and the app now says the count
+   line for it.
+
+**Measured after**, on the local stack against Gemini (seconds at 2.5 words/s):
+
+| Listening | A1 | A1+ | A2 | B1 | B2 | C1 |
+|---|---|---|---|---|---|---|
+| 5 words | 48 (19 s) | 70 (28 s) | 99 (40 s) | 143 (57 s) | 206 (82 s) | 278 (111 s) |
+| 10 words | 60 (24 s) | 70 (28 s) | 99 (40 s) | 131 (52 s) | 192 (77 s) | 271 (108 s) |
+
+Reading with ten words: A1 60, A2 136, B1 218.
+
+**Trade-off.** One sentence per word is a thinner context than two. At A1 with
+fifteen words due, the floor (90 words, ~36 s) still wins over the band. If
+that turns out to matter, the remedy is fewer target words per passage at the
+low bands, which is a backend decision and not made here.
+
+## ADR-122 — A listening clip is sized by the clock the product owner set, and a re-told one stays a listening clip
+
+**Date:** 2026-10-03 · **Status:** Accepted (local only, not deployed). Supersedes the listening column of ADR-121.
+
+**Context.** Trying ADR-121 on the simulator, the product owner moved a
+Listening session from B2+ to C1 and heard a clip of **4 minutes 57 seconds**.
+The table was not at fault. The level control re-tells the passage through
+`/ai/content/relevel`, and that path was hard-coded to `listening=False`. So any
+listening passage moved to another level came back at **reading** length. The
+log shows it: 24 and 27 sentences at C1/C2. The product owner then set the
+lengths themself:
+
+- A level and its "+" are **the same length**. What differs inside a pair is
+  the language: sentence length and vocabulary by the CEFR band, as the
+  prompts already say.
+- Each pair is **ten seconds** longer than the one below: A1/A1+ 24 s, A2/A2+
+  34 s, B1/B1+ 44 s, B2/B2+ 54 s, C1/C1+ 64 s, C2 74 s.
+
+**Decision.**
+1. **Listening is a column of seconds** in `_PASSAGE_SHAPE`, converted to words
+   at the voice's **measured** pace per band (`_WORDS_PER_SECOND`: A1 2.8, A2
+   3.2, B1 3.15, B2 2.9, C1 2.8, C2 2.7). That pace was measured by
+   synthesising generated passages one sentence at a time, as the app plays
+   them, over three runs.
+2. **Listening has no target-word floor.** The clock is the rule. When there
+   are more target words than sentences, a sentence may carry two of them, and
+   both prompts say so.
+3. **Reading follows the same pairing** in words: A1/A1+ 60, A2/A2+ 120,
+   B1/B1+ 210, B2/B2+ 360, C1/C1+ 520, C2 680. It keeps its one-sentence-per-word
+   floor.
+4. **The re-telling knows what it is re-telling.** `RelevelRequest.Listening`
+   (C# and Python) is set from `session.Skill == Listening`, and the relevel
+   prompt has the same "never more than" ceiling as the first passage.
+   `reading-v8`, `relevel-v5`.
+5. Sentence averages A2 8→9 and C2 25→23, so the sentence count the model is
+   given matches what it actually writes.
+
+**Measured after** (real audio from Edge, ten target words, seconds):
+
+| A1 | A1+ | A2 | A2+ | B1 | B1+ | B2 | B2+ | C1 | C1+ | C2 | C1 re-told from B2+ |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 22–24 | 21 | 34–35 | 33 | 40–43 | 48 | 47 | 48 | 63 | 60 | 72–77 | 61–74 |
+
+All of the first-passage rows were taken before the last pace adjustment
+except A2, C2 and the re-telling, which were measured again after it. A clip
+lands within a few seconds of its target, not on it. The model's sentences
+vary, and so does the voice's pace from one text to the next. A re-telling
+runs a little long, because its words are the story's and not the band's
+shortest.
+
+## ADR-123 — The clock is the preferred length, with ten seconds of room; the passage prompt is otherwise the original
+
+**Date:** 2026-10-04 · **Status:** Accepted (local only, not deployed). Amends ADR-121/122.
+
+**Context.** With fifteen words at A1, ADR-122 held the clip to 22–25 s, but
+the text read as separate sentences. A "one connected story" rule fixed that,
+and the product owner rejected it. A passage need not be a story. The texts
+the original prompt wrote, a short article on management or on textiles, were
+what they wanted. Their instruction: restore the original prompts and change
+only the length. The seconds are the preferred size, the passage may run up
+to ten seconds over when it needs to, and accuracy matters more than the
+clock.
+
+Restoring the original wording (and the original sentence lengths per band)
+exposed one more thing. With fifteen words, A1 was given eight sentences and
+**dropped a target word** in two of four runs, and C1 dropped one too. In
+Listening, a word missing from the clip is still asked about: "what did the
+word you heard mean?" for a word never said.
+
+**Decision.**
+1. **The passage and re-telling prompts are the committed ones** (`reading-v6`,
+   `relevel-v4`) with only the length lines changed. The ADR-121/122 "NOT MORE"
+   wording, the coherence rule and the two-words-a-sentence default are gone.
+   So are the shortened sentence ranges. Each band's sentence length is the
+   original CEFR one again (A1 "6 to 9 words", and so on).
+2. **The length is preferred, with room**: "That is the preferred length for
+   this level; if the passage needs a little more to read well, it may run to
+   {room} words." `_passage_room` is the clock plus **ten seconds** for
+   listening (`_LISTENING_ROOM_SECONDS`) and a **fifth** for reading
+   (`_READING_ROOM`).
+3. **Many words stretch a clip, only within that room.** Listening's length is
+   `min(max(clock, words × band sentence), clock + 10 s)`. It also carries one
+   line: leave no target word out, and when there are more words than
+   sentences a sentence may carry two.
+4. `reading-v9`, `relevel-v6`.
+
+**Measured after**, real audio:
+
+| | A1 | A2 | B1 | B2 | C1 | C2 |
+|---|---|---|---|---|---|---|
+| 5 words (s) | 18.5 | 38.5 | 54.1 | 54.6 | 64.4 | 83.1 |
+| 15 words (s) | 25.8 / 27.6 / 27.2 | | 57.0 | | 75.8 / 65.1 | |
+
+All fifteen words were present in all six fifteen-word runs. Five-word clips
+land within the ten seconds of room, and several sit on their target.
+
+## ADR-124 — A passage's length follows its number of target words; the band's figure is what ten words get
+
+**Date:** 2026-10-04 · **Status:** Accepted (local only, not deployed). Amends ADR-122/123.
+
+**Context.** The product owner pointed out that the band's seconds had become a
+size for every session. A clip with three words still ran 24 s at A1. Their
+rule: the length follows the words. Fewer words get a shorter clip, and ten
+words get the band's 24 s.
+
+**Decision.**
+1. **The band's figure is the length for `_FULL_LENGTH_WORDS` = 10**, the
+   default daily target. Up to ten words, the length is proportional to the
+   word count. Past ten it grows linearly, reaching the room (ten seconds for
+   listening, a fifth for reading) at fifteen, the most a session carries. A
+   practice passage, with no words, gets the full length.
+2. **The floor is four of the band's sentences** (`_MIN_SENTENCES`). Fewer is
+   not a passage.
+3. **Room is a quarter of the passage's own length**, never past the full
+   length plus the band's room, so three words cannot grow into a whole clip.
+4. Reading moves the same way, from its own full length. `reading-v10`,
+   `relevel-v7`.
+
+**Measured after**, real audio, listening:
+
+| | 3 words | 5 words | 10 words | 15 words |
+|---|---|---|---|---|
+| A1 | 9.6 s | 9.9 s | 18.6 / 20.6 s | 31.8 s |
+| B1 | | 20.6 s | 46.6 s | |
+| C1 | | 29.8 s | 62.4 s | |
+
+Every target word was present in all nine runs.
+
+## ADR-126 — Every passage starts from a band minimum, and a beginner's session carries at most ten words
+
+**Date:** 2026-10-05 · **Status:** Accepted (local only, not deployed). Amends ADR-124.
+
+**Context.** Under ADR-124, three words at A1 came back as about five short
+lines. That is too little to read as a paragraph, and too little to write
+comprehension questions about. The product owner set the rule:
+
+- **Words per session:** a learner from A1 to A2+ practises at most **ten**
+  words per session. From B1 up, the daily target may run to fifteen.
+- **Minimum length:** every passage starts from a minimum, **fifty words** at
+  A1 to A2+, so even one word gets a proper paragraph.
+- **Growth:** the passage grows with each word, up to the band's full length
+  at the most words that band can carry.
+- Listening follows the same rule.
+
+**Decision.**
+1. **Backend: `SessionWordCap`.** A session takes
+   `min(daily target, LowerBandMaxSessionWords = 10)` at or below
+   `LowerBandCeiling = A2Plus`, and the daily target above it. Both values are
+   configuration (R3). The learner's own target is stored as they set it.
+   Only the session is capped, so a learner who moves up a band gets their
+   chosen target back. The hub's `sessionWordCount` applies the same cap from
+   the same level.
+2. **AI service: the length runs from a minimum to the full length.** The
+   minimum (`_MIN_WORDS`) is 50 words at A1 to A2+, 70 at B1/B1+, 90 at
+   B2/B2+, 110 at C1/C1+ and 130 at C2. The length grows evenly to the band's
+   full length (its seconds or reading words) at ten words up to A2+ and
+   fifteen from B1. A practice passage, with no words, gets the full length.
+   `reading-v11`, `relevel-v8`.
+
+**Planned length**, listening, in seconds at the measured pace:
+
+| | 1 word | 3 | 5 | 10 | 15 |
+|---|---|---|---|---|---|
+| A1/A1+ | 18 | 19 | 21 | 24 | (capped at 10) |
+| A2/A2+ | 16 | 20 | 24 | 34 | (capped at 10) |
+| B1 | 22 | 25 | 29 | 36 | 44 |
+| C1 | 39 | 43 | 46 | 55 | 64 |
+
+**Measured** with real audio: A1 1 word 13.7 s (six sentences), 3 words
+17.5 s, 5 words 16.3 s, 10 words 18.7 s; A2 3 words 20.5 s, 10 words 32.4 s;
+B1 5 words 32.8 s, 15 words 43.2 s; C1 15 words 63.8 s. Every target word was
+present in every run.

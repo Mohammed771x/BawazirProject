@@ -104,6 +104,14 @@ public static class HubEndpoints
                 ? level.DailyTargetWords
                 : config.DefaultDailyTarget;
 
+            // The same cap the session applies (ADR-126), from the same level:
+            // the skill's own, or Reading's for Spelling, which has none.
+            var contentLevel = level?.UserSelectedLevel
+                               ?? (levels.TryGetValue(SkillType.Reading, out var reading)
+                                   ? reading.UserSelectedLevel : null)
+                               ?? CefrLevel.B1;
+            target = config.SessionWordCap(contentLevel, target);
+
             var active = openSessions.FirstOrDefault(s => s.Skill == skill)?.Id;
 
             cards.Add(new SkillCardResponse(

@@ -366,12 +366,14 @@ public sealed class StubAiContentService : IAiContentService
 
     /// <summary>Re-tellings requested, and the level each asked for.</summary>
     public List<CefrLevel> RelevelRequests { get; } = [];
+    public List<bool> RelevelListening { get; } = [];
 
     public Task<GeneratedContent> RelevelContentAsync(
         RelevelRequest request,
         CancellationToken ct = default)
     {
         RelevelRequests.Add(request.ToLevel);
+        RelevelListening.Add(request.Listening);
         if (Fail) throw new WordOs.Infrastructure.Ai.AiServiceException("stub outage");
 
         // Recognisably the *same* story, told differently — which is the

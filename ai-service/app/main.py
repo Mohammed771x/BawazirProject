@@ -186,6 +186,9 @@ class RelevelRequest(BaseModel):
     words: list[TargetWord] = Field(default_factory=list, max_length=15)
     comprehension_count: int = Field(default=5, ge=1, le=10)
     option_style: str = Field(default=prompts.ARABIC_MEANING, max_length=32)
+    # A Listening passage re-told is still heard, and is sized by the clock
+    # (ADR-122). False for a caller that predates it, which is reading.
+    listening: bool = False
 
 
 class WritingRequest(BaseModel):
@@ -928,7 +931,7 @@ def relevel_content(request: RelevelRequest) -> ContentResponse:
     started = time.monotonic()
 
     inline = prompts.wants_inline_glossary(
-        request.to_level, len(request.words), listening=False)
+        request.to_level, len(request.words), listening=request.listening)
 
     prompt = prompts.relevel_prompt(
         text=request.text,
@@ -938,6 +941,7 @@ def relevel_content(request: RelevelRequest) -> ContentResponse:
         comprehension_count=request.comprehension_count,
         inline_glossary=inline,
         option_style=request.option_style,
+        listening=request.listening,
     )
 
     generated = _generate_json(

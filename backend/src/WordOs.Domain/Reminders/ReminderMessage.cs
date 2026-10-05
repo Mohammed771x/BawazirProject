@@ -39,7 +39,18 @@ public enum ReminderMessage
     WordsDueOne,
 
     /// <summary>The size of the ask, rather than the size of the list.</summary>
+    /// <remarks>
+    /// Never chosen any more (ADR-121): its line in every installed build read,
+    /// in Arabic, as a saying about Friday. Kept so the wire value still means
+    /// what it meant; <see cref="WordsDueShortSession"/> took its place.
+    /// </remarks>
     WordsDueFiveMinutes,
+
+    /// <summary>
+    /// The size of the ask, said plainly (ADR-121). A build that predates it
+    /// does not know the key and falls back on the kind, which is a true line.
+    /// </summary>
+    WordsDueShortSession,
 
     /// <summary>Morning framing — before the day takes the time.</summary>
     WordsDueMorning,

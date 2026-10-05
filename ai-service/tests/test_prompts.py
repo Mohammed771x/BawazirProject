@@ -22,7 +22,7 @@ from app import prompts
 # Part 5 text runs 500–600, and C1 Advanced's whole paper is 3,000–3,500.
 
 
-def _passage_words(level: str, count: int = 1, *, listening: bool = False) -> int:
+def _passage_words(level: str, count: int = 15, *, listening: bool = False) -> int:
     return prompts._passage_shape(level, count, listening=listening)[0]
 
 
@@ -55,30 +55,106 @@ def test_a_listening_clip_is_shorter_than_the_same_reading():
     assert _passage_words("B2", listening=True) < _passage_words("B2")
 
 
-def test_every_target_word_still_fits_when_there_are_many():
-    """The floor is the words themselves, whatever the band says: each needs a
-    sentence of its own with neighbours that hint at its meaning."""
-    # Two of the band's own sentences per word: eight words each at A1.
-    assert _passage_words("A1", 12, listening=True) >= 12 * 2 * 8
-    assert _passage_words("C1", 12, listening=True) >= 12 * 2 * 20
-
-
 def test_the_floor_does_not_flatten_the_bands():
     """Measured with five words: A1 came back at 168 words, twice its band,
     and B1 listening at the length of A2 (ADR-117). Each band must stay
     longer than the one below it, reading and listening alike, at the word
     counts a session actually uses."""
     ladder = ["A1", "A2", "B1", "B2", "C1", "C2"]
-    for count in (3, 5, 8):
+    for count in (3, 5, 8, 10):
         for listening in (False, True):
             lengths = [_passage_words(level, count, listening=listening)
                        for level in ladder]
             assert lengths == sorted(lengths), (count, listening, lengths)
             assert lengths[0] < lengths[2] < lengths[4], (count, listening, lengths)
 
-    # A beginner's five-word passage stays a beginner's length.
-    assert _passage_words("A1", 5) <= 110
-    assert _passage_words("A1", 5, listening=True) <= 110
+
+def _seconds(level: str, count: int) -> float:
+    pace = prompts._WORDS_PER_SECOND[level.removesuffix("_PLUS")]
+    return _passage_words(level, count, listening=True) / pace
+
+
+def test_a_full_session_gets_the_seconds_the_product_owner_set():
+    """A level and its "+" share one length, ten seconds a pair: 24, 34, 44,
+    54, 64, 74 (ADR-122) — reached at the most words a session at that band
+    carries: ten up to A2+, fifteen from B1 (ADR-124)."""
+    seconds = {"A1": 24, "A1_PLUS": 24, "A2": 34, "A2_PLUS": 34,
+               "B1": 44, "B1_PLUS": 44, "B2": 54, "B2_PLUS": 54,
+               "C1": 64, "C1_PLUS": 64, "C2": 74}
+    for level, want in seconds.items():
+        most = 10 if level[0] == "A" else 15
+        assert abs(_seconds(level, most) - want) < 1, level
+
+    # Inside a pair the clock is the same and the language is not.
+    assert _passage_words("A1", 10, listening=True) == \
+        _passage_words("A1_PLUS", 10, listening=True)
+    assert prompts._passage_shape("A1", 10, listening=True)[1] != \
+        prompts._passage_shape("A1_PLUS", 10, listening=True)[1]
+
+
+def test_one_word_still_gets_a_paragraph():
+    """The product owner: three words at A1 came back as five lines, too few
+    to ask questions about. Every passage starts from a band minimum — fifty
+    words from A1 to A2+ — however few words it carries (ADR-124)."""
+    for level in ("A1", "A1_PLUS", "A2", "A2_PLUS"):
+        for listening in (False, True):
+            assert _passage_words(level, 1, listening=listening) == 50
+    assert _passage_words("B1", 1) > 50
+    assert _passage_words("C2", 1) > _passage_words("B1", 1)
+
+
+def test_the_length_grows_with_the_words_up_to_the_band_cap():
+    """It grows with every word and stops at the session's cap: ten words up
+    to A2+, fifteen from B1 — the cap the backend applies."""
+    for level in ("A1", "A2", "B1", "C1"):
+        for listening in (False, True):
+            lengths = [_passage_words(level, n, listening=listening)
+                       for n in range(1, 16)]
+            assert lengths == sorted(lengths), (level, listening, lengths)
+
+    assert _passage_words("A1", 10) == _passage_words("A1", 15)
+    assert _passage_words("A2", 5) < _passage_words("A2", 10)
+    assert _passage_words("B1", 10) < _passage_words("B1", 15)
+    # A practice passage has no words and gets the full length.
+    assert _passage_words("B1", 0) == _passage_words("B1", 15)
+
+
+def test_the_length_is_preferred_and_may_run_a_little_long():
+    """The product owner's order (ADR-123): the length is preferred, not fixed,
+    and the prompt is otherwise the one that wrote the passages they liked."""
+    prompt = prompts.reading_prompt(
+        level="A1", interests=[], words=[], listening=True,
+        comprehension_count=5)
+    room = prompts._passage_room("A1", 0, listening=True)
+
+    assert "preferred length for this level" in prompt
+    assert f"it may run to {room} words" in prompt
+    assert "ONE CONNECTED PIECE" not in prompt
+
+    # A quarter past its own length, never past the full clip plus ten seconds.
+    one = _passage_words("A1", 1, listening=True)
+    assert prompts._passage_room("A1", 1, listening=True) == round(one * 1.25)
+    full = _passage_words("A1", 10, listening=True)
+    ten_seconds = round(10 * prompts._WORDS_PER_SECOND["A1"])
+    assert prompts._passage_room("A1", 10, listening=True) <= full + ten_seconds
+
+    retold = prompts.relevel_prompt(
+        text="x", from_level="A2", to_level="A1", words=[],
+        comprehension_count=5, listening=True)
+    assert "preferred length for this level" in " ".join(retold.split())
+
+
+def test_a_listening_passage_is_retold_at_listening_length():
+    """Re-telling was hard-coded to reading: a listening clip moved from B2+ to
+    C1 came back as 27 sentences, nearly five minutes of audio (ADR-122)."""
+    def sentences(listening: bool) -> str:
+        return prompts.relevel_prompt(
+            text="x", from_level="B2_PLUS", to_level="C1", words=[],
+            comprehension_count=5, listening=listening)
+
+    heard = _passage_words("C1", 0, listening=True)
+    assert f"roughly {heard} words" in sentences(True)
+    assert f"roughly {heard} words" not in sentences(False)
 
 
 def test_an_unknown_band_falls_back_rather_than_raising():
@@ -320,7 +396,7 @@ def test_listening_and_reading_ask_for_different_things():
 
 def test_the_prompt_version_is_stated_and_stable():
     """It is recorded against every session, so it must not drift silently."""
-    assert prompts.READING_PROMPT_VERSION == "reading-v6"
+    assert prompts.READING_PROMPT_VERSION == "reading-v11"
     assert prompts.WRITING_PROMPT_VERSION == "writing-eval-v1"
 
 

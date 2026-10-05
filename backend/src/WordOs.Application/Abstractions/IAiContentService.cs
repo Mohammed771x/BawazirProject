@@ -244,7 +244,10 @@ public sealed record RelevelRequest(
     // Re-telling a passage regenerates its questions, so it has to be told the
     // register too — a learner who asked for an easier text did not ask for
     // options in another language (ADR-088).
-    MeaningOptionStyle OptionStyle = MeaningOptionStyle.ArabicMeaning);
+    MeaningOptionStyle OptionStyle = MeaningOptionStyle.ArabicMeaning,
+    // A Listening passage re-told is still a clip to be heard, and is sized by
+    // the clock rather than as a page (ADR-122).
+    bool Listening = false);
 
 public sealed record WritingEvaluationRequest(
     string Word,

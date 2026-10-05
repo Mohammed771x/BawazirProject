@@ -919,7 +919,7 @@ class MockEngine {
                 : ReminderMessage.wordsDueEvening,
             0
           ),
-          (ReminderMessage.wordsDueFiveMinutes, 0),
+          (ReminderMessage.wordsDueShortSession, 0),
           (ReminderMessage.wordsDueCount, due),
         ]);
       case ReminderKind.nothingDue:

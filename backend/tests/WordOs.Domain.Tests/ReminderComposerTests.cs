@@ -156,6 +156,19 @@ public class ReminderComposerTests
     }
 
     [Fact]
+    public void The_friday_line_is_never_sent()
+    {
+        // Its text lives in the app, and in Arabic it read as a saying about
+        // Friday (ADR-121). Not choosing it is what stops it on builds already
+        // installed — whatever the facts, across a busy week and a quiet one.
+        var weeks = Compose(Week(), Facts())
+            .Concat(Compose(Week(), Facts(streak: 5)));
+
+        Assert.DoesNotContain(weeks, c => c.Message == ReminderMessage.WordsDueFiveMinutes);
+        Assert.Contains(weeks, c => c.Message == ReminderMessage.WordsDueShortSession);
+    }
+
+    [Fact]
     public void The_count_is_not_stated_every_single_time()
     {
         // The product owner's instruction in one assertion: do not tell them

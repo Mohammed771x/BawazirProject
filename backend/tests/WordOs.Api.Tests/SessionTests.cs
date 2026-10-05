@@ -2866,6 +2866,32 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task A_listening_passage_is_retold_as_a_listening_passage()
+    {
+        // It used to be retold as a reading text: moved from B2+ to C1, a
+        // listening clip came back nearly five minutes long (ADR-122).
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("research", "بحث علمي");
+
+        var reading = await StartAsync("reading");
+        var readingResponse = await Client.PostAsJsonAsync(
+            $"/api/sessions/{reading.GetProperty("id").GetGuid()}/level",
+            new { level = "A2" });
+        readingResponse.EnsureSuccessStatusCode();
+        await FinishAsync(await readingResponse.Content.ReadFromJsonAsync<JsonElement>());
+        Clock.SkipDays(2);
+
+        var session = await StartAsync("listening");
+        var response = await Client.PostAsJsonAsync(
+            $"/api/sessions/{session.GetProperty("id").GetGuid()}/level",
+            new { level = "C1" });
+        response.EnsureSuccessStatusCode();
+
+        Assert.Equal([false, true], Ai.RelevelListening.TakeLast(2));
+    }
+
+    [SkippableFact]
     public async Task A_passage_can_be_retold_at_another_level_before_the_questions()
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);

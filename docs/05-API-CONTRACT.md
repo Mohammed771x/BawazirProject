@@ -198,7 +198,7 @@ handed one item at a time instead of a fixed list.
   "dailyProgress": { "wordsAddedToday": 4, "dailyTarget": 10 },
   "skills": [
     { "skill":"READING", "availability":"AVAILABLE",   // AVAILABLE | EMPTY | LOCKED
-      "dueWordCount": 7, "sessionWordCount": 5,        // sessionWordCount = target-capped
+      "dueWordCount": 7, "sessionWordCount": 5,        // sessionWordCount = target-capped, and at most 10 up to A2+ (ADR-126)
       "level":"B1", "nextDueAt": null,
       // An unfinished session. This is how a session survives the app being
       // killed: the client stores nothing about sessions (R4), it asks the hub.
@@ -415,7 +415,7 @@ handed one item at a time instead of a fixed list.
     { "slot": "MORNING", "date": "2026-09-14", "hour": 8, "minute": 0,
       "kind": "WORDS_DUE", "message": "WORDS_DUE_STREAK", "count": 5 },
     { "slot": "EVENING", "date": "2026-09-14", "hour": 20, "minute": 0,
-      "kind": "WORDS_DUE", "message": "WORDS_DUE_FIVE_MINUTES", "count": 0 } ] }
+      "kind": "WORDS_DUE", "message": "WORDS_DUE_SHORT_SESSION", "count": 0 } ] }
 ```
 
 > `kind` is the coarse one — three values, unchanged since ADR-076. `message` is
@@ -474,7 +474,8 @@ handed one item at a time instead of a fixed list.
 > * **Reading, Listening** — the same passage is re-told at the new level and its
 >   questions regenerated. Refused with `SESSION_STARTED` once the learner has
 >   answered anything, because re-telling replaces the items their answers belong
->   to.
+>   to. A Listening passage is re-told at the new level's **listening** length,
+>   which is set in seconds (ADR-122).
 > * **Speaking, Writing** — nothing is regenerated. The level is an input to what
 >   happens next: the tutor's next reply, or the rewrite the learner is shown
 >   after they write. Allowed at any point.

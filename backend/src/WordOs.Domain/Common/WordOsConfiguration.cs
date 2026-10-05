@@ -24,6 +24,19 @@ public sealed record WordOsConfiguration
 
     public int DefaultDailyTarget { get; init; } = 10;
 
+    /// <summary>
+    /// The most words one session carries at or below
+    /// <see cref="LowerBandCeiling"/> (ADR-126). The product owner's rule: a
+    /// beginner up to A2+ practises at most ten words a day, and from B1 up the
+    /// daily target may run to <see cref="MaxDailyTarget"/>. The learner's own
+    /// target is kept as they set it — this caps the session, so moving up a
+    /// band hands them back what they chose.
+    /// </summary>
+    public int LowerBandMaxSessionWords { get; init; } = 10;
+
+    /// <summary>The highest band <see cref="LowerBandMaxSessionWords"/> applies to.</summary>
+    public CefrLevel LowerBandCeiling { get; init; } = CefrLevel.A2Plus;
+
     public int WeeklyReviewPeriodDays { get; init; } = 7;
 
     /// <summary>
@@ -375,4 +388,10 @@ public sealed record WordOsConfiguration
 
     public int ClampDailyTarget(int target) =>
         Math.Clamp(target, MinDailyTarget, MaxDailyTarget);
+
+    /// <summary>How many due words one session at <paramref name="level"/> takes.</summary>
+    public int SessionWordCap(CefrLevel level, int dailyTarget) =>
+        level <= LowerBandCeiling
+            ? Math.Min(dailyTarget, LowerBandMaxSessionWords)
+            : dailyTarget;
 }
