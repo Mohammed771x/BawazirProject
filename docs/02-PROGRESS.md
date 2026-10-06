@@ -58,10 +58,12 @@ cd admin-web && npm run dev:mock    # no backend: invented data, bannered
 
 Sign in with an Owner account (locally `owner@wordos.app`; production `ahmed@gmail.com`).
 
-**To deploy (not done):** apply migration `AdminIntelligence` as `wordos_migrator`, check the
-grants listed at the end of ADR-125, deploy the image (it now builds `admin-web` itself), and
-open `https://wordos-api.onrender.com/admin/`. Install a build of the app carrying the tracker,
-or every phone-side chart stays empty — and says so.
+**Deployed 2026-10-06.** `AdminIntelligence` applied to Neon as `wordos_migrator` (50 users,
+1,104 words before and after; a learner-data backup without the lexicon was taken first, kept
+outside the repository), the four new tables granted to `wordos_app` and checked with
+`has_table_privilege`, then `db50f97` pushed and served at `https://wordos-api.onrender.com/admin/`.
+**Still to do:** install a build of the app carrying the tracker, or every phone-side chart stays
+empty — and says so.
 
 ## Demo review round 2 — 2026-09-10
 
