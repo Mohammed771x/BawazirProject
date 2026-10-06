@@ -7,6 +7,7 @@ using Npgsql;
 using WordOs.Application.Abstractions;
 using WordOs.Application.Sessions;
 using WordOs.Application.Words;
+using WordOs.Domain.Analytics;
 using WordOs.Domain.Common;
 using WordOs.Domain.Levels;
 using WordOs.Domain.Sessions;
@@ -38,12 +39,19 @@ namespace WordOs.Api.Endpoints;
 /// </remarks>
 public static class SessionEndpoints
 {
+    /// <param name="ElapsedMs">
+    /// How long the learner spent on this attempt, by the phone's clock —
+    /// from the question appearing to the answer leaving. Optional and only
+    /// ever recorded (ADR-125); nothing about passing reads it.
+    /// </param>
     public sealed record AnswerRequest(
         [property: Required] Guid ItemId,
-        [property: Required, MaxLength(4000)] string Answer);
+        [property: Required, MaxLength(4000)] string Answer,
+        int? ElapsedMs = null);
 
     public sealed record SpeakingTurnRequestDto(
-        [property: Required, MaxLength(4000)] string Transcript);
+        [property: Required, MaxLength(4000)] string Transcript,
+        int? ElapsedMs = null);
 
     public static IEndpointRouteBuilder MapSessionEndpoints(
         this IEndpointRouteBuilder app)
@@ -598,6 +606,13 @@ public static class SessionEndpoints
 
         var level = user.LevelFor(skillType);
 
+        // Spelling carries no CEFR band of its own, so its content difficulty
+        // follows Reading: whether an English definition is a usable clue is a
+        // reading-comprehension question (ADR-008).
+        var contentLevel = level.UserSelectedLevel
+                           ?? user.LevelFor(SkillType.Reading).UserSelectedLevel
+                           ?? CefrLevel.B1;
+
         // Which words are due is a server decision: it depends on the spaced
         // gap and each word's current skill (rule R1).
         var candidates = await db.Words
@@ -605,13 +620,6 @@ public static class SessionEndpoints
                         && w.CurrentSkill == skillType)
             .Include(w => w.Skills)
             .ToListAsync(ct);
-
-        // Spelling carries no CEFR band of its own, so its content difficulty
-        // follows Reading: whether an English definition is a usable clue is a
-        // reading-comprehension question (ADR-008).
-        var contentLevel = level.UserSelectedLevel
-                           ?? user.LevelFor(SkillType.Reading).UserSelectedLevel
-                           ?? CefrLevel.B1;
 
         var due = candidates
             .Where(w => w.IsEligibleFor(skillType, now))
@@ -847,6 +855,7 @@ public static class SessionEndpoints
         ClaimsPrincipal principal,
         WordOsDbContext db,
         WordOsConfiguration config,
+        TimeProvider clock,
         CancellationToken ct)
     {
         if (!MiniValidator.TryValidate(request, out var errors))
@@ -887,6 +896,14 @@ public static class SessionEndpoints
         var requeued = session.RecordAttempt(
             item, isCorrect, config, session.ClearedCount);
 
+        // The attempt itself, which the item keeps only as a count (ADR-125).
+        ServerEvents.Add(db, session.UserId, AnalyticsEventNames.AnswerSubmitted,
+            clock.GetUtcNow(),
+            sessionId: session.Id, wordId: item.WordId, skill: session.Skill,
+            attempt: item.Attempts, passed: isCorrect, durationMs: request.ElapsedMs,
+            level: session.Skill == SkillType.Spelling ? null : session.LevelUsed,
+            props: new { itemType = item.Type.ToWire(), requeued });
+
         await db.SaveChangesAsync(ct);
 
         var word = item.WordId is null
@@ -920,6 +937,7 @@ public static class SessionEndpoints
         WordOsDbContext db,
         IAiContentService ai,
         WordOsConfiguration config,
+        TimeProvider clock,
         CancellationToken ct)
     {
         if (!MiniValidator.TryValidate(request, out var errors))
@@ -973,6 +991,26 @@ public static class SessionEndpoints
         item.SetAnswer(sentence);
         var requeued = session.RecordAttempt(
             item, passed, config, session.ClearedCount);
+
+        // What the evaluator saw, which until now went to the phone and
+        // nowhere else — so a failed sentence could not be told apart from a
+        // missing word (ADR-125). Flags only; the sentence stays on the item.
+        ServerEvents.Add(db, session.UserId, AnalyticsEventNames.WritingEvaluated,
+            clock.GetUtcNow(),
+            sessionId: session.Id, wordId: item.WordId, skill: SkillType.Writing,
+            attempt: item.Attempts, passed: passed, durationMs: request.ElapsedMs,
+            level: session.LevelUsed,
+            props: new
+            {
+                observation.UsedWord,
+                observation.MeaningCorrect,
+                observation.UsageCorrect,
+                observation.Understandable,
+                grammarIssue = !string.IsNullOrWhiteSpace(observation.GrammarNote)
+                    && !observation.GrammarNote.Equals("none", StringComparison.OrdinalIgnoreCase),
+                fromFallback = observation.FromFallback,
+                requeued,
+            });
 
         await db.SaveChangesAsync(ct);
 
@@ -1224,6 +1262,21 @@ public static class SessionEndpoints
         history.Add(new TranscriptEntry(true, turn.Reply));
         session.SetTranscript(JsonSerializer.Serialize(history));
 
+        // One learner turn: how long it took them and whether it used a word
+        // (ADR-125). The transcript keeps what was said; this keeps the shape.
+        ServerEvents.Add(db, session.UserId, AnalyticsEventNames.SpeakingTurn,
+            clock.GetUtcNow(),
+            sessionId: session.Id, skill: SkillType.Speaking,
+            attempt: learnerTurns, durationMs: request.ElapsedMs,
+            level: session.LevelUsed,
+            props: new
+            {
+                wordsUsed = confirmed.Count,
+                wordsRemaining = remaining.Count,
+                onlyAsked,
+                isFinal,
+            });
+
         // A conversation is generated content too. Keyed by session, so a word
         // the AI keeps returning to across ten turns is still one exposure.
         var activeWords = await db.Words
@@ -1411,6 +1464,28 @@ public static class SessionEndpoints
             // failed, and nothing else (ADR-048).
             spoken.TryGetValue(word.Id, out var observation);
 
+            // Why this word passed or failed Speaking — the evaluator's flags
+            // were the verdict's inputs and were never kept (ADR-125).
+            if (session.Skill == SkillType.Speaking)
+            {
+                ServerEvents.Add(db, session.UserId, AnalyticsEventNames.SpeakingWordEvaluated,
+                    now, sessionId: session.Id, wordId: word.Id, skill: SkillType.Speaking,
+                    attempt: word.Skills.First(s => s.Skill == SkillType.Speaking).Attempts,
+                    passed: passed, level: session.LevelUsed,
+                    props: new
+                    {
+                        evaluated = observation is not null,
+                        recordedAsUsed = session.UsedWords
+                            .Contains(word.Text, StringComparer.OrdinalIgnoreCase),
+                        used = observation?.Used,
+                        meaningCorrect = observation?.MeaningCorrect,
+                        understandable = observation?.Understandable,
+                        grammarAcceptable = observation?.GrammarAcceptable,
+                        majorGrammarProblem = observation?.MajorGrammarProblem,
+                        learnerSpoke,
+                    });
+            }
+
             outcomes.Add(new
             {
                 wordId = word.Id,
@@ -1544,6 +1619,7 @@ public static class SessionEndpoints
         Guid id,
         ClaimsPrincipal principal,
         WordOsDbContext db,
+        TimeProvider clock,
         CancellationToken ct)
     {
         var userId = principal.UserId();
@@ -1575,6 +1651,27 @@ public static class SessionEndpoints
 
         if (session is not null)
         {
+            // The session row goes; the fact that it was walked away from, how
+            // far in and after how long, stays (ADR-125).
+            var answered = await db.SessionItems
+                .Where(i => i.SessionId == session.Id)
+                .Select(i => new { i.Attempts, i.IsCleared, i.WordId })
+                .ToListAsync(ct);
+            var now = clock.GetUtcNow();
+
+            ServerEvents.Add(db, session.UserId, AnalyticsEventNames.SessionAbandoned, now,
+                sessionId: session.Id, skill: session.Skill,
+                durationMs: (int)Math.Min(int.MaxValue, (now - session.StartedAt).TotalMilliseconds),
+                level: session.Skill == SkillType.Spelling ? null : session.LevelUsed,
+                props: new
+                {
+                    items = answered.Count,
+                    answered = answered.Count(i => i.Attempts > 0),
+                    cleared = answered.Count(i => i.IsCleared),
+                    words = answered.Where(i => i.WordId != null).Select(i => i.WordId).Distinct().Count(),
+                    practice = session.IsPractice,
+                });
+
             db.SkillSessions.Remove(session);
             await db.SaveChangesAsync(ct);
         }

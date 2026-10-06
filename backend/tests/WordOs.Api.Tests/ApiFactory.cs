@@ -100,6 +100,10 @@ public sealed class ApiFactory(string connectionString)
             services.RemoveAll<ISpeechSynthesizer>();
             services.AddSingleton<ISpeechSynthesizer>(Voice);
 
+            // The admin interpreter never reaches a model either (ADR-125).
+            services.RemoveAll<IAdminInsightService>();
+            services.AddSingleton<IAdminInsightService>(Insight);
+
             services.RemoveAll<IAiContentService>();
             services.AddSingleton(Ai);
             services.AddScoped<IAiContentService>(provider =>
@@ -123,6 +127,9 @@ public sealed class ApiFactory(string connectionString)
 
     /// <summary>The deterministic stand-in for Gemini.</summary>
     public StubAiContentService Ai { get; } = new();
+
+    /// <summary>The stand-in for the admin area's interpreter.</summary>
+    public StubAdminInsightService Insight { get; } = new();
 
     /// <summary>The stand-in for Gemini-then-Groq transcription.</summary>
     public StubSpeechTranscriber Speech { get; } = new();

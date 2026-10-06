@@ -486,3 +486,19 @@ public sealed class StubAiContentService : IAiContentService
             PromptVersion: "stub-eval-v1", Model: "stub", Tokens: 0));
     }
 }
+/// <summary>
+/// The admin interpreter, scripted (ADR-125). Null by default — "the model is
+/// unavailable" — which is the path that must always still answer.
+/// </summary>
+public sealed class StubAdminInsightService : IAdminInsightService
+{
+    public InsightResponse? Next { get; set; }
+
+    public InsightRequest? LastRequest { get; private set; }
+
+    public Task<InsightResponse?> InterpretAsync(InsightRequest request, CancellationToken ct = default)
+    {
+        LastRequest = request;
+        return Task.FromResult(Next);
+    }
+}

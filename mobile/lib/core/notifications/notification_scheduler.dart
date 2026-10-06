@@ -3,6 +3,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
+import '../analytics/app_signals.dart';
 
 /// One notification, already written, waiting for a time.
 ///
@@ -108,7 +109,16 @@ class DeviceNotificationScheduler implements NotificationScheduler {
             requestSoundPermission: false,
           ),
         ),
+        // A tap is reported for the admin area — whether reminders bring
+        // anyone back is one of the questions it exists to answer (ADR-125).
+        onDidReceiveNotificationResponse: (_) => AppSignals.notificationTapped(),
       );
+
+      // Opened from a reminder while the app was not running at all.
+      final launch = await _plugin.getNotificationAppLaunchDetails();
+      if (launch?.didNotificationLaunchApp ?? false) {
+        AppSignals.notificationTapped();
+      }
 
       await _plugin
           .resolvePlatformSpecificImplementation<

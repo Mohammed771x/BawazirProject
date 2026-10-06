@@ -246,6 +246,7 @@ class MockWordOsApi implements WordOsApi {
     required String sessionId,
     required String itemId,
     required String sentence,
+    int? timeMs,
   }) =>
       _write(
         () => engine.submitWriting(_user, sessionId, itemId, sentence),
@@ -280,6 +281,7 @@ class MockWordOsApi implements WordOsApi {
   Future<SpeakingTurn> submitSpeakingTurn({
     required String sessionId,
     required String transcript,
+    int? timeMs,
   }) =>
       _write(
         () => engine.submitSpeakingTurn(_user, sessionId, transcript),
@@ -307,6 +309,7 @@ class MockWordOsApi implements WordOsApi {
     required String reviewId,
     required String itemId,
     required String answer,
+    int? timeMs,
   }) =>
       _write(
         () => engine.answerWeeklyReview(_user, reviewId, itemId, answer),
@@ -375,8 +378,16 @@ class MockWordOsApi implements WordOsApi {
       _write(() => engine.adminAdvanceSchedule(_user, userId, days: days));
 
   @override
-  Future<void> sendFeedback(String body) =>
+  Future<void> sendFeedback(String body, {FeedbackTopic? topic}) =>
       _write(() => engine.sendFeedback(_user, body));
+
+  /// Telemetry has no simulated consumer; kept so a test can see what the
+  /// screens reported.
+  final List<ClientEvent> trackedEvents = [];
+
+  @override
+  Future<void> trackEvents(List<ClientEvent> events) async =>
+      trackedEvents.addAll(events);
 
   @override
   Future<FeedbackPage> adminFeedback({bool? handledOnly, int page = 0}) =>

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/analytics/analytics_tracker.dart';
 import '../../core/api/api_providers.dart';
 import '../../core/api/wordos_api.dart';
 import '../../core/audio/speech_recognition_service.dart';
@@ -119,12 +120,43 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   bool _transcribing = false;
   late final SpeechRecognitionService _mic;
 
+  /// On-screen behaviour for the admin area (ADR-125). Captured in
+  /// [initState] for the same reason as [_api]: [dispose] reports the screen
+  /// closing, and `ref` is gone by then.
+  late final AnalyticsTracker _tracker;
+
+  /// How long the screen has been open — Learning Time is measured from it.
+  final Stopwatch _screenClock = Stopwatch()..start();
+
+  /// Time on the current question, from it appearing to the answer leaving.
+  final Stopwatch _itemClock = Stopwatch()..start();
+
+  /// When the Writing feedback appeared, to measure how long it was read.
+  DateTime? _feedbackShownAt;
+
+  void _restartItemClock() => _itemClock
+    ..reset()
+    ..start();
+
+  void _track(String name, {String? wordId, int? durationMs, Map<String, Object?>? props}) =>
+      _tracker.track(
+        name,
+        sessionId: _session?.id,
+        wordId: wordId,
+        skill: widget.skill,
+        durationMs: durationMs,
+        level: widget.skill == SkillType.spelling ? null : _session?.levelUsed.wire,
+        screen: 'session',
+        props: props,
+      );
+
   @override
   void initState() {
     super.initState();
     _api = ref.read(wordOsApiProvider);
     _speech = ref.read(speechServiceProvider);
     _mic = ref.read(speechRecognitionProvider);
+    _tracker = ref.read(analyticsTrackerProvider);
     _start();
   }
 
@@ -139,6 +171,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     // backs out mid-turn should not be recorded, or talked at.
     _mic.cancel().ignore();
     _speech.stop().ignore();
+    // How long the lesson was in front of the learner, and whether they left
+    // it unfinished — the two things only this screen can see (ADR-125).
+    if (_session != null) {
+      if (_result == null) {
+        _track(ClientEvents.exerciseExited, props: {
+          'answered': _progress?.answered ?? 0,
+          'remaining': _progress?.remaining ?? 0,
+        });
+      }
+      _track(ClientEvents.screenLeft, durationMs: _screenClock.elapsedMilliseconds);
+    }
+    unawaited(_tracker.flush());
     _freeText.dispose();
     _chatInput.dispose();
     _chatScroll.dispose();
@@ -457,6 +501,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         sessionId: _session!.id,
         itemId: item.id,
         answer: answer,
+        timeMs: _itemClock.elapsedMilliseconds,
       );
       if (mounted) {
         setState(() {
@@ -501,8 +546,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         sessionId: _session!.id,
         itemId: item.id,
         sentence: sentence,
+        timeMs: _itemClock.elapsedMilliseconds,
       );
       if (mounted) {
+        _feedbackShownAt = DateTime.now();
         setState(() {
           _lastWriting = evaluation;
           _progress = evaluation.progress;
@@ -562,6 +609,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
     setState(() {
       _voice = _VoicePhase.listening;
+      // A turn is timed from the moment the learner is handed the floor.
+      _restartItemClock();
       _heard = '';
     });
 
@@ -682,6 +731,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       final turn = await _api.submitSpeakingTurn(
         sessionId: _session!.id,
         transcript: text,
+        timeMs: _itemClock.elapsedMilliseconds,
       );
       if (!mounted) return;
 
@@ -747,6 +797,15 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
       _complete();
       return;
     }
+    final shown = _feedbackShownAt;
+    if (_lastWriting != null && shown != null) {
+      _track(ClientEvents.feedbackViewed,
+          wordId: _currentItem?.wordId,
+          durationMs: DateTime.now().difference(shown).inMilliseconds,
+          props: {'passed': _lastWriting!.passed});
+    }
+    _feedbackShownAt = null;
+    _restartItemClock();
     setState(() {
       _currentItemId = nextId;
       _lastAnswer = null;
@@ -1114,13 +1173,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 ],
                 const SizedBox(height: AppSpacing.md),
                 if (isListening)
-                  _ListeningPlayer(text: content.text, color: color)
+                  _ListeningPlayer(
+                    text: content.text,
+                    color: color,
+                    onAudio: (event) => _track(event),
+                  )
                 else
                   AppCard(
                     child: HighlightedPassage(
                       content: content,
                       color: color,
-                      onWordTap: (word, {required isTarget}) => showWordLookup(
+                      onWordTap: (word, {required isTarget}) {
+                        _track(ClientEvents.translationOpened,
+                            props: {'word': word, 'isTarget': isTarget});
+                        showWordLookup(
                         context,
                         word: word,
                         isTarget: isTarget,
@@ -1132,7 +1198,8 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                         // sentence. Null falls back to the dictionary, which
                         // can only offer every sense the word has ever had.
                         inContext: content.glossaryFor(word),
-                      ),
+                      );
+                      },
                     ),
                   ),
                 if (!isListening) ...[
@@ -1177,6 +1244,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                   _passageRevisit = false;
                 } else {
                   _contentDone = true;
+                  // The first question's clock starts when it appears, not
+                  // when the passage did.
+                  _restartItemClock();
                 }
               });
             },
@@ -1566,7 +1636,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           if (_hintStep < item.hints.length - 1) ...[
             const SizedBox(height: AppSpacing.xs),
             TextButton.icon(
-              onPressed: () => setState(() => _hintStep++),
+              onPressed: () {
+                _track(ClientEvents.hintUsed,
+                    wordId: item.wordId, props: {'step': _hintStep + 1});
+                setState(() => _hintStep++);
+              },
               icon: const Icon(Icons.lightbulb_outline_rounded, size: 18),
               label: Text(_hintStep == 0 ? s.showHint : s.easierHint),
             ),
@@ -2353,10 +2427,13 @@ class _FeedbackBanner extends StatelessWidget {
 /// a media scrubber instead of in visible jumps; only where it *lands* is
 /// sentence-granular.
 class _ListeningPlayer extends ConsumerStatefulWidget {
-  const _ListeningPlayer({required this.text, required this.color});
+  const _ListeningPlayer({required this.text, required this.color, this.onAudio});
 
   final String text;
   final Color color;
+
+  /// Reports play, replay, pause and completion for the admin area (ADR-125).
+  final void Function(String event)? onAudio;
 
   @override
   ConsumerState<_ListeningPlayer> createState() => _ListeningPlayerState();
@@ -2414,8 +2491,30 @@ class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
   // is the point of the pause — it names what is coming, exactly as an exam
   // prints it above the audio — and the clip begins when they say so (ADR-080).
 
+  /// Whether the clip has been started at all, and whether it had reached
+  /// its end — the difference between a play, a replay and a completion.
+  bool _everPlayed = false;
+  bool _wasFinished = false;
+
   void _repaint() {
+    if (_clip.finished && !_wasFinished) widget.onAudio?.call(ClientEvents.audioCompleted);
+    _wasFinished = _clip.finished;
     if (mounted) setState(() {});
+  }
+
+  void _toggle() {
+    final report = widget.onAudio;
+    if (report != null) {
+      if (_clip.isPlaying) {
+        report(ClientEvents.audioPaused);
+      } else if (!_everPlayed) {
+        report(ClientEvents.audioPlayed);
+      } else if (_clip.finished || _clip.position == 0) {
+        report(ClientEvents.audioReplayed);
+      }
+    }
+    _everPlayed = true;
+    unawaited(_clip.toggle());
   }
 
   @override
@@ -2456,7 +2555,11 @@ class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
                 iconSize: 30,
                 color: widget.color,
                 tooltip: s.jumpToStart,
-                onPressed: () => unawaited(_clip.seekTo(0)),
+                onPressed: () {
+                  // Back to the top is a replay in all but name.
+                  if (_everPlayed) widget.onAudio?.call(ClientEvents.audioReplayed);
+                  unawaited(_clip.seekTo(0));
+                },
                 icon: const Icon(Icons.first_page_rounded),
               ),
               const SizedBox(width: AppSpacing.sm),
@@ -2470,7 +2573,7 @@ class _ListeningPlayerState extends ConsumerState<_ListeningPlayer> {
                 child: IconButton(
                   iconSize: 40,
                   color: widget.color,
-                  onPressed: () => unawaited(_clip.toggle()),
+                  onPressed: _toggle,
                   // Three faces, and each one states what the *next* tap does.
                   //
                   // Pausing used to leave a replay face on the button, which

@@ -143,6 +143,7 @@ class FlakyWordOsApi implements WordOsApi {
     required String sessionId,
     required String itemId,
     required String sentence,
+    int? timeMs,
   }) =>
       _inner.submitWriting(
           sessionId: sessionId, itemId: itemId, sentence: sentence);
@@ -151,6 +152,7 @@ class FlakyWordOsApi implements WordOsApi {
   Future<SpeakingTurn> submitSpeakingTurn({
     required String sessionId,
     required String transcript,
+    int? timeMs,
   }) =>
       _inner.submitSpeakingTurn(
           sessionId: sessionId, transcript: transcript);
@@ -178,6 +180,7 @@ class FlakyWordOsApi implements WordOsApi {
     required String reviewId,
     required String itemId,
     required String answer,
+    int? timeMs,
   }) =>
       _inner.answerWeeklyReview(
           reviewId: reviewId, itemId: itemId, answer: answer);

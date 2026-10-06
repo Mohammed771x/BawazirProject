@@ -1475,6 +1475,19 @@ class AppStrings {
         'ما الذي حدث؟ أو ما الذي تودّ رؤيته؟',
       );
   String get feedbackSend => _('Send', 'إرسال');
+  String get feedbackTopicLabel => _('What is it about?', 'عن أي جزء؟');
+
+  /// The short names of the feedback topics (ADR-125).
+  String feedbackTopic(FeedbackTopic topic) => switch (topic) {
+        FeedbackTopic.reading => _('Reading', 'القراءة'),
+        FeedbackTopic.listening => _('Listening', 'الاستماع'),
+        FeedbackTopic.speaking => _('Speaking', 'المحادثة'),
+        FeedbackTopic.writing => _('Writing', 'الكتابة'),
+        FeedbackTopic.spelling => _('Spelling', 'التهجئة'),
+        FeedbackTopic.weeklyReview => _('Weekly review', 'المراجعة الأسبوعية'),
+        FeedbackTopic.addWord => _('Adding words', 'إضافة كلمة'),
+        FeedbackTopic.other => _('Something else', 'شيء آخر'),
+      };
   String get feedbackSending => _('Sending…', 'جارٍ الإرسال…');
   String get feedbackSent =>
       _('Sent — thank you.', 'تم الإرسال — شكرًا لك.');

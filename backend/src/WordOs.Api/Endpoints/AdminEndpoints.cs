@@ -1026,4 +1026,7 @@ public static class AdminEndpoints
 public static class Policies
 {
     public const string OwnerOnly = "OwnerOnly";
+
+    /// <summary>Owner or Analyst — the admin website (ADR-125).</summary>
+    public const string AdminArea = "AdminArea";
 }

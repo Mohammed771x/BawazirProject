@@ -749,6 +749,10 @@ class _FeedbackDialog extends ConsumerStatefulWidget {
 
 class _FeedbackDialogState extends ConsumerState<_FeedbackDialog> {
   final _controller = TextEditingController();
+
+  /// What the learner says it is about; optional, so a learner in a hurry
+  /// is never stopped from writing (ADR-125).
+  FeedbackTopic? _topic;
   bool _sending = false;
   String? _error;
 
@@ -768,7 +772,7 @@ class _FeedbackDialogState extends ConsumerState<_FeedbackDialog> {
     });
 
     try {
-      await ref.read(wordOsApiProvider).sendFeedback(body);
+      await ref.read(wordOsApiProvider).sendFeedback(body, topic: _topic);
       if (mounted) Navigator.of(context).pop(true);
     } catch (rawError) {
       final e = ApiException.from(rawError);
@@ -791,7 +795,10 @@ class _FeedbackDialogState extends ConsumerState<_FeedbackDialog> {
 
     return AlertDialog(
       title: Text(s.feedbackTitle),
-      content: Column(
+      // Scrolls: with the topic chips the form is taller than a small phone
+      // with its keyboard up.
+      content: SingleChildScrollView(
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -800,6 +807,23 @@ class _FeedbackDialogState extends ConsumerState<_FeedbackDialog> {
             style: context.text.bodySmall?.copyWith(
               color: context.colors.onSurface.withValues(alpha: 0.7),
             ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(s.feedbackTopicLabel, style: context.text.labelMedium),
+          const SizedBox(height: AppSpacing.xs),
+          Wrap(
+            spacing: AppSpacing.xs,
+            runSpacing: AppSpacing.xs,
+            children: [
+              for (final topic in FeedbackTopic.values)
+                ChoiceChip(
+                  label: Text(s.feedbackTopic(topic)),
+                  selected: _topic == topic,
+                  onSelected: _sending
+                      ? null
+                      : (on) => setState(() => _topic = on ? topic : null),
+                ),
+            ],
           ),
           const SizedBox(height: AppSpacing.sm),
           TextField(
@@ -825,6 +849,7 @@ class _FeedbackDialogState extends ConsumerState<_FeedbackDialog> {
             ),
           ],
         ],
+        ),
       ),
       actions: [
         TextButton(

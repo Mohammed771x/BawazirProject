@@ -37,6 +37,9 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
   int _remaining = 0;
   String? _selected;
 
+  /// Time on the current question, recorded with the answer (ADR-125).
+  final Stopwatch _itemClock = Stopwatch()..start();
+
   @override
   void initState() {
     super.initState();
@@ -82,6 +85,7 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
             reviewId: _session!.id,
             itemId: item.id,
             answer: answer,
+            timeMs: _itemClock.elapsedMilliseconds,
           );
       if (mounted) {
         setState(() {
@@ -133,6 +137,9 @@ class _WeeklyReviewScreenState extends ConsumerState<WeeklyReviewScreen> {
     }
     setState(() {
       _current = result.nextItem;
+      _itemClock
+        ..reset()
+        ..start();
       _lastResult = null;
       _selected = null;
     });

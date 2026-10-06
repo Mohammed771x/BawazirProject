@@ -600,6 +600,25 @@ Sign out and in again — the role is carried in the token.
 
 ---
 
+## 6½ · The admin website (ADR-125)
+
+Nothing extra to host: the Dockerfile builds `admin-web/` and the API serves it at
+**`https://wordos-api.onrender.com/admin/`**, same origin as the API.
+
+1. Apply the migration `AdminIntelligence` the usual way (§1, as `wordos_migrator`).
+2. If `ALTER DEFAULT PRIVILEGES` does not cover new tables, grant them by hand:
+
+   ```bash
+   psql "$NEON_URL" -c "SET ROLE wordos_migrator; GRANT SELECT, INSERT, UPDATE, DELETE ON analytics_events, admin_notes, admin_inquiries, admin_audit_events TO wordos_app; GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO wordos_app;"
+   ```
+
+3. Deploy the image, open `/admin/`, sign in as the Owner.
+4. An Analyst (every figure, no contact details) is promoted like an Owner (§6):
+   `UPDATE users SET "Role" = 'Analyst' WHERE "Email" = '…';`
+
+Thresholds live in the `AdminIntel` configuration section (`AdminIntel__OverdueDays`, …);
+the defaults are in `backend/src/WordOs.Api/Admin/IntelDataset.cs`.
+
 ## What will run out first
 
 Not the server. In order:

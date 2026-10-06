@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/analytics/analytics_tracker.dart';
+import '../core/analytics/app_signals.dart';
+import '../core/models/models.dart';
 import '../core/l10n/app_strings.dart';
 import '../core/notifications/reminder_providers.dart';
 import '../core/storage/app_preferences.dart';
@@ -32,25 +35,61 @@ class WordOsApp extends ConsumerStatefulWidget {
 
 class _WordOsAppState extends ConsumerState<WordOsApp>
     with WidgetsBindingObserver {
+  final List<StreamSubscription<Object?>> _signals = [];
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
+    // What the HTTP layer and the notification plugin noticed, turned into
+    // events for the admin area (ADR-125). Only for a signed-in learner: an
+    // event needs an account to belong to.
+    _signals.add(AppSignals.apiFailures.listen((f) {
+      if (!ref.read(sessionProvider).isSignedIn) return;
+      ref.read(analyticsTrackerProvider).track(ClientEvents.apiError,
+          result: 'error', props: {'code': f.code, 'path': f.path, 'status': f.status});
+    }));
+    _signals.add(AppSignals.notificationTaps.listen((_) {
+      if (!ref.read(sessionProvider).isSignedIn) return;
+      ref.read(analyticsTrackerProvider).track(ClientEvents.notificationOpened);
+    }));
+
     // After the first frame: this runs during `build` otherwise, and a provider
     // read that touches the network there is a build that does I/O.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshReminders());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshReminders();
+      _trackForeground();
+    });
   }
 
   @override
   void dispose() {
+    for (final s in _signals) {
+      s.cancel();
+    }
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refreshReminders();
+    if (state == AppLifecycleState.resumed) {
+      _refreshReminders();
+      _trackForeground();
+    }
+    // App Time ends when the app leaves the screen (ADR-125).
+    if (state == AppLifecycleState.paused &&
+        ref.read(sessionProvider).isSignedIn) {
+      ref.read(analyticsTrackerProvider).appBackgrounded();
+    }
+  }
+
+  /// App Time starts — only for a signed-in learner, whose events have an
+  /// account to belong to.
+  void _trackForeground() {
+    if (!mounted || !ref.read(sessionProvider).isSignedIn) return;
+    ref.read(analyticsTrackerProvider).appOpened();
   }
 
   /// Rewrites the pending reminders, if there is anybody to remind.

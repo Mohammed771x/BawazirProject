@@ -1,3 +1,9 @@
 
 # Local run logs from ./wordos
 .logs/
+
+# The admin website, copied in by the Dockerfile (ADR-125) — never committed.
+backend/src/WordOs.Api/wwwroot/admin/
+
+# Local speech experiments (multi-GB models) — never committed.
+labs/

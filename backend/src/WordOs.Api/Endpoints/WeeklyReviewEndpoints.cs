@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using WordOs.Domain.Analytics;
 using WordOs.Domain.Common;
 using WordOs.Domain.Review;
 using WordOs.Domain.Words;
@@ -27,7 +28,8 @@ public static class WeeklyReviewEndpoints
 {
     public sealed record ReviewAnswerRequest(
         [property: Required] Guid ItemId,
-        [property: Required, MaxLength(512)] string Answer);
+        [property: Required, MaxLength(512)] string Answer,
+        int? ElapsedMs = null);
 
     public static IEndpointRouteBuilder MapWeeklyReviewEndpoints(
         this IEndpointRouteBuilder app)
@@ -269,6 +271,14 @@ public static class WeeklyReviewEndpoints
 
         item.MarkAnswered(now);
         var requeued = review.RecordAttempt(item, isCorrect, config.MaxAttemptsPerItem);
+
+        // Measurement, which is all R9 allows this review to write: the
+        // analytics log is on the list of what it may touch (04-DATA-MODEL
+        // invariant 6). The item keeps one flag; this keeps every attempt.
+        ServerEvents.Add(db, review.UserId, AnalyticsEventNames.ReviewAnswered, now,
+            sessionId: review.Id, wordId: item.WordId, attempt: item.Attempts,
+            passed: isCorrect, durationMs: request.ElapsedMs,
+            props: new { practice = review.IsPractice, requeued });
 
         // Being reviewed is exposure. Rule R8: a priority signal, never a limit
         // and never a delete trigger.

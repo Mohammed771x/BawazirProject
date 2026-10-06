@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using WordOs.Domain.Analytics;
 using WordOs.Domain.Common;
 using WordOs.Domain.Levels;
 using WordOs.Domain.Lexicon;
@@ -56,6 +57,15 @@ public class WordOsDbContext(
 
     /// <summary>What learners have written to the Owner (ADR-053).</summary>
     public DbSet<FeedbackMessage> FeedbackMessages => Set<FeedbackMessage>();
+
+    /// <summary>Attempt history, AI judgements and on-screen behaviour (ADR-125).</summary>
+    public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
+
+    public DbSet<AdminNote> AdminNotes => Set<AdminNote>();
+
+    public DbSet<AdminInquiry> AdminInquiries => Set<AdminInquiry>();
+
+    public DbSet<AdminAuditEvent> AdminAuditEvents => Set<AdminAuditEvent>();
 
     public DbSet<Word> Words => Set<Word>();
 
@@ -250,6 +260,7 @@ public class WordOsDbContext(
             e.Property(x => x.AppVersion).HasMaxLength(32);
             e.Property(x => x.Platform).HasMaxLength(32);
             e.Property(x => x.Status).HasConversion<string>().HasMaxLength(16);
+            e.Property(x => x.Category).HasConversion<string?>().HasMaxLength(16);
 
             // The one query the Owner makes: unread first, newest first.
             e.HasIndex(x => new { x.Status, x.CreatedAt });
@@ -257,6 +268,75 @@ public class WordOsDbContext(
 
             e.HasOne<User>().WithMany()
                 .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<AnalyticsEvent>(e =>
+        {
+            e.ToTable("analytics_events");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).HasMaxLength(48).IsRequired();
+            e.Property(x => x.Source).HasConversion<string>().HasMaxLength(8);
+            e.Property(x => x.Skill).HasConversion<string?>().HasMaxLength(16);
+            e.Property(x => x.AppSessionId).HasMaxLength(64);
+            e.Property(x => x.Result).HasMaxLength(16);
+            e.Property(x => x.ContentLevel).HasMaxLength(8);
+            e.Property(x => x.Screen).HasMaxLength(48);
+            e.Property(x => x.AppVersion).HasMaxLength(32);
+            e.Property(x => x.Platform).HasMaxLength(16);
+            e.Property(x => x.PropsJson).HasColumnType("jsonb");
+
+            // A learner's timeline, and one event across everyone in a window.
+            e.HasIndex(x => new { x.UserId, x.OccurredAt });
+            e.HasIndex(x => new { x.Name, x.OccurredAt });
+            e.HasIndex(x => x.SessionId);
+
+            e.HasOne<User>().WithMany()
+                .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<AdminNote>(e =>
+        {
+            e.ToTable("admin_notes");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Body).HasMaxLength(2000).IsRequired();
+            e.HasIndex(x => new { x.FeedbackId, x.CreatedAt });
+
+            e.HasOne<FeedbackMessage>().WithMany()
+                .HasForeignKey(x => x.FeedbackId).OnDelete(DeleteBehavior.Cascade);
+            // The author is not cascaded: removing an admin must not erase
+            // what they wrote about a learner's report.
+            e.HasOne<User>().WithMany()
+                .HasForeignKey(x => x.AuthorId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<AdminInquiry>(e =>
+        {
+            e.ToTable("admin_inquiries");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Section).HasMaxLength(32).IsRequired();
+            e.Property(x => x.Question).HasMaxLength(1000).IsRequired();
+            e.Property(x => x.Summary).HasMaxLength(2000);
+            e.Property(x => x.InterpretedBy).HasMaxLength(8);
+            e.Property(x => x.ResultJson).HasColumnType("jsonb");
+            e.HasIndex(x => x.CreatedAt);
+
+            e.HasOne<User>().WithMany()
+                .HasForeignKey(x => x.AuthorId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<AdminAuditEvent>(e =>
+        {
+            e.ToTable("admin_audit_events");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Action).HasMaxLength(48).IsRequired();
+            e.Property(x => x.TargetId).HasMaxLength(64);
+            e.Property(x => x.Detail).HasMaxLength(256);
+            e.Property(x => x.ClientAddress).HasMaxLength(64);
+            e.HasIndex(x => x.CreatedAt);
+            e.HasIndex(x => new { x.ActorId, x.CreatedAt });
+
+            e.HasOne<User>().WithMany()
+                .HasForeignKey(x => x.ActorId).OnDelete(DeleteBehavior.Restrict);
         });
 
         b.Entity<Word>(e =>

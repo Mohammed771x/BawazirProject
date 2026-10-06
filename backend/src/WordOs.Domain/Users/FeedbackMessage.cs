@@ -15,6 +15,26 @@ public enum FeedbackStatus
 }
 
 /// <summary>
+/// What the feedback is about (admin brief §17).
+/// </summary>
+/// <remarks>
+/// Chosen by the learner from a short list, not inferred from the text: a
+/// classifier that files "the audio is too fast" under Reading is worse than
+/// no category at all. Messages sent before categories existed have none.
+/// </remarks>
+public enum FeedbackCategory
+{
+    Reading,
+    Listening,
+    Speaking,
+    Writing,
+    Spelling,
+    WeeklyReview,
+    AddWord,
+    Other,
+}
+
+/// <summary>
 /// Something a learner wanted to tell the Owner (ADR-053).
 /// </summary>
 /// <remarks>
@@ -57,6 +77,9 @@ public sealed class FeedbackMessage
 
     public FeedbackStatus Status { get; private set; } = FeedbackStatus.New;
 
+    /// <summary>What it is about; null for messages sent before categories.</summary>
+    public FeedbackCategory? Category { get; private set; }
+
     public DateTimeOffset CreatedAt { get; private set; }
 
     /// <summary>When the Owner marked it dealt with.</summary>
@@ -67,7 +90,8 @@ public sealed class FeedbackMessage
         string body,
         DateTimeOffset now,
         string? appVersion = null,
-        string? platform = null)
+        string? platform = null,
+        FeedbackCategory? category = null)
     {
         var text = body?.Trim() ?? string.Empty;
 
@@ -82,6 +106,7 @@ public sealed class FeedbackMessage
             AppVersion = Trimmed(appVersion),
             Platform = Trimmed(platform),
             Status = FeedbackStatus.New,
+            Category = category,
             CreatedAt = now,
         };
     }

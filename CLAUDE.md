@@ -29,6 +29,7 @@ measurable.
 | `mobile/` | Flutter app (built). |
 | `backend/` | ASP.NET Core 10 + PostgreSQL 17 — built, with the lexicon importer in `tools/`. |
 | `ai-service/` | Python FastAPI layer holding the Gemini key — built. |
+| `admin-web/` | WordOS Admin — the Arabic product-intelligence website (React + Vite), served by the API at `/admin` (ADR-125). |
 
 ## The nine rules that must never be broken
 
@@ -185,3 +186,25 @@ Two rules when touching them:
 Load is measured, not assumed: `ab -n 5000 -c 1000` against a local instance
 with rate limits raised (a real crowd arrives from a thousand addresses, so the
 per-caller limiter would otherwise mask the test).
+
+## Working in `admin-web/`
+
+```bash
+cd admin-web
+npm install
+npm run dev        # http://localhost:5180/admin/ — proxies /api to ./wordos start's API
+npm run dev:mock   # no backend; invented data under a banner
+npm run build      # tsc + vite — must stay clean
+```
+
+- **`src/api/client.ts`** is the contract (`AdminApi`), mirrored by `MockAdminApi`. Types in
+  `src/api/types.ts` mirror `backend/src/WordOs.Api/Admin/*` exactly; change both together and
+  `docs/05-API-CONTRACT.md` §Admin intelligence.
+- **No metric is computed in the browser.** Every figure comes from `/api/admin/intel`; the
+  site formats and draws (the same rule as R1).
+- Charts are hand-built SVG in `src/components/charts/Charts.tsx`, coloured by the app's own
+  skill palette (validated for colour-blind separation in both themes) — no chart library.
+- Global filters live in the URL (`src/lib/filters.tsx`), so a filtered view is a link.
+- Thresholds ("overdue", "abandoned", "weak") are the backend's `AdminIntel` configuration,
+  never constants in either place (R3).
+

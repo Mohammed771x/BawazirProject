@@ -4,6 +4,7 @@
 library;
 
 export 'admin.dart';
+export 'analytics.dart';
 export 'enums.dart';
 export 'hub.dart';
 export 'placement.dart';

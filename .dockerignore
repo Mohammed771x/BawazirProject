@@ -13,6 +13,8 @@ WordOS Decumentation/
 **/.venv/
 **/__pycache__/
 **/*.user
+**/node_modules/
+admin-web/dist/
 
 # Never. These are secrets and local state, and an image is a thing people pull.
 **/.env

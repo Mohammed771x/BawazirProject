@@ -111,6 +111,16 @@ public enum UserRole
 {
     User,
     Owner,
+
+    /// <summary>
+    /// Reads the admin area without the learners' contact details (ADR-125).
+    /// </summary>
+    /// <remarks>
+    /// For a product manager or analyst who needs every figure and no one's
+    /// phone number. Promoted with SQL, like an Owner (ADR-061); there is no
+    /// route to it.
+    /// </remarks>
+    Analyst,
 }
 
 public enum OnboardingStage

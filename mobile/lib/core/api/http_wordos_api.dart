@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 
 import '../models/models.dart';
 import 'api_providers.dart';
+import '../analytics/app_signals.dart';
 import 'wordos_api.dart';
 
 /// Real implementation against the ASP.NET Core backend (Phase 5).
@@ -262,6 +263,24 @@ class HttpWordOsApi implements WordOsApi {
     } on DioException catch (e) {
       final status = e.response?.statusCode;
       final data = e.response?.data;
+
+      // The failures a learner experiences as "the app is broken" — no
+      // connection, the server falling over, being throttled — are reported
+      // for the admin area (ADR-125). A 4xx with a code is the server
+      // answering, not failing, and stays out of it.
+      if (status == null || status >= 500 || status == 429) {
+        final code = data is Map && data['error'] is Map
+            ? ((data['error'] as Map)['code'] as String? ?? 'HTTP_$status')
+            : status == null
+                ? 'NETWORK'
+                : 'HTTP_$status';
+        AppSignals.apiFailed(
+          code,
+          e.requestOptions.path.replaceAll(
+              RegExp(r'[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}'), ':id'),
+          status,
+        );
+      }
 
       // A structured error from our own backend is the one case where the
       // message is safe to show — the backend authored it for a user.
@@ -602,6 +621,7 @@ class HttpWordOsApi implements WordOsApi {
       AnswerResult.fromJson(await _post('/sessions/$sessionId/answer', {
         'itemId': itemId,
         'answer': answer,
+        'elapsedMs': ?timeMs,
       }));
 
   @override
@@ -634,20 +654,23 @@ class HttpWordOsApi implements WordOsApi {
     required String sessionId,
     required String itemId,
     required String sentence,
+    int? timeMs,
   }) async =>
       WritingEvaluation.fromJson(await _post('/sessions/$sessionId/writing', {
         'itemId': itemId,
         'answer': sentence,
+        'elapsedMs': ?timeMs,
       }));
 
   @override
   Future<SpeakingTurn> submitSpeakingTurn({
     required String sessionId,
     required String transcript,
+    int? timeMs,
   }) async =>
       SpeakingTurn.fromJson(await _post(
         '/sessions/$sessionId/speaking/turn',
-        {'transcript': transcript},
+        {'transcript': transcript, 'elapsedMs': ?timeMs},
       ));
 
   @override
@@ -705,11 +728,13 @@ class HttpWordOsApi implements WordOsApi {
     required String reviewId,
     required String itemId,
     required String answer,
+    int? timeMs,
   }) async =>
       ReviewAnswerResult.fromJson(
         await _post('/weekly-review/$reviewId/answer', {
           'itemId': itemId,
           'answer': answer,
+          'elapsedMs': ?timeMs,
         }),
       );
 
@@ -770,11 +795,25 @@ class HttpWordOsApi implements WordOsApi {
       AdminUserDetail.fromJson(await _get('/admin/users/$userId'));
 
   @override
-  Future<void> sendFeedback(String body) async {
+  Future<void> sendFeedback(String body, {FeedbackTopic? topic}) async {
     // The build travels with the message so the Owner is not left guessing
     // which version "it crashed" happened on (ADR-053).
     await _post('/feedback', {
       'body': body,
+      'appVersion': AppEnvironment.version,
+      'platform': AppEnvironment.platformName,
+      if (topic != null) 'category': topic.wire,
+    });
+  }
+
+  @override
+  Future<void> trackEvents(List<ClientEvent> events) async {
+    if (events.isEmpty) return;
+    // Straight to Dio, not `_post`: telemetry changes nothing a screen shows,
+    // so it must not announce a change (ADR-094), and its own failure must not
+    // be reported as an api_error event about itself.
+    await _dio.post<dynamic>('/events', data: {
+      'events': [for (final e in events) e.toJson()],
       'appVersion': AppEnvironment.version,
       'platform': AppEnvironment.platformName,
     });

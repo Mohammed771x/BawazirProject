@@ -849,7 +849,7 @@ activity log (ADR-025) — the raw trail behind every figure beside it.
 
 // ── Feedback (ADR-053) ───────────────────────────────────────────────────────
 //
-// | POST  | `/feedback`                | `{body, appVersion?, platform?}` → `{id, sentAt}` |
+// | POST  | `/feedback`                | `{body, appVersion?, platform?, category?}` → `{id, sentAt}` — `category` ∈ READING · LISTENING · SPEAKING · WRITING · SPELLING · WEEKLY_REVIEW · ADD_WORD · OTHER; unknown values are dropped, not refused (ADR-125) |
 // | GET   | `/admin/feedback?status=`  | → `{items, total, unread, page, hasMore}` |
 // | PATCH | `/admin/feedback/{id}`     | `{handled}` → `{id, status, handledAt}` |
 //
@@ -897,3 +897,113 @@ activity log (ADR-025) — the raw trail behind every figure beside it.
   "signInCount": 17
 }
 ```
+
+---
+
+## Telemetry (ADR-125)
+
+| Method | Path | Body → Response |
+|---|---|---|
+| POST | `/events` | `{events:[ClientEvent], appVersion?, platform?}` → `{accepted, rejected}` |
+
+Any signed-in account. At most **50 events** per request (`400 BATCH_TOO_LARGE`
+otherwise). An event whose `name` is not on the phone's list — including the
+names only the server writes — is dropped and counted in `rejected`, never
+refusing the rest of the batch. A timestamp more than a day from the server's
+clock is replaced by the arrival time.
+
+```jsonc
+// ClientEvent — all fields but `name` optional
+{
+  "name": "translation_opened",   // app_opened · app_backgrounded · screen_viewed · screen_left ·
+                                  // translation_opened · audio_played · audio_replayed · audio_paused ·
+                                  // audio_completed · hint_used · feedback_viewed · exercise_exited ·
+                                  // notification_opened · api_error · empty_state_shown
+  "at": "2026-10-04T09:12:03Z",
+  "appSessionId": "9f2c…",        // one foreground stretch of the app
+  "sessionId": "…", "wordId": "…", "skill": "READING",
+  "attempt": 1, "result": "ok", "durationMs": 1200, "level": "B1", "screen": "session",
+  "props": { "word": "garden", "isTarget": false }   // flat scalars only; nested values are dropped
+}
+```
+
+The answer routes take an optional **`elapsedMs`** — time from the question
+appearing to the answer leaving, by the phone's clock — on
+`POST /sessions/{id}/answer`, `/sessions/{id}/writing`,
+`/sessions/{id}/speaking/turn` and `/weekly-review/{id}/answer`. It is recorded
+only; nothing about passing reads it.
+
+What the **server** writes into the same log: `answer_submitted` (every
+attempt, with its result and time), `writing_evaluated` and
+`speaking_word_evaluated` (the evaluator's flags — why a judgement failed),
+`speaking_turn`, `review_answered`, `session_abandoned` (written before the
+session row is deleted) and `ai_call` (latency and outcome of every model call,
+measured beneath the fallback).
+
+---
+
+## Admin intelligence (`role ∈ {OWNER, ANALYST}`, ADR-125)
+
+The admin website's API, under `/admin/intel`. Read-only over the learning
+pipeline: the only writes are notes, saved investigations and the audit trail.
+An **Analyst** sees every figure with contact details masked (`a•••@x.com`,
+`phone: null`), may search by name only, and is refused `/audit`.
+
+**Global filters** — accepted by every population route:
+`days` (default 30) or `from`/`to` (`yyyy-MM-dd`, inclusive, reporting
+offset of ADR-052) · `level` (band prefix: `B1` matches B1 and B1+) ·
+`skill` · `interest` · `status` (`active`/`inactive`) · `segment` · `userId`.
+Each response carries `period: {from, to, prevFrom, prevTo, days, learners}`;
+"previous" is the same-length window immediately before.
+
+**Segments** (cohorts): `joined:N`, `inactive:N`, `active-days:N`,
+`weak:<skill>`, `hoarders`, `heavy`, `light`, `frequent`, `rare`, `level:X`,
+`interest:X`, `funnel:<stage>` (reached that stage and stopped),
+`funnel-reached:<stage>`, `attention:<reason>`.
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/admin/intel/meta` | who is asking, whether they see contact details, filter vocabularies, when tracking began |
+| GET | `/admin/intel/overview` | `{period, health:[Kpi], engagement:[DayPoint], funnel:[FunnelStage], lifecycle, skills:[SkillSummary], signals:[Signal]}` |
+| GET | `/admin/intel/learning` | `{period, skills:[{current, previous}], failures:[SkillFailures], categories, levels:{flows, bySkill, byLevel, distribution}, weeklyReview, mostFailedWords}` |
+| GET | `/admin/intel/skills/{skill}` | one skill drilled down: `summary, previous, content, failures, byUser, byLevel, daily, attempts, next, words, mostTranslated, levelFlows` |
+| GET | `/admin/intel/behavior` | `{period, tracked, friction:[FrictionItem], time, content, mostTranslated, screens, errors}` |
+| GET | `/admin/intel/friction/{key}` | `{item, users, outcome:{completed, open, abandoned}, byLevel, bySkill, byDay, performance, content}` |
+| GET | `/admin/intel/retention` | `{kpis (D1/D7/D30, returning, recall), cohorts, recall:{curve, bySkill, review, samples, configuredGapDays}, recovery, weeklyReview}` |
+| GET | `/admin/intel/users?q=&sort=` | `{total, segment, rows:[UserRow]}` (≤ `MaxListedUsers`) |
+| GET | `/admin/intel/users/attention` | `{total, groups:[{key, label, description, users:[UserRow + evidence]}]}` |
+| GET | `/admin/intel/users/{id}` | User 360 — `header, states, periods, skills, words, levels, feedback, attention, activity` (writes `user.viewed` to the audit trail) |
+| GET | `/admin/intel/users/{id}/timeline?verbose=` | `{events:[TimelineEvent]}` newest first, ≤ 600 |
+| GET | `/admin/intel/cohorts/compare?a=&b=` | `{a: CohortSide, b: CohortSide}` |
+| GET | `/admin/intel/feedback?status=&category=` | `{summary, repeated:[{term, messages}], items:[… notes:[…]]}` |
+| POST | `/admin/intel/feedback/{id}/notes` | `{body}` → note |
+| PATCH | `/admin/intel/feedback/{id}` | `{handled}` |
+| GET | `/admin/intel/inquiries` | history: `{items:[{id, section, question, summary, interpretedBy, createdAt, author}]}` |
+| GET | `/admin/intel/inquiries/{id}` | the `Investigation` exactly as it was shown |
+| POST | `/admin/intel/inquiries` | `{section, question, filter?}` → `Investigation` (rate-limited with the expensive routes) |
+| GET | `/admin/intel/system` | configuration, thresholds, tracking health (24 h), app versions, admins |
+| GET | `/admin/intel/audit` | Owner only — last 200 admin actions |
+
+```jsonc
+// Investigation — data, interpretation and hypothesis kept apart
+{
+  "id": "…", "section": "speaking", "sectionLabel": "Speaking", "question": "لماذا ينسحب…؟",
+  "summary": "…",                       // the model's, or the rules' when it is unavailable
+  "evidence": [{"label": "…", "value": 0.31, "format": "pct", "previous": 0.24, "context": "…"}],
+  "charts": [{"id": "failures_speaking", "type": "bar", "title": "…", "unit": "int",
+              "labels": ["…"], "series": [{"name": "…", "values": [12, 4]}], "note": null}],
+  "affectedUsers": [UserRow], "affectedLabel": "…",
+  "where": [{"dimension": "المستوى", "value": "B1_PLUS", "detail": "…"}],
+  "comparison": {"title": "…", "aLabel": "الحالية", "bLabel": "السابقة", "rows": [{"label": "…", "a": 0.31, "b": 0.24, "format": "pct"}]},
+  "interpretation": ["…"], "hypotheses": ["قد يكون…"], "investigate": [{"title": "…", "why": "…"}],
+  "interpretedBy": "ai",                // or "rules"
+  "dataNote": "…", "periodFrom": "…", "periodTo": "…"
+}
+```
+
+> **Every number is the backend's.** The AI service (`POST /ai/admin/investigate`,
+> token-guarded like the rest) receives the evidence above — aggregates and chart
+> series, never a learner's name, address or words — and returns only prose and
+> a choice of which charts answer best. A figure it mentions that is not in the
+> evidence is a bug in the prompt, not a fact.
+

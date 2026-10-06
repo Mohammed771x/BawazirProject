@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using WordOs.Domain.Common;
 using WordOs.Domain.Users;
 using WordOs.Infrastructure.Persistence;
 
@@ -31,7 +32,11 @@ public static class FeedbackEndpoints
         [property: StringLength(4000, MinimumLength = 1)]
         string Body,
         [property: StringLength(32)] string? AppVersion = null,
-        [property: StringLength(32)] string? Platform = null);
+        [property: StringLength(32)] string? Platform = null,
+        // What the learner said it is about (ADR-125). Optional, and an
+        // unknown value is dropped rather than refused: an old build must
+        // never lose a bug report over a label.
+        [property: StringLength(16)] string? Category = null);
 
     public sealed record HandleFeedbackRequest(bool Handled);
 
@@ -81,7 +86,8 @@ public static class FeedbackEndpoints
         var message = FeedbackMessage.Create(
             userId.Value, body, now,
             appVersion: SearchTerm.Clean(request.AppVersion ?? string.Empty),
-            platform: SearchTerm.Clean(request.Platform ?? string.Empty));
+            platform: SearchTerm.Clean(request.Platform ?? string.Empty),
+            category: ParseCategory(request.Category));
 
         db.FeedbackMessages.Add(message);
 
@@ -199,4 +205,9 @@ public static class FeedbackEndpoints
             handledAt = message.HandledAt,
         });
     }
+
+    /// <c>WEEKLY_REVIEW</c> → <see cref="FeedbackCategory.WeeklyReview"/>; anything else → null.
+    private static FeedbackCategory? ParseCategory(string? wire) =>
+        Enum.GetValues<FeedbackCategory>().Cast<FeedbackCategory?>()
+            .FirstOrDefault(c => c!.Value.ToWire() == wire?.Trim().ToUpperInvariant());
 }

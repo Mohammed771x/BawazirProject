@@ -31,7 +31,7 @@ from .config import ConfigurationError, load_settings
 from .gemini import GeminiClient, GeminiError
 from .speech import SpeechSettings, Transcriber, TranscriptionError
 from .tts import SynthesisError, Synthesizer, TtsSettings, encode_audio
-from . import prompts
+from . import insight_prompts, prompts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1207,7 +1207,8 @@ class Generated(NamedTuple):
 
 
 def _generate_json(
-    prompt: str, schema: dict, temperature: float = 0.7
+    prompt: str, schema: dict, temperature: float = 0.7,
+    system: str | None = None,
 ) -> Generated:
     """Calls Gemini and returns the answer with its token cost.
 
@@ -1228,7 +1229,7 @@ def _generate_json(
     try:
         response = CLIENT.generate(
             prompt,
-            system_instruction=prompts.system_instruction(),
+            system_instruction=system or prompts.system_instruction(),
             json_schema=schema,
             temperature=temperature,
         )
@@ -1390,5 +1391,79 @@ def placement_evaluate(request: PlacementEvalRequest) -> PlacementEvalResponse:
         model=SETTINGS.gemini_model,
         # Was reading a key the payload never had, so placement always reported
         # zero cost — the one AI call whose price nobody could see.
+        tokens=tokens,
+    )
+
+
+# ── Admin insight (ADR-125) ──────────────────────────────────────────────────
+
+
+class InsightRequest(BaseModel):
+    section: str = Field(max_length=64)
+    question: str = Field(min_length=3, max_length=1000)
+    # Aggregates the backend computed; bounded so one question cannot become a
+    # very expensive prompt.
+    evidence: str = Field(max_length=60_000)
+
+
+class InsightLead(BaseModel):
+    title: str
+    why: str
+
+
+class InsightResponse(BaseModel):
+    summary: str
+    interpretation: list[str]
+    hypotheses: list[str]
+    investigate: list[InsightLead]
+    charts: list[str]
+    prompt_version: str
+    model: str
+    tokens: int
+
+
+@app.post(
+    "/ai/admin/investigate",
+    response_model=InsightResponse,
+    dependencies=[Depends(require_service_token)],
+)
+def admin_investigate(request: InsightRequest) -> InsightResponse:
+    """Reads an investigation's evidence for the admin area.
+
+    Interpretation only. The backend computed every figure and keeps them on
+    the page apart from this text; the prompt forbids inventing any (R2's
+    spirit: the model describes, people decide).
+    """
+    generated = _generate_json(
+        insight_prompts.insight_prompt(
+            section=request.section,
+            question=request.question,
+            evidence=request.evidence,
+        ),
+        insight_prompts.INSIGHT_SCHEMA,
+        temperature=0.3,
+        system=insight_prompts.SYSTEM,
+    )
+    payload, tokens = generated
+    log.info("admin insight section=%s tokens=%d", request.section, tokens)
+
+    def strings(key: str, limit: int) -> list[str]:
+        value = payload.get(key) or []
+        return [str(v).strip() for v in value if str(v).strip()][:limit]
+
+    leads = [
+        InsightLead(title=str(l.get("title", "")).strip(), why=str(l.get("why", "")).strip())
+        for l in (payload.get("investigate") or [])
+        if isinstance(l, dict) and str(l.get("title", "")).strip()
+    ][:5]
+
+    return InsightResponse(
+        summary=str(payload.get("summary", "")).strip(),
+        interpretation=strings("interpretation", 6),
+        hypotheses=strings("hypotheses", 5),
+        investigate=leads,
+        charts=strings("charts", 8),
+        prompt_version=insight_prompts.INSIGHT_PROMPT_VERSION,
+        model=SETTINGS.gemini_model,
         tokens=tokens,
     )

@@ -251,11 +251,13 @@ abstract class WordOsApi {
     required String sessionId,
     required String itemId,
     required String sentence,
+    int? timeMs,
   });
 
   Future<SpeakingTurn> submitSpeakingTurn({
     required String sessionId,
     required String transcript,
+    int? timeMs,
   });
 
   /// Turns one recorded Speaking turn into text (ADR-107).
@@ -294,6 +296,7 @@ abstract class WordOsApi {
     required String reviewId,
     required String itemId,
     required String answer,
+    int? timeMs,
   });
 
   Future<WeeklyReviewResult> completeWeeklyReview(String reviewId);
@@ -342,7 +345,17 @@ abstract class WordOsApi {
   /// Write-only for a learner: there is no call to read feedback back, their
   /// own included. The Owner reads it in the dashboard, and nothing a learner
   /// can call returns anybody's words but their own — which they already have.
-  Future<void> sendFeedback(String body);
+  ///
+  /// [topic] is what the learner said it is about; null for "not chosen".
+  Future<void> sendFeedback(String body, {FeedbackTopic? topic});
+
+  // ── Telemetry (ADR-125) ────────────────────────────────────────────────────
+
+  /// Sends a batch of on-screen events for the admin area.
+  ///
+  /// Fire-and-forget by contract: callers do not await it for anything the
+  /// learner sees, and a failure is dropped rather than retried.
+  Future<void> trackEvents(List<ClientEvent> events);
 
   /// The Owner's inbox: unhandled first, newest first.
   ///

@@ -143,6 +143,24 @@ enum UserRole {
       _parse({for (final v in UserRole.values) v.wire: v}, raw, UserRole.user);
 }
 
+/// What a piece of feedback is about (admin brief §17, ADR-125).
+///
+/// Chosen by the learner rather than guessed from the text.
+enum FeedbackTopic {
+  reading('READING'),
+  listening('LISTENING'),
+  speaking('SPEAKING'),
+  writing('WRITING'),
+  spelling('SPELLING'),
+  weeklyReview('WEEKLY_REVIEW'),
+  addWord('ADD_WORD'),
+  other('OTHER');
+
+  const FeedbackTopic(this.wire);
+
+  final String wire;
+}
+
 enum SessionItemType {
   comprehension('COMPREHENSION'),
   targetWord('TARGET_WORD'),

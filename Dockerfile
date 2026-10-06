@@ -15,6 +15,16 @@
 # Splitting them again later is a deployment change, not a code change: the API
 # already reaches the AI service over HTTP at a configured address.
 
+# ── Build the admin website (ADR-125) ────────────────────────────────────────
+# Static files, served by the API at /admin. Its own stage so Node never
+# reaches the image that runs.
+FROM node:22-alpine AS admin
+WORKDIR /admin
+COPY admin-web/package.json admin-web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY admin-web/ ./
+RUN npm run build
+
 # ── Build the API ────────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
@@ -51,6 +61,7 @@ COPY ai-service/requirements.txt /app/ai-service/
 RUN pip install --no-cache-dir -r /app/ai-service/requirements.txt
 
 COPY --from=build /app/api /app/api
+COPY --from=admin /admin/dist /app/api/wwwroot/admin
 COPY ai-service/app /app/ai-service/app
 COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

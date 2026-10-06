@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using WordOs.Api.Admin;
 using WordOs.Api.Endpoints;
 using WordOs.Application.Abstractions;
 using WordOs.Domain.Common;
@@ -171,11 +172,34 @@ builder.Services.AddHttpClient<HttpAiContentService>((provider, client) =>
 builder.Services.AddSingleton(_ => new AiCallGate(
     capacity.ConcurrentAiCalls, capacity.AiCallWaitSeconds));
 
+builder.Services.AddHttpContextAccessor();
+
+// The timing layer goes next to the HTTP client, beneath the fallback, so it
+// times the model rather than the rescue (ADR-125).
 builder.Services.AddScoped<IAiContentService>(provider =>
     provider.GetRequiredService<AiCallGate>().Wrap(
         new ResilientAiContentService(
-            provider.GetRequiredService<HttpAiContentService>(),
+            new ObservedAiContentService(
+                provider.GetRequiredService<HttpAiContentService>(),
+                provider.GetRequiredService<IHttpContextAccessor>(),
+                provider.GetRequiredService<IServiceScopeFactory>(),
+                provider.GetRequiredService<TimeProvider>(),
+                provider.GetRequiredService<ILogger<ObservedAiContentService>>()),
             provider.GetRequiredService<ILogger<ResilientAiContentService>>())));
+
+// The admin area's interpreter (ADR-125). Its own client and a shorter
+// timeout: an admin waiting on a question is better served by the rules'
+// reading in a few seconds than by the model's in a minute.
+builder.Services.AddHttpClient<IAdminInsightService, HttpAdminInsightService>((provider, client) =>
+{
+    var aiOptions = provider
+        .GetRequiredService<IOptions<AiServiceOptions>>().Value;
+    client.BaseAddress = new Uri(aiOptions.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(Math.Min(aiOptions.TimeoutSeconds, 30));
+});
+
+builder.Services.Configure<AdminIntelOptions>(
+    builder.Configuration.GetSection(AdminIntelOptions.SectionName));
 
 // Speaking's recorder (ADR-107): the same AI service and the same gate, a
 // separate seam — a transcript is a draft for the learner, not an observation.
@@ -262,7 +286,11 @@ builder.Services
 
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy(Policies.OwnerOnly, policy =>
-        policy.RequireRole(nameof(UserRole.Owner)));
+        policy.RequireRole(nameof(UserRole.Owner)))
+    // The admin website (ADR-125): the Owner, and an Analyst who reads every
+    // figure but no learner's contact details.
+    .AddPolicy(Policies.AdminArea, policy =>
+        policy.RequireRole(nameof(UserRole.Owner), nameof(UserRole.Analyst)));
 
 // ── Rate limiting (docs/07-SECURITY.md §6) ───────────────────────────────────
 //
@@ -459,6 +487,40 @@ app.UseRateLimiter();
 // (ADR-077).
 app.MapGet("/health/live", () => Results.Ok(new { status = "ok" }));
 
+// ── The admin website (ADR-125) ──────────────────────────────────────────────
+//
+// Built from `admin-web/` into `wwwroot/admin` by the Dockerfile and served
+// from here: same origin as the API, so no CORS rule and no second
+// deployment. Static files only — every byte of data it shows still comes
+// through `/api/admin/intel`, which checks the role on every request. A build
+// without the folder (local `dotnet run`, tests) simply has no site.
+var adminRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin");
+if (Directory.Exists(adminRoot))
+{
+    app.Use(async (context, next) =>
+    {
+        if (context.Request.Path.StartsWithSegments("/admin"))
+        {
+            var headers = context.Response.Headers;
+            // An admin page holds every learner's history: no framing, no
+            // sniffing, no referrer, scripts only from here, fonts only from
+            // Google's, and the API on this same origin.
+            headers["Content-Security-Policy"] =
+                "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; " +
+                "font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'";
+            headers["X-Frame-Options"] = "DENY";
+            headers["X-Content-Type-Options"] = "nosniff";
+            headers["Referrer-Policy"] = "no-referrer";
+            headers["X-Robots-Tag"] = "noindex, nofollow";
+        }
+        await next();
+    });
+
+    app.UseStaticFiles();
+    // A deep link — /admin/users/{id} — is the site's own route, not a file.
+    app.MapFallbackToFile("/admin/{*path:nonfile}", "admin/index.html");
+}
+
 app.MapGet("/health/ready", async (
     WordOsDbContext db, AiCallGate gate, ReadinessProbe readiness,
     CancellationToken ct) =>
@@ -498,6 +560,8 @@ app.MapWeeklyReviewEndpoints();
 app.MapWordEndpoints();
 app.MapAdminEndpoints();
 app.MapFeedbackEndpoints();
+app.MapEventEndpoints();
+app.MapAdminIntelEndpoints();
 app.MapSpeechEndpoints();
 
 app.Run();

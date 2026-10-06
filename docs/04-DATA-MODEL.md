@@ -35,7 +35,7 @@ rows — the doc-level states such as `READING_PENDING` are a *projection* of
 ## Core tables
 
 ### `users`
-`id`, `email` (unique), `password_hash`, `display_name`, `role` (`USER` | `OWNER`),
+`id`, `email` (unique), `password_hash`, `display_name`, `role` (`USER` | `OWNER` | `ANALYST`),
 `onboarding_stage` (`INTERESTS` | `PLACEMENT` | `COMPLETE`), `created_at`, `last_login_at`,
 `timezone`.
 
@@ -222,11 +222,30 @@ policy, and `mobile/test/level_progression_test.dart` for the pinned rules.
 `key`, `value` (jsonb), `scope` (`GLOBAL` | `USER`), `user_id` (nullable), `updated_at`,
 `updated_by`. Seeded with the defaults in `00-PROJECT-PLAN.md` §5 (R3).
 
-### `analytics_events`
-`id`, `user_id`, `type`, `payload` (jsonb), `session_id`, `occurred_at`.
-Emitted for: login/logout, word added, meaning selected, skill started/completed, answer
-submitted, word passed/failed, word active/archived, level changed, setting changed, weekly
-review started/completed, AI request/response/parse failure, errors.
+### `analytics_events` — what nothing else records (ADR-125)
+`id`, `user_id`, `name` (closed list), `source` (`CLIENT` | `SERVER`), `occurred_at`, `received_at`,
+`app_session_id`, `session_id`, `word_id`, `skill`, `attempt`, `result`, `duration_ms`,
+`content_level`, `screen`, `app_version`, `platform`, `props` (jsonb, flat scalars, ≤ 2 KB).
+
+Append-only. Holds only what has nowhere else to live: every answer attempt and its time
+(`answer_submitted`, `review_answered`, `speaking_turn`), why an AI judgement failed
+(`writing_evaluated`, `speaking_word_evaluated`), sessions walked away from
+(`session_abandoned`, written before the row is deleted), model latency (`ai_call`), and what
+the phone saw (`translation_opened`, `audio_*`, `hint_used`, `feedback_viewed`,
+`exercise_exited`, `screen_*`, `app_opened` / `app_backgrounded`, `notification_opened`,
+`api_error`). Words added, skills passed, levels changed and reviews completed are **not**
+here: they are read from the tables that already hold them.
+
+Indexes: `(user_id, occurred_at)`, `(name, occurred_at)`, `session_id`.
+
+### `admin_notes`, `admin_inquiries`, `admin_audit_events` (ADR-125)
+Internal notes on feedback (never shown to learners); saved investigations with their full
+result as shown (`result_json`); and who in the admin area opened or changed what
+(`actor_id`, `action`, `target_id`, `client_address`). Authors are `RESTRICT`, not cascaded:
+removing an admin must not erase what they wrote.
+
+`feedback_messages` gains a nullable `category` (READING … ADD_WORD, OTHER), chosen by the
+learner.
 
 ---
 

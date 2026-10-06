@@ -6036,6 +6036,113 @@ words get the band's 24 s.
 
 Every target word was present in all nine runs.
 
+## ADR-125 — The admin website: one event log for what nothing else records, computed in memory while the audience is small
+
+**Date:** 2026-10-04 · **Status:** Accepted (local only, not deployed).
+
+**Context.** The product owner asked for an Admin / Product Intelligence website:
+Arabic, RTL, a handful of sections that drill down from "is the product
+working?" to one learner's single answer — overview, users and User 360,
+learning and skills, behaviour and UX, retention, failure analysis, feedback,
+an "ask the data" investigator, and system settings. Their instruction on
+scale was explicit: the audience is small, so build it properly for now and do
+not bend the design around growth it does not have.
+
+Measuring what they asked for exposed gaps in what the server keeps:
+
+* an **attempt** was a counter on its session item — the second of three
+  wrong answers, and how long any of them took, was gone;
+* **why an AI judgement failed** went to the phone and nowhere else — Writing's
+  `usedWord / meaningCorrect / usageCorrect` and Speaking's per-word
+  observations were never stored, so "Speaking failed" could not be told apart
+  from "never used the word";
+* **abandoning a session deleted it** (`AbandonAsync` removes the row), so an
+  abandoned exercise left no trace at all;
+* **on-screen behaviour** — translations opened, clips replayed, hints asked
+  for, a lesson left half-way, App Time — only the phone ever saw.
+
+**Decision.**
+
+1. **One append-only table, `analytics_events`, for exactly those gaps.**
+   Everything already durable — sessions and items, word events, level changes,
+   weekly reviews, feedback, the activity log — is read where it lives and not
+   copied (brief §32). Names are a closed list (`AnalyticsEventNames`); a phone
+   may send only its own (`POST /api/events`, ≤ 50 per batch, unknown names
+   dropped rather than refusing the batch, flat scalar props only). The server
+   writes `answer_submitted`, `writing_evaluated`, `speaking_turn`,
+   `speaking_word_evaluated`, `review_answered`, `session_abandoned` (before the
+   delete) and `ai_call` in the same unit of work as the change they describe —
+   except `ai_call`, which is written in its own scope beneath the fallback so a
+   slow model whose request then failed is still on record.
+2. **The answer routes take an optional `elapsedMs`.** Recorded only; nothing
+   about passing reads it (R1/R2 untouched). The phone times each question from
+   it appearing, and a Speaking turn from the floor being handed over.
+3. **Telemetry in Flutter is reporting, not logic.** `AnalyticsTracker` queues,
+   batches at 20, flushes when the app is backgrounded or a lesson closes, has
+   no timers (a periodic flush is a pending timer in every widget test) and
+   swallows every error. The HTTP client and the notification plugin announce
+   through `AppSignals` so neither imports the tracker.
+4. **Computed in memory, per request** (`IntelDataset`). At tens of learners the
+   whole history is a few thousand rows and every metric's definition sits in
+   one readable C# file (`IntelMetrics`). The exit is known and cheap: each
+   metric becomes a query over the same tables, with no change to definitions
+   or the API. Measure before moving.
+5. **Every threshold is configuration** (`AdminIntel` section, R3): overdue
+   after 3 days, abandoned after 24 h open, inactive after 3 days, sessions over
+   60 minutes left out of durations, weak below 60 % first-attempt, minimum
+   sample 3, long idle 120 s, immediate back 4 s, struggling at 3 replays.
+6. **Definitions worth stating**, because each is an argument someone will have:
+   * *Retention D-n* = of learners who joined ≥ n days ago, the share active on
+     day n **or later** — the exact-day figure swings by a third at this size.
+   * *First active word* = Active **and since reused by the AI**. Mature and
+     Active happen in the same instant in WordOS; two stages that always
+     coincide would be one stage drawn twice.
+   * *The funnel is sequential* — a stage counts a learner only if they reached
+     every stage before it (a word can be added before onboarding finishes).
+   * *Recall* = every skill decision and weekly-review first attempt, against
+     the hours since the word's previous meeting. Learners whose schedule the
+     Owner brought forward are excluded: their gaps are a moved clock.
+   * *Failure reasons* are filed once each, by a fixed precedence, so they add
+     up and compare; each maps to learning / UX / content / AI.
+   * *Users needing attention* are rules with their evidence, never a score.
+7. **The investigator separates data from interpretation.** The backend builds
+   the evidence for the chosen section, refined by what the question mentions
+   (a skill, a level, new users, translations, replays, words vs mastery). The
+   AI service (`/ai/admin/investigate`, own analyst system prompt,
+   `admin-insight-v1`) receives aggregates only and returns prose plus a choice
+   of charts; it may not introduce a number. If it cannot be reached, rules
+   write a plainer reading and the result says `interpretedBy: "rules"`. Each
+   investigation is saved whole, so reopening it shows what was true then.
+8. **Roles.** A new `Analyst` role reads every figure with contact details
+   masked, searches by name only, and cannot see the audit trail; promoted by
+   SQL like an Owner (ADR-061). The group policy admits both and every handler
+   checks again. Opening a User 360, adding a note, changing a feedback status
+   and running an investigation are written to `admin_audit_events`.
+9. **Hosting.** `admin-web/` (React + Vite + TypeScript, hand-built SVG charts
+   in WordOS's validated skill palette, light and dark) is built by the
+   Dockerfile into `wwwroot/admin` and served by the API at `/admin` — same
+   origin, so no CORS rule and no second deployment — behind a strict CSP and
+   `frame-ancestors 'none'`. Locally, `npm run dev` proxies `/api` to
+   `./wordos start`'s API; `npm run dev:mock` runs on invented data with a
+   banner saying so.
+10. **Feedback carries a topic** the learner picks (optional; an unknown value
+    from an old build is dropped, never refused), and admins attach internal
+    notes that learners never see.
+
+**Not done, deliberately.** No "Goal" filter: WordOS does not ask learners for
+a goal, and a filter over a field that does not exist would always be empty.
+`notification_sent` is not recorded: reminders are scheduled on the phone
+(ADR-076) and the server never knows one fired; `notification_opened` and the
+30-minute conversion to a session are what can be measured.
+
+**Consequences.** Charts that depend on phone events (translation, replay,
+hints, App Time, screen exits) are empty until a build carrying the tracker is
+installed; every such view says so rather than showing zeros. Production needs
+the migration `AdminIntelligence` applied by `wordos_migrator`, and — if
+default privileges do not cover them — `GRANT SELECT, INSERT, UPDATE, DELETE`
+on `analytics_events`, `admin_notes`, `admin_inquiries`, `admin_audit_events`
+plus `USAGE` on the two identity sequences, to `wordos_app`.
+
 ## ADR-126 — Every passage starts from a band minimum, and a beginner's session carries at most ten words
 
 **Date:** 2026-10-05 · **Status:** Accepted (local only, not deployed). Amends ADR-124.
