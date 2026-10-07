@@ -1184,7 +1184,14 @@ class MockEngine {
     return state.status;
   }
 
-  WordPage words(MockUser user, WordState? state, {String? query}) {
+  WordPage words(
+    MockUser user,
+    WordState? state, {
+    String? query,
+    int page = 0,
+    int? pageSize,
+    int? offset,
+  }) {
     final term = (query ?? '').trim().toLowerCase();
     final items = user.words
         .where((w) => state == null || w.state == state)
@@ -1194,9 +1201,16 @@ class MockEngine {
             w.meaning.contains(term))
         .toList()
       ..sort((a, b) => b.addedAt.compareTo(a.addedAt));
+    // Paged the way the server pages: 50 by default, never more than 100,
+    // and an offset in place of the page number when one is given.
+    final size = pageSize == null || pageSize <= 0 ? 50 : min(pageSize, 100);
+    final start = min(max(0, offset ?? page * size), items.length);
+    final end = min(start + size, items.length);
     return WordPage(
-      items: items.map(_wordModel).toList(),
+      items: items.sublist(start, end).map(_wordModel).toList(),
       total: items.length,
+      page: page,
+      hasMore: start + size < items.length,
     );
   }
 

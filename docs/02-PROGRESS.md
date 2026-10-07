@@ -3,7 +3,21 @@
 > **The live state of the project.** Update this at the end of every working session.
 > A new session should read `CLAUDE.md` → this file → then start at "Next up".
 
-**Last updated:** 2026-10-05 (admin website, ADR-125)
+**Last updated:** 2026-10-08 (My Words paging, ADR-127)
+
+> **2026-10-08 — My Words showed only the first 50 words (ADR-127).** Fixed locally,
+> **not deployed**. `GET /words` takes `offset`, and the order has an `Id` tiebreak.
+> The screen loads 20, then 10 per scroll step, until every word is listed.
+> Tests: `mobile/test/word_list_paging_test.dart` and
+> `OnboardingAndHubTests.The_word_list_can_be_read_from_any_row_without_gaps_or_repeats`.
+> Verified 2026-10-08 on the iPhone 17 simulator against the local API with a 155-word
+> account: opens with 20, deletes at depth 60 without jumping to the top, reaches all
+> 153 remaining words once each (`integration_test/my_words_paging_test.dart`, run with
+> `--dart-define=WORDOS_TEST_EMAIL=… --dart-define=WORDOS_TEST_PASSWORD=…`). The test
+> words were deleted afterwards. The local demo account is back to 35.
+> To ship it: deploy the API **first**, then release the app. An old API ignores
+> `offset`, so a new app talking to it stops at 20 words. A step that adds nothing
+> ends the list, so it does not loop.
 
 ---
 

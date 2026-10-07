@@ -1273,6 +1273,12 @@ public static class WordEndpoints
         // make `/api/words` itself a 400.
         int? page,
         int? pageSize,
+        // The row to start from, in place of `page`. My Words loads twenty and
+        // then ten at a time as the learner scrolls (ADR-127), and those pages
+        // are not one size, so `page * pageSize` cannot say where the next one
+        // starts. It also lets the client step back by the rows it deleted
+        // itself, instead of skipping the word that slid into the gap.
+        int? offset,
         ClaimsPrincipal principal,
         WordOsDbContext db,
         WordOsConfiguration config,
@@ -1285,6 +1291,7 @@ public static class WordEndpoints
         // (Part 3 §37); a client asking for an absurd page size does not get
         // to decide otherwise.
         var paging = Page.From(page, pageSize, maxSize: 100);
+        var skip = offset is { } start ? Math.Max(0, start) : paging.Offset;
 
         // Always scoped to the caller's own id from the token. A word id or
         // user id from the request is never trusted (docs/07-SECURITY.md §4).
@@ -1323,9 +1330,14 @@ public static class WordEndpoints
         // page", and needs to know whether there is more to fetch.
         var total = await query.CountAsync(ct);
 
+        // The id breaks ties. Words added in one request can share a timestamp,
+        // and PostgreSQL owes nothing about the order of equal rows — so
+        // without it, two pages could each return the same word and neither
+        // the one it displaced.
         var items = await query
             .OrderByDescending(w => w.AddedAt)
-            .Skip(paging.Offset)
+            .ThenByDescending(w => w.Id)
+            .Skip(skip)
             .Take(paging.Size)
             .ToListAsync(ct);
 
@@ -1335,7 +1347,7 @@ public static class WordEndpoints
             total,
             page = paging.Index,
             pageSize = paging.Size,
-            hasMore = paging.HasMore(total),
+            hasMore = (long)skip + paging.Size < total,
         });
     }
 

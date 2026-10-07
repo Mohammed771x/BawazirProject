@@ -239,7 +239,7 @@ handed one item at a time instead of a fixed list.
 | POST | `/words` | `{senseId, text?, meaning?}` → `Word` — a lexicon sense |
 | POST | `/words` | `{text, customMeaning}` → `Word` — a meaning the learner wrote, AI-checked; a rejected meaning is never saved (ADR-072, ADR-074, ADR-112) |
 | POST | `/words` | `{text, fromSessionId}` → `Word` — the meaning that passage gave it (ADR-073) |
-| GET | `/words?state=LEARNING\|ACTIVE\|ARCHIVED&q=&page=&pageSize=` | → `{items:[Word], total, page, pageSize, hasMore}` |
+| GET | `/words?state=LEARNING\|ACTIVE\|ARCHIVED&q=&page=&pageSize=&offset=` | → `{items:[Word], total, page, pageSize, hasMore}` — newest first; `offset` (a row) replaces `page` when given; `pageSize` defaults to 50, capped at 100 (ADR-127) |
 | GET | `/words/{id}` | → `WordDetail` |
 | DELETE | `/words/{id}` | → `204` — the learner removes it (ADR-071) |
 | PATCH | `/words/{id}/meaning` | `{meaning}` → `Word` — rewrite the Arabic meaning, keeping the journey (ADR-101, ADR-112) |

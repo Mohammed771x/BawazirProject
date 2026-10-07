@@ -199,8 +199,15 @@ class MockWordOsApi implements WordOsApi {
       _delay(() => engine.dailyReminders(_user));
 
   @override
-  Future<WordPage> words({WordState? state, int page = 0, String? query}) =>
-      _delay(() => engine.words(_user, state, query: query));
+  Future<WordPage> words({
+    WordState? state,
+    int page = 0,
+    int? pageSize,
+    int? offset,
+    String? query,
+  }) =>
+      _delay(() => engine.words(_user, state,
+          query: query, page: page, pageSize: pageSize, offset: offset));
 
   @override
   Future<WordDetail> wordDetail(String wordId) =>

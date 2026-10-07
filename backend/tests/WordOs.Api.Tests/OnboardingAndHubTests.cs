@@ -512,6 +512,34 @@ public class OnboardingAndHubTests(PostgresFixture db) : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task The_word_list_can_be_read_from_any_row_without_gaps_or_repeats()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        for (var i = 0; i < 7; i++) await AddWordAsync($"word{i}");
+
+        // My Words asks for a first page and then smaller ones (ADR-127), so
+        // where each starts is a row, not a page number.
+        var ids = new List<string>();
+        foreach (var (offset, size) in new[] { (0, 3), (3, 2), (5, 2) })
+        {
+            var page = await Client.GetFromJsonAsync<JsonElement>(
+                $"/api/words?offset={offset}&pageSize={size}");
+
+            Assert.Equal(7, page.GetProperty("total").GetInt32());
+            Assert.Equal(offset + size < 7, page.GetProperty("hasMore").GetBoolean());
+            ids.AddRange(page.GetProperty("items").EnumerateArray()
+                .Select(w => w.GetProperty("id").GetString()!));
+        }
+
+        var all = await Client.GetFromJsonAsync<JsonElement>("/api/words");
+        Assert.Equal(
+            all.GetProperty("items").EnumerateArray()
+                .Select(w => w.GetProperty("id").GetString()!),
+            ids);
+    }
+
+    [SkippableFact]
     public async Task A_client_cannot_ask_for_an_unbounded_page()
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);

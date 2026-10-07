@@ -6187,3 +6187,44 @@ comprehension questions about. The product owner set the rule:
 17.5 s, 5 words 16.3 s, 10 words 18.7 s; A2 3 words 20.5 s, 10 words 32.4 s;
 B1 5 words 32.8 s, 15 words 43.2 s; C1 15 words 63.8 s. Every target word was
 present in every run.
+
+---
+
+## ADR-127 — My Words loads twenty, then ten at a time, and reaches every word
+
+**Date:** 2026-10-08 · **Status:** Accepted (local only, not deployed).
+
+**Context.** A learner added 153 words. The screen said "153 words" and showed
+fifty. `GET /words` has always paged (Part 3 §37, default 50, cap 100), but the
+screen read page 0 and never asked for page 1, so every word past the fiftieth
+was unreachable. The product owner asked for the list to load twenty first and
+ten more each time the learner scrolls down, so no read is spent on rows nobody
+looks at.
+
+**Decision.**
+1. **Backend: `offset`.** `GET /words` takes an optional `offset`, the row to
+   start from, which replaces `page * pageSize` when given. Pages of twenty
+   then ten are not one size, so a page number cannot say where the next one
+   starts. `hasMore` is `offset + pageSize < total`. The response shape is
+   unchanged, and old clients that send `page` behave as before.
+2. **Stable order.** The list is ordered by `AddedAt` and then by `Id`, both
+   descending. Words added in one request can share a timestamp, and
+   PostgreSQL does not keep equal rows in a fixed order, so without the
+   tiebreak two pages could return the same word and skip another.
+3. **Client: `WordListNotifier`.** It loads 20 rows, then 10 per step. The
+   trigger is the footer row being built, which happens as the learner nears
+   the bottom, or at once when the first page does not fill the screen. A
+   failed step shows a retry button and does not retry by itself. Rows are
+   de-duplicated by id, so a word added elsewhere while scrolling, which shifts
+   every row down by one, is not shown twice.
+4. **Refetch depth.** Every write refetches the list (ADR-094), and My Words
+   stays alive in its tab while the learner practises. A refetch reloads as
+   deep as the learner had scrolled, capped at one server page (100). So a
+   delete 40 rows down keeps them 40 rows down, and an answer in a session
+   costs at most one page however far they once scrolled. A refetch keeps the
+   list on screen (`skipLoadingOnReload`) instead of blanking it.
+
+**Cost.** Opening the list now reads 20 rows instead of 50. Each later step
+reads 10. Each page also runs one `COUNT` over the learner's own rows, which
+are filtered by `UserId`.
+

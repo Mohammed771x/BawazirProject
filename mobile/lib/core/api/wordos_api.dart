@@ -203,7 +203,17 @@ abstract class WordOsApi {
   /// [query] searches the word and its meaning; [state] filters by pipeline
   /// state and is used by the developer views rather than by the learner, who
   /// sees one list (Part 2 §42–§46).
-  Future<WordPage> words({WordState? state, int page = 0, String? query});
+  ///
+  /// [offset], when given, is the row to start from and replaces [page]: My
+  /// Words loads [pageSize] rows at a time, and its pages are not one size
+  /// (ADR-127). The server caps [pageSize] whatever is asked for.
+  Future<WordPage> words({
+    WordState? state,
+    int page = 0,
+    int? pageSize,
+    int? offset,
+    String? query,
+  });
 
   Future<WordDetail> wordDetail(String wordId);
 

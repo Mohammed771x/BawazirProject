@@ -589,12 +589,16 @@ class HttpWordOsApi implements WordOsApi {
   Future<WordPage> words({
     WordState? state,
     int page = 0,
+    int? pageSize,
+    int? offset,
     String? query,
   }) async =>
       WordPage.fromJson(await _get('/words', {
         if (state != null) 'state': state.wire,
         if (query != null && query.trim().isNotEmpty) 'q': query.trim(),
         'page': page,
+        'pageSize': ?pageSize,
+        'offset': ?offset,
       }));
 
   @override
