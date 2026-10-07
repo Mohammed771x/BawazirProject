@@ -5,8 +5,9 @@
 
 **Last updated:** 2026-10-08 (My Words paging, ADR-127)
 
-> **2026-10-08 — My Words showed only the first 50 words (ADR-127).** Fixed locally,
-> **not deployed**. `GET /words` takes `offset`, and the order has an `Id` tiebreak.
+> **2026-10-08 — My Words showed only the first 50 words (ADR-127).** **Deployed
+> 2026-10-08**: `06969f7` Live on Render (no migration, no data touched). APK 1.3.1
+> (arm64-v8a, versionCode 2005) handed to students as `~/Desktop/WordOS.apk`. `GET /words` takes `offset`, and the order has an `Id` tiebreak.
 > The screen loads 20, then 10 per scroll step, until every word is listed.
 > Tests: `mobile/test/word_list_paging_test.dart` and
 > `OnboardingAndHubTests.The_word_list_can_be_read_from_any_row_without_gaps_or_repeats`.
