@@ -349,14 +349,17 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         Ai.UnknownWordPartOfSpeech = "gerundive";
         Ai.UnknownWordLevel = "Z9";
 
-        var body = await AddAndReadAsync(
+        var response = await Client.PostAsJsonAsync("/api/words",
             new { text = "flabbergast", customMeaning = "يذهل" });
 
-        Assert.Equal("", body.GetProperty("partOfSpeech").GetString());
+        // Dropped — and with nothing to fall back on for a word the lexicon
+        // lacks, the word is not stored half-built either (ADR-131): an empty
+        // part of speech and a guessed band used to go through. "Not now".
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(2, Ai.MeaningChecks); // asked again before giving up
 
-        // And a band off the ladder falls back to the neutral default the
-        // level engine corrects from real performance.
-        Assert.Equal("B1", body.GetProperty("cefrLevel").GetString());
+        await using var context = db.CreateContext();
+        Assert.False(await context.Words.AnyAsync(w => w.Text == "flabbergast"));
     }
 
     [SkippableFact]
@@ -1044,11 +1047,14 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         var (word, _, _) = await SeedHabitLikeAsync();
 
         // The checker accepted the meaning but named no sense and wrote no
-        // definition. The old answer here was the robe.
-        var body = await AddAndReadAsync(new { text = word, customMeaning = "عادة" });
+        // definition. The old answer here was the robe; then an empty
+        // definition (ADR-105); now nothing at all is stored (ADR-131).
+        var response = await Client.PostAsJsonAsync("/api/words",
+            new { text = word, customMeaning = "عادة" });
 
-        Assert.DoesNotContain("attire",
-            body.GetProperty("definitionEn").GetString());
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        await using var context = db.CreateContext();
+        Assert.False(await context.Words.AnyAsync(w => w.Text == word));
     }
 
     [SkippableFact]
@@ -1074,6 +1080,7 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         var (word, _, _) = await SeedHabitLikeAsync();
 
         Ai.KnownWordSense = 7; // two senses were listed
+        Ai.KnownWordDefinition = "something a person does regularly";
 
         var body = await AddAndReadAsync(new { text = word, customMeaning = "عادة" });
 
@@ -1282,6 +1289,7 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         await SeedAsync("relat" + FreshWord(), "n", "a thing related", "مرتبط");
 
         Ai.KnownWordPartOfSpeech = "verb";
+        Ai.KnownWordDefinition = "connect in the mind";
         var id = await AddAsync(new { text = word, customMeaning = "ربط" });
 
         Ai.KnownWordPartOfSpeech = "adjective";
@@ -1300,6 +1308,7 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         Skip.IfNot(db.IsAvailable, db.SkipReason);
         await SignInAsync();
         var (word, _) = await SeedAssociatedLikeAsync();
+        Ai.KnownWordDefinition = "connect in the mind";
         var id = await AddAsync(new { text = word, customMeaning = "ربط" });
 
         Ai.RejectMeanings = true;
@@ -1319,6 +1328,7 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         var (word, _) = await SeedAssociatedLikeAsync();
 
         Ai.KnownWordLevel = "A2";
+        Ai.KnownWordDefinition = "connect in the mind";
         var id = await AddAsync(new { text = word, customMeaning = "ربط" });
 
         await using var before = db.CreateContext();
@@ -1396,7 +1406,7 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task A_passage_word_is_added_when_the_checker_is_down_without_a_wrong_definition()
+    public async Task A_passage_word_is_not_added_while_the_checker_is_down()
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);
         await SignInAsync();
@@ -1406,17 +1416,21 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         var sessionId = await SeedSessionWithGlossaryAsync([(word, "مخفي", "adjective")]);
 
         Ai.Fail = true;
-        var body = await AddAndReadAsync(new { text = word, fromSessionId = sessionId });
+        var response = await Client.PostAsJsonAsync("/api/words",
+            new { text = word, fromSessionId = sessionId });
 
-        // The passage's meaning stands; the description waits for another
-        // day rather than borrowing the commonest sense's.
-        Assert.Equal("مخفي", body.GetProperty("meaning").GetString());
-        Assert.Equal("", body.GetProperty("definitionEn").GetString());
-        Assert.Equal("A1", body.GetProperty("cefrLevel").GetString());
+        // Whole or not at all (ADR-131): "not now", and nothing stored.
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error");
+        Assert.Equal("MEANING_CHECK_UNAVAILABLE", error.GetProperty("code").GetString());
+
+        await using var context = db.CreateContext();
+        Assert.False(await context.Words.AnyAsync(w => w.Text == word));
     }
 
     [SkippableFact]
-    public async Task A_passage_meaning_the_checker_disputes_is_still_the_passages()
+    public async Task A_passage_meaning_the_checker_disputes_is_not_added_half_built()
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);
         await SignInAsync();
@@ -1425,12 +1439,156 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         var sessionId = await SeedSessionWithGlossaryAsync(
             [("bank", "ضفة النهر", "noun")]);
 
-        // It describes; it does not judge. The learner read this meaning.
+        // Disputed out of its sentence: not added half-built (ADR-131). The
+        // code is the one the client already answers by opening the
+        // dictionary sheet, where every path is complete.
         Ai.RejectMeanings = true;
-        var body = await AddAndReadAsync(new { text = "bank", fromSessionId = sessionId });
+        var response = await Client.PostAsJsonAsync("/api/words",
+            new { text = "bank", fromSessionId = sessionId });
 
-        Assert.Equal("ضفة النهر", body.GetProperty("meaning").GetString());
-        Assert.DoesNotContain("financial", body.GetProperty("definitionEn").GetString());
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error");
+        Assert.Equal("NOT_IN_PASSAGE", error.GetProperty("code").GetString());
+
+        await using var context = db.CreateContext();
+        Assert.False(await context.Words.AnyAsync(w => w.Text == "bank"));
+    }
+
+    // ── ADR-131: a word is stored whole or not at all ─────────────────────
+
+    [SkippableFact]
+    public async Task An_incomplete_answer_is_asked_again_and_a_complete_one_is_stored()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+
+        // First answer without a definition, second with one — what Gemini
+        // did with `volume of the tv`.
+        Ai.KnownWordDefinitions.Enqueue(null);
+        Ai.KnownWordDefinitions.Enqueue("connected with something else");
+        Ai.KnownWordPartOfSpeech = "adjective";
+
+        var body = await AddAndReadAsync(new { text = word, customMeaning = "مرتبط" });
+
+        Assert.Equal(2, Ai.MeaningChecks);
+        Assert.Equal("connected with something else",
+            body.GetProperty("definitionEn").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_meaning_never_described_completely_is_not_stored()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+
+        // Accepted, but never with a definition.
+        Ai.KnownWordPartOfSpeech = "adjective";
+
+        var response = await Client.PostAsJsonAsync("/api/words",
+            new { text = word, customMeaning = "مرتبط" });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error");
+        Assert.Equal("MEANING_CHECK_UNAVAILABLE", error.GetProperty("code").GetString());
+        Assert.Equal(2, Ai.MeaningChecks);
+
+        await using var context = db.CreateContext();
+        Assert.False(await context.Words.AnyAsync(w => w.Text == word));
+    }
+
+    [SkippableFact]
+    public async Task A_refusal_is_final_and_not_asked_again()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+
+        Ai.RejectMeanings = true;
+        var response = await Client.PostAsJsonAsync("/api/words",
+            new { text = word, customMeaning = "سيارة" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(1, Ai.MeaningChecks);
+    }
+
+    [SkippableFact]
+    public async Task An_edit_never_described_completely_changes_nothing()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+
+        Ai.KnownWordPartOfSpeech = "verb";
+        Ai.KnownWordDefinition = "connect in the mind";
+        Ai.KnownWordLevel = "A2";
+        var id = await AddAsync(new { text = word, customMeaning = "ربط" });
+
+        // Accepted, but described without a definition, twice.
+        Ai.KnownWordDefinition = null;
+        Ai.KnownWordPartOfSpeech = "adjective";
+        var response = await ChangeAsync(id, new { meaning = "مرتبط" });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+
+        // Everything as it was — never the new meaning beside the old
+        // description.
+        await using var context = db.CreateContext();
+        var stored = await context.Words.SingleAsync(w => w.Id == id);
+        Assert.Equal("ربط", stored.Meaning);
+        Assert.Equal("verb", stored.PartOfSpeech);
+        Assert.Equal("connect in the mind", stored.DefinitionEn);
+        Assert.Equal(CefrLevel.A2, stored.CefrLevel);
+    }
+
+    [SkippableFact]
+    public async Task An_edit_while_the_checker_is_down_changes_nothing()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+
+        Ai.KnownWordDefinition = "connect in the mind";
+        var id = await AddAsync(new { text = word, customMeaning = "ربط" });
+
+        Ai.Fail = true;
+        var response = await ChangeAsync(id, new { meaning = "مرتبط" });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        await using var context = db.CreateContext();
+        Assert.Equal("ربط", (await context.Words.SingleAsync(w => w.Id == id)).Meaning);
+    }
+
+    [SkippableFact]
+    public async Task Every_stored_word_carries_every_field()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, past) = await SeedAssociatedLikeAsync();
+
+        // One of each path that reaches the checker, plus a dictionary pick.
+        Ai.KnownWordDefinition = "connected with something else";
+        Ai.KnownWordPartOfSpeech = "adjective";
+        await AddAsync(new { text = word, customMeaning = "مرتبط" });
+        await AddAsync(new { senseId = past });
+
+        var other = FreshWord();
+        await SeedAsync(other, "v", "past participle of \"hide\" — conceal", "أخفى", rank: 0);
+        var sessionId = await SeedSessionWithGlossaryAsync([(other, "مخفي", "adjective")]);
+        await AddAsync(new { text = other, fromSessionId = sessionId });
+
+        var list = await Client.GetFromJsonAsync<JsonElement>("/api/words");
+        foreach (var item in list.GetProperty("items").EnumerateArray())
+        {
+            Assert.False(string.IsNullOrWhiteSpace(item.GetProperty("meaning").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(item.GetProperty("definitionEn").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(item.GetProperty("partOfSpeech").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(item.GetProperty("cefrLevel").GetString()));
+        }
+        Assert.Equal(3, list.GetProperty("total").GetInt32());
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────

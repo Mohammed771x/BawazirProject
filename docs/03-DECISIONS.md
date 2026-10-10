@@ -6335,3 +6335,52 @@ nonsense refused with suggestions. Passage adds: `unwavering`, `disciplined`,
 
 Ten API tests (seven confirmed failing on the previous code); two older tests
 now set the checker to refuse before expecting the other word to be named.
+
+## ADR-131 — A word is stored whole or not at all
+
+**Date:** 2026-10-10 · **Status:** Accepted
+
+The product owner's rule, on reading ADR-130: *"there is no such thing as
+empty. Either the operation completes with every field, or it does not
+happen."* ADR-130 had a passage word added with an empty definition when the
+checker was down or disputed the meaning, and older paths did the same — a
+learner-written meaning whose checker answer lacked a definition was stored
+with `""` (locally: four learner words and one passage word), and a word the
+lexicon lacks could be stored with an empty part of speech and a guessed B1.
+
+**Now, on every path that asks the model** — a meaning the learner writes, an
+edited meaning, a word added from a passage — a word is stored only with its
+meaning, English definition, part of speech and CEFR band all present
+(`WordDescription.IsComplete`), from the checker's answer with the lexicon
+filling only gaps (ADR-129).
+
+* **Incomplete answer:** asked again, up to `MeaningCheckAttempts` (2, rule
+  R3). A refusal or a correction is final and not re-asked; an outage is not
+  retried — it would only make the learner wait for the same answer.
+* **Still incomplete, or the checker unreachable:** `503
+  MEANING_CHECK_UNAVAILABLE`, nothing stored. An edit leaves the word exactly
+  as it was — never the new meaning beside the old description.
+* **Passage meaning disputed** (`making = اتخاذ` out of "making a decision"):
+  `404 NOT_IN_PASSAGE` and nothing stored; the client already answers that
+  code with the dictionary sheet, where a pick or a written meaning is whole.
+  No app update needed for any of this.
+
+**The schema change that makes it workable:** `definition_en`,
+`word_part_of_speech` and `cefr_level` are now *required* in the Gemini
+response schema (`meaning-check-v5`). As optional fields, structured output
+dropped them at will — `volume of the tv` came back without a definition on
+every attempt, so under this rule it could never have been added. Filled for a
+refusal too, and ignored.
+
+A dictionary pick is unchanged: every lexicon row has a definition and a part
+of speech (checked: 0 missing in either edition). Most rows lack a CEFR band,
+and those still enter at B1 by the long-standing design that the level engine
+corrects from performance — that is a value, not an empty field.
+
+**Verified with real Gemini, locally:** the fifty production learner words
+re-run through the new code — 50/50 complete; `volume of the tv` and `social
+media sites`, previously stored without a definition, now complete; `making`
+from a passage refused to the dictionary sheet; `relentless`, `serene`,
+`tranquil` added complete. Eight API tests and one AI-service test, seven
+confirmed failing on the previous code; eight older tests rewritten to the
+rule — they had pinned the empty-field behaviour.

@@ -359,6 +359,13 @@ handed one item at a time instead of a fixed list.
 >   of speech, English definition and CEFR band come from its answer, the
 >   lexicon filling only what it left out (ADR-129). A lexicon sense is taken
 >   whole and the model is not asked.
+>
+>   **A word is stored whole or not at all** (ADR-131): meaning, English
+>   definition, part of speech and band, every one present. An accepted
+>   answer missing any of them is asked again (`MeaningCheckAttempts`, 2), and
+>   still incomplete it is `503 MEANING_CHECK_UNAVAILABLE` with nothing stored
+>   — the same "try again in a moment" as an outage. The same holds for
+>   `PATCH /words/{id}/meaning`: the word keeps everything it had.
 > * **`fromSessionId`** — the meaning that session's passage gave the word
 >   (ADR-073). **No meaning is sent.** The server reads it from the glossary it
 >   stored when it generated the passage; a meaning in the body is ignored.
@@ -366,9 +373,11 @@ handed one item at a time instead of a fixed list.
 >   client answers by offering the ordinary dictionary instead.
 >   The passage's meaning is stored as it is, but its English definition, part
 >   of speech and band come from one checker call made at this moment
->   (ADR-130) — not from the lexicon's commonest sense. The call describes
->   and never refuses: disputed or unreachable, the word is still added, with
->   an empty definition rather than a wrong one.
+>   (ADR-130) — not from the lexicon's commonest sense. Whole or not at all
+>   (ADR-131): checker unreachable → `503 MEANING_CHECK_UNAVAILABLE`, nothing
+>   stored; meaning disputed out of its sentence, or never described
+>   completely → `404 NOT_IN_PASSAGE`, which the client already answers with
+>   the dictionary sheet.
 >
 > Errors shared by all three: `BAD_WORD` (400) for a missing word;
 > `WORD_NOT_FOUND` (404) when the word — or the sense — is not in the lexicon;

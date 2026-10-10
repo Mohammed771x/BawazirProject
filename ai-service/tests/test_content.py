@@ -767,7 +767,7 @@ def test_a_known_words_accepted_meaning_carries_its_part_of_speech(
     assert body["word_part_of_speech"] == "adjective"
     assert body["cefr_level"] == "B1"
     assert body["definition_en"] == "connected with something else"
-    assert body["prompt_version"] == "meaning-check-v4"
+    assert body["prompt_version"] == "meaning-check-v5"
 
 
 def test_a_rejected_meaning_is_described_by_nothing(client, auth, stub_gemini):
@@ -806,4 +806,12 @@ def test_the_known_word_prompt_asks_for_the_learners_part_of_speech():
     assert "in the meaning the learner wrote" in known
     # Still not asked whether it is a word: the lexicon has it.
     assert "word_recognized" not in known
+
+
+def test_the_fields_that_describe_a_meaning_are_required_of_the_model():
+    """Optional fields are dropped at will by structured output (ADR-131)."""
+    required = prompts.MEANING_CHECK_SCHEMA["required"]
+
+    for field in ("definition_en", "word_part_of_speech", "cefr_level"):
+        assert field in required
 

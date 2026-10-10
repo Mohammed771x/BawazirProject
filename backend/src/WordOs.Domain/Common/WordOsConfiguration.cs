@@ -309,6 +309,20 @@ public sealed record WordOsConfiguration
     public int PasswordResetMaxAttempts { get; init; } = 5;
 
     /// <summary>
+    /// How many times the meaning checker is asked for a complete answer
+    /// before a word is refused for now (ADR-131).
+    /// </summary>
+    /// <remarks>
+    /// A word enters the pipeline whole or not at all: meaning, English
+    /// definition, part of speech and band. A model answer that leaves one
+    /// out is usually fine the second time — `volume of the tv` came back
+    /// without a definition once and with one the next — so it is asked
+    /// again before the learner is told to try later. Each attempt is a
+    /// Gemini call, so this stays small.
+    /// </remarks>
+    public int MeaningCheckAttempts { get; init; } = 2;
+
+    /// <summary>
     /// How long after a refresh the same token may be presented again without
     /// it being treated as a leak (ADR-093).
     /// </summary>

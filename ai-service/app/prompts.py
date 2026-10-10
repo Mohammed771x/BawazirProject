@@ -1607,7 +1607,7 @@ longer exist{" — and a glossary of the new passage" if inline_glossary else ""
 {"The glossary is not optional and not a summary: the learner taps words in this text to see what they mean here, and a word missing from it falls through to a dictionary, which answers about every sense the word has ever had instead of this one." if inline_glossary else "The learner is waiting for this. Write the passage and nothing else."}"""
 
 
-MEANING_CHECK_PROMPT_VERSION = "meaning-check-v4"
+MEANING_CHECK_PROMPT_VERSION = "meaning-check-v5"
 
 MEANING_CHECK_SCHEMA = {
     "type": "object",
@@ -1651,7 +1651,13 @@ MEANING_CHECK_SCHEMA = {
         "word_part_of_speech": {"type": "string"},
         "cefr_level": {"type": "string"},
     },
-    "required": ["matches", "note"],
+    # The three that describe the meaning are required, not optional (ADR-131).
+    # Gemini's structured output drops optional fields at will: `volume of the
+    # tv` came back without a definition on every attempt, and a word is now
+    # stored whole or not at all — so an optional field was a word the learner
+    # could never add. For a refused meaning they are filled and ignored.
+    "required": ["matches", "note", "definition_en", "word_part_of_speech",
+                 "cefr_level"],
 }
 
 

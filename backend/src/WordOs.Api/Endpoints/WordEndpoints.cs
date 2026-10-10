@@ -466,15 +466,33 @@ public static class WordEndpoints
             //
             // One call, made here rather than by asking every generated
             // passage to define every word it glosses: a learner adds a few
-            // words from a passage, and the passage glosses dozens. It
-            // describes; it does not judge. The passage's meaning is stored
-            // whatever it says, and if it cannot be reached the word is still
-            // added — without a definition rather than with a wrong one.
+            // words from a passage, and the passage glosses dozens.
             var passageSenses = await SensesOfAsync(facts.Text, db, ct);
-            MeaningCheck? described = null;
+
+            WordDescription DescribePassage(MeaningCheck v)
+            {
+                var sense = SenseForLearnerMeaning(storedMeaning, passageSenses, v);
+                return new WordDescription(
+                    CheckersDefinition(v) ?? sense?.DefinitionEn ?? string.Empty,
+                    // From the same answer as the definition, so the two
+                    // agree: the glossary gave `waiting` the role "verb" in
+                    // its sentence and the Arabic انتظار, a noun. The glossary
+                    // is next — it still knows the word's role in its
+                    // sentence ("will" is an auxiliary there, a noun three
+                    // entries up) — then the lexicon.
+                    CheckersPartOfSpeech(v) is { Length: > 0 } said
+                        ? said
+                        : !string.IsNullOrWhiteSpace(row.PartOfSpeech)
+                            ? row.PartOfSpeech.Trim()
+                            : facts.PartOfSpeech,
+                    CheckersLevel(v) ?? facts.CefrLevel);
+            }
+
+            MeaningCheck described;
             try
             {
-                var answer = await ai.CheckMeaningAsync(
+                described = await CheckUntilFinalAsync(
+                    ai,
                     new MeaningCheckRequest(
                         facts.Text,
                         Describe(passageSenses),
@@ -482,36 +500,35 @@ public static class WordEndpoints
                         storedMeaning,
                         LearnerLanguage.From(http.Request),
                         KnownWord: true),
+                    config.MeaningCheckAttempts,
+                    v => v.Matches && DescribePassage(v).IsComplete,
                     ct);
-                if (answer.Matches) described = answer;
             }
             catch (Exception e) when (e is AiServiceException
                                           or HttpRequestException
                                           or TaskCanceledException)
             {
-                // Not now. The meaning is the passage's and stands.
+                // Whole or not at all (ADR-131): "not now", and nothing stored.
+                return MeaningCheckUnavailable();
             }
 
-            var passageSense = described is null
-                ? ExactSense(storedMeaning, passageSenses)
-                : SenseForLearnerMeaning(storedMeaning, passageSenses, described);
-            definitionEn = (described is null ? null : CheckersDefinition(described))
-                ?? passageSense?.DefinitionEn
-                ?? string.Empty;
-            // From the same answer as the definition, so the two agree: the
-            // glossary gave `waiting` the role "verb" in its sentence and the
-            // Arabic انتظار, a noun — stored together, a verb beside a
-            // definition of a noun. The glossary is next, since it still knows
-            // the word's role in its sentence and the lexicon's commonest sense
-            // does not ("will" is an auxiliary there, a noun three entries up).
-            partOfSpeech = described is not null
-                           && CheckersPartOfSpeech(described) is { Length: > 0 } said
-                ? said
-                : !string.IsNullOrWhiteSpace(row.PartOfSpeech)
-                    ? row.PartOfSpeech.Trim()
-                    : facts.PartOfSpeech;
-            level = (described is null ? null : CheckersLevel(described))
-                ?? facts.CefrLevel;
+            // Disputed out of its sentence (`making = اتخاذ`, which is right in
+            // "making a decision"), or never described completely. The word is
+            // not added half-built; the learner is sent to the dictionary sheet
+            // — where they pick a sense or write their own meaning, each
+            // complete — which is what the client already does for a word the
+            // passage never glossed. Same code, so no app needs updating.
+            var passageDescription = DescribePassage(described);
+            if (!described.Matches || !passageDescription.IsComplete)
+            {
+                return Problems.NotFound(
+                    "NOT_IN_PASSAGE",
+                    "This passage's meaning for that word could not be described.");
+            }
+
+            definitionEn = passageDescription.DefinitionEn;
+            partOfSpeech = passageDescription.PartOfSpeech;
+            level = passageDescription.Level;
             source = MeaningSource.Passage;
             senseId = CustomSenses.For(storedText, storedMeaning);
         }
@@ -553,10 +570,33 @@ public static class WordEndpoints
             // Everything downstream marks answers against this string, so a
             // meaning that is wrong or misspelled is not a cosmetic problem —
             // it is five sessions asking the wrong question.
+            // Everything a written meaning is stored with (ADR-129): the
+            // checker's description of it, the lexicon filling only gaps.
+            WordDescription DescribeWritten(MeaningCheck v)
+            {
+                var sense = SenseForLearnerMeaning(custom, senses, v);
+                return new WordDescription(
+                    CheckersDefinition(v) ?? sense?.DefinitionEn ?? string.Empty,
+                    CheckersPartOfSpeech(v) is { Length: > 0 } said
+                        ? said
+                        : sense?.PartOfSpeech ?? facts?.PartOfSpeech ?? string.Empty,
+                    CheckersLevel(v) ?? facts?.CefrLevel);
+            }
+
+            // An answer worth acting on: a refusal of either kind, a
+            // correction, or an acceptance with everything the word needs.
+            bool IsFinal(MeaningCheck v) =>
+                !v.Matches
+                || (facts is null && !v.WordRecognized)
+                || (v.Corrected is { Length: > 0 } c
+                    && !string.Equals(c, custom, StringComparison.Ordinal))
+                || DescribeWritten(v).IsComplete;
+
             MeaningCheck verdict;
             try
             {
-                verdict = await ai.CheckMeaningAsync(
+                verdict = await CheckUntilFinalAsync(
+                    ai,
                     new MeaningCheckRequest(
                         facts?.Text ?? text,
                         // Nothing to judge against for an unknown word, and
@@ -568,6 +608,8 @@ public static class WordEndpoints
                         custom,
                         LearnerLanguage.From(http.Request),
                         KnownWord: facts is not null),
+                    config.MeaningCheckAttempts,
+                    IsFinal,
                     ct);
             }
             catch (Exception e) when (e is AiServiceException
@@ -663,18 +705,17 @@ public static class WordEndpoints
             // Filtered, because the model reports and this decides (rule R2):
             // a part of speech this app cannot label and a band outside the
             // ladder are dropped, and the fallback applies.
-            var sense = SenseForLearnerMeaning(custom, senses, verdict);
-            definitionEn = CheckersDefinition(verdict)
-                ?? sense?.DefinitionEn
-                ?? string.Empty;
-            partOfSpeech = CheckersPartOfSpeech(verdict) is { Length: > 0 } said
-                ? said
-                : sense?.PartOfSpeech
-                  ?? facts?.PartOfSpeech
-                  ?? string.Empty;
-            level = CefrLevelExtensions.TryFromWire(
-                    verdict.Level?.Trim().ToUpperInvariant())
-                ?? facts?.CefrLevel;
+            // Whole or not at all (ADR-131): a word stored without a
+            // definition, a part of speech or a band is half a word, and every
+            // skill downstream is built from all three. Asked again already;
+            // still incomplete, it is "not now", exactly as an outage is, and
+            // nothing is stored.
+            var description = DescribeWritten(verdict);
+            if (!description.IsComplete) return MeaningCheckUnavailable();
+
+            definitionEn = description.DefinitionEn;
+            partOfSpeech = description.PartOfSpeech;
+            level = description.Level;
             source = MeaningSource.Learner;
             // Only an approved meaning reaches this line (ADR-112).
             check = MeaningCheckResult.Approved;
@@ -1005,6 +1046,49 @@ public static class WordEndpoints
         verdict.Matches ? KnownPartOfSpeech(verdict.PartOfSpeech) : string.Empty;
 
     /// <summary>
+    /// What a word is stored with besides its meaning (ADR-131).
+    /// </summary>
+    private sealed record WordDescription(
+        string DefinitionEn, string PartOfSpeech, CefrLevel? Level)
+    {
+        /// <summary>Every field present — the only state a word is stored in.</summary>
+        public bool IsComplete =>
+            !string.IsNullOrWhiteSpace(DefinitionEn)
+            && !string.IsNullOrWhiteSpace(PartOfSpeech)
+            && Level is not null;
+    }
+
+    /// <summary>
+    /// Asks the checker until its answer is one to act on, at most
+    /// <paramref name="attempts"/> times (ADR-131).
+    /// </summary>
+    /// <remarks>
+    /// An outage still throws on the first attempt: retrying a service that is
+    /// down only makes the learner wait longer for the same "not now".
+    /// </remarks>
+    private static async Task<MeaningCheck> CheckUntilFinalAsync(
+        IAiContentService ai,
+        MeaningCheckRequest request,
+        int attempts,
+        Func<MeaningCheck, bool> isFinal,
+        CancellationToken ct)
+    {
+        var verdict = await ai.CheckMeaningAsync(request, ct);
+        for (var i = 1; i < attempts && !isFinal(verdict); i++)
+            verdict = await ai.CheckMeaningAsync(request, ct);
+        return verdict;
+    }
+
+    /// <summary>
+    /// "Not now": the checker could not be reached, or could not describe the
+    /// meaning completely. Nothing was stored, and trying again is the answer.
+    /// </summary>
+    private static IResult MeaningCheckUnavailable() =>
+        Problems.Unavailable(
+            "MEANING_CHECK_UNAVAILABLE",
+            "Could not check that meaning just now. Try again in a moment.");
+
+    /// <summary>
     /// The band the checker gave the learner's meaning, or null when it gave
     /// none on the ladder.
     /// </summary>
@@ -1204,11 +1288,32 @@ public static class WordEndpoints
 
         // ── The learner's own wording: the checker decides (ADR-130) ───────
         var senses = await SensesOfAsync(word.Text, db, ct);
+        // The fallback when the checker leaves a field out, exactly as on
+        // adding: the lexicon's, for this word. Never the word's current
+        // values — those described the old meaning.
+        var lexicon = await ResolveLexiconAsync(word.Text, db, ct);
+
+        // The old definition described the old meaning (a word rewritten from
+        // ثوب رهباني to عادة went on being taught as a robe, ADR-105), and so did
+        // the part of speech and the band (ADR-130). All three are replaced,
+        // from the checker's description of the new meaning — the whole of it
+        // or nothing (ADR-131).
+        WordDescription DescribeEdit(MeaningCheck v)
+        {
+            var sense = SenseForLearnerMeaning(meaning, senses, v);
+            return new WordDescription(
+                CheckersDefinition(v) ?? sense?.DefinitionEn ?? string.Empty,
+                CheckersPartOfSpeech(v) is { Length: > 0 } said
+                    ? said
+                    : sense?.PartOfSpeech ?? lexicon?.PartOfSpeech ?? string.Empty,
+                CheckersLevel(v) ?? lexicon?.CefrLevel);
+        }
 
         MeaningCheck verdict;
         try
         {
-            verdict = await ai.CheckMeaningAsync(
+            verdict = await CheckUntilFinalAsync(
+                ai,
                 new MeaningCheckRequest(
                     word.Text,
                     Describe(senses),
@@ -1216,6 +1321,8 @@ public static class WordEndpoints
                     meaning,
                     LearnerLanguage.From(http.Request),
                     KnownWord: true),
+                config.MeaningCheckAttempts,
+                v => !v.Matches || DescribeEdit(v).IsComplete,
                 ct);
         }
         catch (Exception e) when (e is AiServiceException
@@ -1250,30 +1357,20 @@ public static class WordEndpoints
                 statusCode: StatusCodes.Status409Conflict);
         }
 
-        // The old definition described the old meaning. Left in place, a word
-        // rewritten from ثوب رهباني to عادة went on being taught as a robe
-        // (ADR-105). Replaced with the definition of what the learner now
-        // says — or emptied, which the generators handle, rather than kept
-        // wrong. Emptied only for a word the lexicon holds: one it does not
-        // has only the definition it was added with.
-        var sense = SenseForLearnerMeaning(meaning, senses, verdict);
-        // The checker's first, as on adding (ADR-129).
-        var definition = CheckersDefinition(verdict) ?? sense?.DefinitionEn;
-        if (definition is null && senses.Count > 0) definition = string.Empty;
+        // Accepted but not describable, even asked again: the word keeps
+        // everything it had, as it would through an outage — never the new
+        // meaning beside a description of the old one, or of nothing.
+        var description = DescribeEdit(verdict);
+        if (!description.IsComplete) return MeaningCheckUnavailable();
 
         word.ChangeMeaning(
             meaning,
             MeaningSource.Learner,
             MeaningCheckResult.Approved,
             now,
-            definitionEn: definition,
-            // The checker's, as on adding (ADR-129): a learner who rewrites
-            // `associated` from ربط to مرتبط has changed what kind of word it is.
-            partOfSpeech: CheckersPartOfSpeech(verdict) is { Length: > 0 } said
-                ? said
-                : sense?.PartOfSpeech,
-            // And the band, which described the old meaning too (ADR-130).
-            cefrLevel: CheckersLevel(verdict));
+            definitionEn: description.DefinitionEn,
+            partOfSpeech: description.PartOfSpeech,
+            cefrLevel: description.Level);
 
         await db.SaveChangesAsync(ct);
         return Results.Ok(ToResponse(word, config));

@@ -99,6 +99,13 @@ public sealed class StubAiContentService : IAiContentService
     public string? KnownWordDefinition { get; set; }
 
     /// <summary>
+    /// Definitions to answer with, one per call, before falling back to
+    /// <see cref="KnownWordDefinition"/> — for a checker that answers
+    /// incompletely and then completely (ADR-131).
+    /// </summary>
+    public Queue<string?> KnownWordDefinitions { get; } = new();
+
+    /// <summary>
     /// The part of speech the checker gives a known word's meaning — null, as
     /// before v4, unless a test says otherwise (ADR-129).
     /// </summary>
@@ -133,7 +140,9 @@ public sealed class StubAiContentService : IAiContentService
             CorrectedWord: request.KnownWord ? null : WordCorrection,
             DefinitionEn: RejectMeanings
                 ? null
-                : request.KnownWord ? KnownWordDefinition : "a stub definition",
+                : request.KnownWord
+                    ? (KnownWordDefinitions.TryDequeue(out var queued) ? queued : KnownWordDefinition)
+                    : "a stub definition",
             PartOfSpeech: request.KnownWord ? KnownWordPartOfSpeech : UnknownWordPartOfSpeech,
             Level: request.KnownWord ? KnownWordLevel : UnknownWordLevel,
             Sense: request.KnownWord && !RejectMeanings ? KnownWordSense : null));
