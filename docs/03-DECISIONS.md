@@ -6284,3 +6284,54 @@ the word is stored without one — as before this change.
 
 Six API tests (two confirmed failing on the old code) and three AI-service
 tests.
+
+## ADR-130 — Editing asks the checker first, and a passage word is described by it
+
+**Date:** 2026-10-10 · **Status:** Accepted
+
+Checked at the product owner's request after ADR-129: *every* place a word's
+meaning can be set by something other than a dictionary pick. Two were wrong.
+
+**1. Editing refused correct meanings without asking anyone.** The edit looked
+the new Arabic up in the dictionary first, and any wording filed under a
+*different* English word was refused by naming it. An Arabic word is the
+meaning of many English ones, so this refused real meanings: `associated →
+مرتبط` was "the meaning of `relatum`", `associated → متصل` "of `relevant`",
+`mention → إشارة` "of `pointing`". The learner could not fix their own word.
+
+Now: a wording that is one of *this* word's dictionary senses still adopts
+that sense. Any other wording goes to the checker first. Accepted, it is
+stored with the checker's part of speech, definition **and CEFR band** — the
+band did not move on an edit before, and it describes the meaning, not the
+journey (`Word.ChangeMeaning` takes it; nothing scheduled moves). Refused, the
+other word is named and the swap offered when the dictionary knows one,
+otherwise `MEANING_REJECTED`.
+
+**2. A word added from a passage got the commonest sense's definition** — the
+`habit` fault of ADR-105 on the passage path. Its meaning and role came from
+the passage's glossary, but its English definition and band from the
+lexicon's commonest sense: `hidden = مخفي` beside "past participle of hide",
+`keep = نحتفظ` beside "stick to correctly", `exhausting = مُرهق` beside
+"-ing form of exhaust". Now one checker call at the moment of adding
+describes the passage's meaning — definition, band and part of speech, so the
+type and the definition come from the same answer (the glossary gave `waiting`
+the role "verb" and the Arabic انتظار, a noun). The glossary's part of speech
+is the fallback, then the lexicon's.
+
+*Why at add time and not in the glossary:* a passage glosses dozens of words
+and a learner adds a few; defining every glossed word in every generated
+passage would cost far more than one ~850-token call per added word. The cost
+is a second or two on that tap. The call **describes and never refuses**: the
+passage's meaning is stored even if the checker disputes it out of context
+(`making = اتخاذ`, which fits "making a decision"), and if the checker is
+unreachable the word is still added — with an empty definition rather than a
+wrong one.
+
+**Verified with real Gemini, locally, and on the simulator:** editing
+`associated` ربط → مرتبط → adjective, back to ربط → verb, band B1 → B2, the
+skills untouched; `سيارة` and `يحجز` refused and the other word named;
+nonsense refused with suggestions. Passage adds: `unwavering`, `disciplined`,
+`exhausting`, `coupled` all described by the checker.
+
+Ten API tests (seven confirmed failing on the previous code); two older tests
+now set the checker to refuse before expecting the other word to be named.

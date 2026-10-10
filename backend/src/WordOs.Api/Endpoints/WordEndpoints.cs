@@ -457,14 +457,61 @@ public static class WordEndpoints
 
             storedText = facts.Text;
             storedMeaning = row.Meaning!.Trim();
-            definitionEn = facts.DefinitionEn;
-            // The glossary knows the word's role *in this sentence*, which the
-            // lexicon's commonest sense does not: "will" is an auxiliary here
-            // and a noun three entries up.
-            partOfSpeech = string.IsNullOrWhiteSpace(row.PartOfSpeech)
-                ? facts.PartOfSpeech
-                : row.PartOfSpeech.Trim();
-            level = facts.CefrLevel;
+
+            // The passage's meaning is the AI's, so its description is too
+            // (ADR-130). `facts` is the lexicon's *commonest* sense, and its
+            // definition stored `hidden = مخفي` beside "past participle of
+            // hide" and `keep = نحتفظ` beside "stick to correctly" — the
+            // `habit` fault of ADR-105, on the passage path.
+            //
+            // One call, made here rather than by asking every generated
+            // passage to define every word it glosses: a learner adds a few
+            // words from a passage, and the passage glosses dozens. It
+            // describes; it does not judge. The passage's meaning is stored
+            // whatever it says, and if it cannot be reached the word is still
+            // added — without a definition rather than with a wrong one.
+            var passageSenses = await SensesOfAsync(facts.Text, db, ct);
+            MeaningCheck? described = null;
+            try
+            {
+                var answer = await ai.CheckMeaningAsync(
+                    new MeaningCheckRequest(
+                        facts.Text,
+                        Describe(passageSenses),
+                        facts.PartOfSpeech,
+                        storedMeaning,
+                        LearnerLanguage.From(http.Request),
+                        KnownWord: true),
+                    ct);
+                if (answer.Matches) described = answer;
+            }
+            catch (Exception e) when (e is AiServiceException
+                                          or HttpRequestException
+                                          or TaskCanceledException)
+            {
+                // Not now. The meaning is the passage's and stands.
+            }
+
+            var passageSense = described is null
+                ? ExactSense(storedMeaning, passageSenses)
+                : SenseForLearnerMeaning(storedMeaning, passageSenses, described);
+            definitionEn = (described is null ? null : CheckersDefinition(described))
+                ?? passageSense?.DefinitionEn
+                ?? string.Empty;
+            // From the same answer as the definition, so the two agree: the
+            // glossary gave `waiting` the role "verb" in its sentence and the
+            // Arabic انتظار, a noun — stored together, a verb beside a
+            // definition of a noun. The glossary is next, since it still knows
+            // the word's role in its sentence and the lexicon's commonest sense
+            // does not ("will" is an auxiliary there, a noun three entries up).
+            partOfSpeech = described is not null
+                           && CheckersPartOfSpeech(described) is { Length: > 0 } said
+                ? said
+                : !string.IsNullOrWhiteSpace(row.PartOfSpeech)
+                    ? row.PartOfSpeech.Trim()
+                    : facts.PartOfSpeech;
+            level = (described is null ? null : CheckersLevel(described))
+                ?? facts.CefrLevel;
             source = MeaningSource.Passage;
             senseId = CustomSenses.For(storedText, storedMeaning);
         }
@@ -908,11 +955,7 @@ public static class WordEndpoints
     {
         if (senses.Count == 0) return null;
 
-        var normalized = ArabicText.Normalize(meaning);
-        var exact = senses.FirstOrDefault(r =>
-            r.MeaningArNormalized.Length > 0
-            && r.MeaningArNormalized == normalized);
-        if (exact is not null) return SameKind(exact, verdict);
+        if (ExactSense(meaning, senses) is { } exact) return SameKind(exact, verdict);
 
         if (!verdict.Matches) return null;
 
@@ -920,6 +963,19 @@ public static class WordEndpoints
             return SameKind(senses[n - 1], verdict);
 
         return senses.Count == 1 ? SameKind(senses[0], verdict) : null;
+    }
+
+    /// <summary>
+    /// The sense whose own Arabic is exactly this meaning, if any. Decided
+    /// here, without asking anyone.
+    /// </summary>
+    private static SenseRow? ExactSense(
+        string meaning, IReadOnlyList<SenseRow> senses)
+    {
+        var normalized = ArabicText.Normalize(meaning);
+        return senses.FirstOrDefault(r =>
+            r.MeaningArNormalized.Length > 0
+            && r.MeaningArNormalized == normalized);
     }
 
     /// <summary>
@@ -947,6 +1003,15 @@ public static class WordEndpoints
     /// </summary>
     private static string CheckersPartOfSpeech(MeaningCheck verdict) =>
         verdict.Matches ? KnownPartOfSpeech(verdict.PartOfSpeech) : string.Empty;
+
+    /// <summary>
+    /// The band the checker gave the learner's meaning, or null when it gave
+    /// none on the ladder.
+    /// </summary>
+    private static CefrLevel? CheckersLevel(MeaningCheck verdict) =>
+        verdict.Matches
+            ? CefrLevelExtensions.TryFromWire(verdict.Level?.Trim().ToUpperInvariant())
+            : null;
 
     /// <summary>
     /// The checker's definition of the learner's meaning, or null when it
@@ -991,17 +1056,19 @@ public static class WordEndpoints
     ///
     /// <list type="number">
     /// <item>
-    /// <b>The dictionary, when it recognises the wording.</b> It can name the
-    /// English word a meaning belongs to, which is the whole difference between
-    /// "that is wrong" and "that is <c>book</c>". Its verdict is final: there
-    /// is no override, because insisting here is how one word silently becomes
-    /// another.
+    /// <b>The dictionary, when the wording is one of this word's own
+    /// senses.</b> Then it is the dictionary's meaning, and the sense is
+    /// adopted with its definition.
     /// </item>
     /// <item>
-    /// <b>The checker, when the dictionary has never seen the wording.</b> It
-    /// cannot name another word, only judge the pairing, so its refusal is the
-    /// softer one the learner may overrule — the same bargain ADR-074 struck
-    /// for a written meaning on the way in.
+    /// <b>The checker, for any other wording.</b> It used to be asked only
+    /// when the dictionary had never seen the wording, and a wording the
+    /// dictionary filed under another word was refused outright — so
+    /// <c>associated</c> could not be rewritten as مرتبط, which the
+    /// dictionary files under <c>relatum</c> (ADR-130). An Arabic word is the
+    /// meaning of many English ones. Only when the checker refuses it is the
+    /// other word named, with the swap offered: that is the difference
+    /// between "that is wrong" and "that is <c>book</c>".
     /// </item>
     /// </list>
     /// </remarks>
@@ -1061,7 +1128,12 @@ public static class WordEndpoints
         var sameWord = matches.FirstOrDefault(
             l => l.TextNormalized == textNormalized);
 
-        if (sameWord is null && matches.Count > 0)
+        // The wording is real but the dictionary files it under another word.
+        // Said only once the checker has refused it for this one (ADR-130):
+        // an Arabic word is the meaning of many English ones — مرتبط is
+        // `associated`, `related` and `connected` — so the dictionary naming
+        // one of them is no evidence the learner is wrong about theirs.
+        IResult AnotherWord()
         {
             // The meaning is real — it just belongs to somebody else. Naming
             // the word is the point: "that is wrong" leaves the learner
@@ -1130,7 +1202,7 @@ public static class WordEndpoints
             return Results.Ok(ToResponse(word, config));
         }
 
-        // ── The dictionary has never seen this wording ──────────────────────
+        // ── The learner's own wording: the checker decides (ADR-130) ───────
         var senses = await SensesOfAsync(word.Text, db, ct);
 
         MeaningCheck verdict;
@@ -1159,6 +1231,11 @@ public static class WordEndpoints
 
         if (!verdict.Matches)
         {
+            // Refused for this word. When the dictionary knows the wording
+            // under another, naming that word — and offering the swap — is a
+            // better answer than "wrong" (ADR-101).
+            if (matches.Count > 0) return AnotherWord();
+
             return Results.Json(
                 new
                 {
@@ -1194,7 +1271,9 @@ public static class WordEndpoints
             // `associated` from ربط to مرتبط has changed what kind of word it is.
             partOfSpeech: CheckersPartOfSpeech(verdict) is { Length: > 0 } said
                 ? said
-                : sense?.PartOfSpeech);
+                : sense?.PartOfSpeech,
+            // And the band, which described the old meaning too (ADR-130).
+            cefrLevel: CheckersLevel(verdict));
 
         await db.SaveChangesAsync(ct);
         return Results.Ok(ToResponse(word, config));

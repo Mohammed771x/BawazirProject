@@ -250,14 +250,21 @@ handed one item at a time instead of a fixed list.
 > schedule, the exposure count and `addedAt` are all left exactly as they were.
 > A word that must start again does so by being replaced, not by being edited.
 >
-> Two authorities answer "is this still the same word", in this order:
+> Two authorities answer "is this still the same word", in this order
+> (ADR-130):
 >
-> * **the dictionary**, when it recognises the wording — the only thing that can
->   *name* the English word a meaning belongs to. `409
->   MEANING_IS_ANOTHER_WORD` carries `candidates: [WordCandidate]`;
-> * **the checker**, when the dictionary has never seen the wording: `409
->   MEANING_REJECTED` with the meanings it would accept. Final (ADR-112) — the
->   word keeps the meaning it had.
+> * **the dictionary**, when the wording is one of *this* word's own senses —
+>   that sense is adopted, with its definition, part of speech and band;
+> * **the checker**, for any other wording. Accepted → the meaning is stored
+>   with the checker's part of speech, definition and CEFR band for it.
+>   Refused → `409 MEANING_IS_ANOTHER_WORD` with `candidates: [WordCandidate]`
+>   when the dictionary files the wording under another word (the swap offer),
+>   otherwise `409 MEANING_REJECTED` with the meanings it would accept. Final
+>   (ADR-112) — the word keeps the meaning it had.
+>
+>   The dictionary filing a wording under another word no longer refuses it
+>   by itself: an Arabic word is the meaning of many English ones, and
+>   `associated → مرتبط` was refused as "the meaning of `relatum`".
 >
 > The sense id travels with the meaning when the new wording is another sense of
 > the same word, so the stored English definition still describes what the
@@ -348,13 +355,20 @@ handed one item at a time instead of a fixed list.
 >   unreachable, nothing is saved: `MEANING_CHECK_UNAVAILABLE` (503). There is
 >   no fallback, deliberately.
 >
->   The lexicon and passage paths are **not** checked: neither gloss is the
->   learner's guess.
+>   For a meaning the learner writes, the checker also **describes** it: part
+>   of speech, English definition and CEFR band come from its answer, the
+>   lexicon filling only what it left out (ADR-129). A lexicon sense is taken
+>   whole and the model is not asked.
 > * **`fromSessionId`** — the meaning that session's passage gave the word
 >   (ADR-073). **No meaning is sent.** The server reads it from the glossary it
 >   stored when it generated the passage; a meaning in the body is ignored.
 >   `NOT_IN_PASSAGE` (404) for a word the generator did not gloss, which the
 >   client answers by offering the ordinary dictionary instead.
+>   The passage's meaning is stored as it is, but its English definition, part
+>   of speech and band come from one checker call made at this moment
+>   (ADR-130) — not from the lexicon's commonest sense. The call describes
+>   and never refuses: disputed or unreachable, the word is still added, with
+>   an empty definition rather than a wrong one.
 >
 > Errors shared by all three: `BAD_WORD` (400) for a missing word;
 > `WORD_NOT_FOUND` (404) when the word — or the sense — is not in the lexicon;

@@ -331,6 +331,10 @@ public class Word
     /// that must start again does so by being replaced, not by being
     /// edited.</para>
     ///
+    /// <para>What <i>describes</i> the meaning moves with it — definition,
+    /// part of speech, band — because each was a description of the old one.
+    /// None of them is the journey.</para>
+    ///
     /// <para>The sense may be adopted along with the meaning when the new
     /// wording is a sense the dictionary holds <i>for this same word</i>:
     /// leaving the old sense id behind would keep an English definition that
@@ -345,7 +349,8 @@ public class Word
         DateTimeOffset now,
         string? senseId = null,
         string? definitionEn = null,
-        string? partOfSpeech = null)
+        string? partOfSpeech = null,
+        CefrLevel? cefrLevel = null)
     {
         Meaning = meaning;
         MeaningSource = source;
@@ -354,6 +359,10 @@ public class Word
         if (senseId is { Length: > 0 }) SenseId = senseId;
         if (definitionEn is not null) DefinitionEn = definitionEn;
         if (partOfSpeech is not null) PartOfSpeech = partOfSpeech;
+        // The band describes the meaning, not the journey: it decides which
+        // passages the word fits, and a rewritten meaning can be harder or
+        // easier than the one it replaced (ADR-130). Nothing scheduled moves.
+        if (cefrLevel is { } level) CefrLevel = level;
 
         _events.Add(
             WordEvent.Create(Id, WordEventType.MeaningChanged, null, now));

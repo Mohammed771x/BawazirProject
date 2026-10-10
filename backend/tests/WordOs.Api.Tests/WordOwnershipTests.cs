@@ -470,23 +470,35 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Only_a_written_meaning_is_checked()
+    public async Task A_meaning_picked_from_the_dictionary_is_never_put_to_the_model()
     {
         Skip.IfNot(db.IsAvailable, db.SkipReason);
         await SignInAsync();
 
-        // A lexicon gloss is curated and a passage gloss was written by this
-        // service. Neither is the learner's guess, so neither is worth a Gemini
-        // call — a check on them spends the learner's money asking the model
-        // whether the dictionary is right.
+        // A lexicon gloss is curated, and picked it is the dictionary's in
+        // every respect (ADR-129) — a call here would spend the learner's
+        // money asking the model whether the dictionary is right.
         var senseId = await SeedAsync("quill", "n", "a pen", "ريشة كتابة");
         await AddAsync(new { senseId });
 
+        Assert.Equal(0, Ai.MeaningChecks);
+    }
+
+    [SkippableFact]
+    public async Task A_word_from_a_passage_costs_one_call_to_describe_it()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // The passage's meaning is the AI's, so is its description (ADR-130)
+        // — asked once, when the learner adds it, rather than of every word
+        // every passage glosses.
+        await SeedAsync("quill", "n", "a pen", "ريشة كتابة");
         var sessionId = await SeedSessionWithGlossaryAsync(
             [("quill", "قلم ريشة", "noun")]);
         await AddAsync(new { text = "quill", fromSessionId = sessionId });
 
-        Assert.Equal(0, Ai.MeaningChecks);
+        Assert.Equal(1, Ai.MeaningChecks);
     }
 
     [SkippableFact]
@@ -809,6 +821,9 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
 
         var wordId = await AddAsync(new { senseId });
 
+        // The checker is asked first now (ADR-130), and `create` does not
+        // mean يحجز. Only then is the word it does belong to named.
+        Ai.RejectMeanings = true;
         var response = await ChangeAsync(wordId, new { meaning = "يحجز" });
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
 
@@ -844,6 +859,7 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         // (ADR-074). It has no business here: the dictionary knows whose
         // meaning this is, and insisting would silently make `create` mean
         // `book`.
+        Ai.RejectMeanings = true;
         var response = await ChangeAsync(
             wordId, new { meaning = "يحجز", acceptAnyway = true });
 
@@ -1249,6 +1265,172 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
         Assert.Equal("adjective", body.GetProperty("partOfSpeech").GetString());
         Assert.Equal("connected with something else",
             body.GetProperty("definitionEn").GetString());
+    }
+
+    // ── ADR-130: editing asks the checker first; a passage word is described ──
+
+    [SkippableFact]
+    public async Task A_wording_the_dictionary_files_under_another_word_is_put_to_the_checker()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+
+        // The dictionary files مرتبط under a rare word. It used to refuse the
+        // edit by naming it — "مرتبط is the meaning of relatum" — without
+        // asking anyone whether it is also the meaning of this word.
+        await SeedAsync("relat" + FreshWord(), "n", "a thing related", "مرتبط");
+
+        Ai.KnownWordPartOfSpeech = "verb";
+        var id = await AddAsync(new { text = word, customMeaning = "ربط" });
+
+        Ai.KnownWordPartOfSpeech = "adjective";
+        Ai.KnownWordDefinition = "connected with something else";
+        var response = await ChangeAsync(id, new { meaning = "مرتبط" });
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal("مرتبط", body.GetProperty("meaning").GetString());
+        Assert.Equal("adjective", body.GetProperty("partOfSpeech").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_refused_wording_with_no_other_owner_is_simply_refused()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+        var id = await AddAsync(new { text = word, customMeaning = "ربط" });
+
+        Ai.RejectMeanings = true;
+        var response = await ChangeAsync(id, new { meaning = "كلام فارغ تماما" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error");
+        Assert.Equal("MEANING_REJECTED", error.GetProperty("code").GetString());
+    }
+
+    [SkippableFact]
+    public async Task Rewriting_a_meaning_moves_its_band_and_nothing_scheduled()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+
+        Ai.KnownWordLevel = "A2";
+        var id = await AddAsync(new { text = word, customMeaning = "ربط" });
+
+        await using var before = db.CreateContext();
+        var journey = await SnapshotAsync(before, id);
+
+        Ai.KnownWordLevel = "C1";
+        var response = await ChangeAsync(id, new { meaning = "مرتبط" });
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal("C1", body.GetProperty("cefrLevel").GetString());
+
+        // The band describes the meaning; the journey is untouched (ADR-101).
+        await using var after = db.CreateContext();
+        Assert.Equal(journey, await SnapshotAsync(after, id));
+    }
+
+    [SkippableFact]
+    public async Task A_passage_word_is_described_by_the_checker_not_the_commonest_sense()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // Production: `hidden = مخفي` stored beside "past participle of hide".
+        var word = FreshWord();
+        await SeedAsync(word, "v", "past participle of \"hide\" — conceal", "أخفى", rank: 0);
+        var sessionId = await SeedSessionWithGlossaryAsync([(word, "مخفي", "adjective")]);
+
+        Ai.KnownWordDefinition = "kept out of sight";
+        Ai.KnownWordLevel = "B1";
+        Ai.KnownWordPartOfSpeech = "adjective";
+
+        var body = await AddAndReadAsync(new { text = word, fromSessionId = sessionId });
+
+        Assert.Equal("مخفي", body.GetProperty("meaning").GetString());
+        Assert.Equal("adjective", body.GetProperty("partOfSpeech").GetString());
+        Assert.Equal("kept out of sight", body.GetProperty("definitionEn").GetString());
+        Assert.Equal("B1", body.GetProperty("cefrLevel").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_passage_words_part_of_speech_agrees_with_its_definition()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // Found running it: the glossary gave `waiting` the role "verb" in its
+        // sentence and the meaning انتظار, a noun. The type now comes from the
+        // same answer as the definition.
+        var word = FreshWord();
+        await SeedAsync(word, "v", "-ing form of \"wait\" — stay", "انتظر", rank: 0);
+        var sessionId = await SeedSessionWithGlossaryAsync([(word, "انتظار", "verb")]);
+
+        Ai.KnownWordPartOfSpeech = "noun";
+        Ai.KnownWordDefinition = "the act of staying until something happens";
+
+        var body = await AddAndReadAsync(new { text = word, fromSessionId = sessionId });
+
+        Assert.Equal("noun", body.GetProperty("partOfSpeech").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_passage_word_the_checker_gives_no_type_keeps_the_glossarys()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var word = FreshWord();
+        await SeedAsync(word, "n", "a thing", "شيء", rank: 0);
+        var sessionId = await SeedSessionWithGlossaryAsync([(word, "سوف", "auxiliary")]);
+
+        var body = await AddAndReadAsync(new { text = word, fromSessionId = sessionId });
+
+        Assert.Equal("auxiliary", body.GetProperty("partOfSpeech").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_passage_word_is_added_when_the_checker_is_down_without_a_wrong_definition()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        var word = FreshWord();
+        await SeedAsync(word, "v", "past participle of \"hide\" — conceal", "أخفى", rank: 0);
+        var sessionId = await SeedSessionWithGlossaryAsync([(word, "مخفي", "adjective")]);
+
+        Ai.Fail = true;
+        var body = await AddAndReadAsync(new { text = word, fromSessionId = sessionId });
+
+        // The passage's meaning stands; the description waits for another
+        // day rather than borrowing the commonest sense's.
+        Assert.Equal("مخفي", body.GetProperty("meaning").GetString());
+        Assert.Equal("", body.GetProperty("definitionEn").GetString());
+        Assert.Equal("A1", body.GetProperty("cefrLevel").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_passage_meaning_the_checker_disputes_is_still_the_passages()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        await SeedAsync("bank", "n", "a financial institution", "مصرف", rank: 0);
+        var sessionId = await SeedSessionWithGlossaryAsync(
+            [("bank", "ضفة النهر", "noun")]);
+
+        // It describes; it does not judge. The learner read this meaning.
+        Ai.RejectMeanings = true;
+        var body = await AddAndReadAsync(new { text = "bank", fromSessionId = sessionId });
+
+        Assert.Equal("ضفة النهر", body.GetProperty("meaning").GetString());
+        Assert.DoesNotContain("financial", body.GetProperty("definitionEn").GetString());
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
