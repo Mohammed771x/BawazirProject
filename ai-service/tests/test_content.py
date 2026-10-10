@@ -468,9 +468,11 @@ def test_a_known_word_is_never_questioned_as_a_word(client, auth, stub_gemini):
 
     assert body["matches"] is True
     assert body["word_recognized"] is True
-    # Part of speech and band stay the lexicon's: they belong to the word.
-    assert body["word_part_of_speech"] is None
-    assert body["cefr_level"] is None
+    # Part of speech and band are reported for the learner's meaning since v4:
+    # a meaning the learner wrote is described by the checker, and the lexicon
+    # held `associated` only as a verb (ADR-129). The backend filters them.
+    assert body["word_part_of_speech"] == "noun"
+    assert body["cefr_level"] == "C2"
     # The definition does not — it belongs to a *sense*. Until ADR-105 it was
     # withheld here as "the lexicon holds a better one", and the backend then
     # stored the lexicon's *commonest* sense beside whatever the learner wrote:
@@ -735,3 +737,73 @@ def test_a_request_that_names_no_register_still_gets_arabic(
     context = response.json()["contexts"][0]
     assert len(context["wrong_meanings_ar"]) == 3
     assert context["wrong_meanings_en"] == []
+
+
+# ── ADR-129: a meaning the learner wrote is described by the checker ────────
+
+
+def test_a_known_words_accepted_meaning_carries_its_part_of_speech(
+        client, auth, stub_gemini):
+    """`associated = مرتبط` is an adjective, whatever the lexicon's rows say."""
+    stub_gemini({
+        "matches": True,
+        "note": "المعنى صحيح.",
+        "sense": 2,
+        "definition_en": "connected with something else",
+        "word_part_of_speech": "adjective",
+        "cefr_level": "B1",
+    })
+
+    body = client.post("/ai/meaning/check", headers=auth, json={
+        "word": "associated",
+        "definitions": [
+            'v: past tense of "associate" — make a logical connection',
+            'v: past participle of "associate" — make a logical connection',
+        ],
+        "part_of_speech": "v",
+        "meaning": "مرتبط",
+    }).json()
+
+    assert body["word_part_of_speech"] == "adjective"
+    assert body["cefr_level"] == "B1"
+    assert body["definition_en"] == "connected with something else"
+    assert body["prompt_version"] == "meaning-check-v4"
+
+
+def test_a_rejected_meaning_is_described_by_nothing(client, auth, stub_gemini):
+    """Nothing is stored for a refused meaning, so nothing describes it."""
+    stub_gemini({
+        "matches": False,
+        "note": "المعنى غير صحيح.",
+        "suggestions": ["مرتبط"],
+        "definition_en": "a car",
+        "word_part_of_speech": "noun",
+        "cefr_level": "A1",
+    })
+
+    body = client.post("/ai/meaning/check", headers=auth, json={
+        "word": "associated",
+        "definitions": ['v: past tense of "associate" — make a logical connection'],
+        "meaning": "سيارة",
+    }).json()
+
+    assert body["matches"] is False
+    assert body["suggestions"] == ["مرتبط"]
+    assert body["word_part_of_speech"] is None
+    assert body["cefr_level"] is None
+    assert body["definition_en"] is None
+
+
+def test_the_known_word_prompt_asks_for_the_learners_part_of_speech():
+    """The prompt, not the plumbing: judged from the Arabic, not the list."""
+    known = prompts.meaning_check_prompt(
+        word="associated",
+        definitions=['v: past tense of "associate" — make a logical connection'],
+        part_of_speech="v", meaning="مرتبط")
+
+    assert "word_part_of_speech" in known
+    assert "cefr_level" in known
+    assert "in the meaning the learner wrote" in known
+    # Still not asked whether it is a word: the lexicon has it.
+    assert "word_recognized" not in known
+

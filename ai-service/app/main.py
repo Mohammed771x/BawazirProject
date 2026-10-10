@@ -1074,10 +1074,16 @@ def check_meaning(request: MeaningCheckRequest) -> MeaningCheckResponse:
         if matches else None,
         sense=_sense_or_none(payload.get("sense"), len(request.definitions))
         if request.known_word and matches else None,
+        # Asked of a known word too since v4, about the meaning the learner
+        # wrote: a meaning they wrote is described by the checker, a meaning
+        # they picked by the dictionary (ADR-129). The lexicon held
+        # `associated` only as the past forms of `associate`, and `associated
+        # = مرتبط` was stored as a verb. Only for an accepted meaning — there is
+        # nothing to describe otherwise — and the backend filters both.
         word_part_of_speech=_text_or_none(payload.get("word_part_of_speech"))
-        if not request.known_word else None,
+        if (matches or not request.known_word) else None,
         cefr_level=_text_or_none(payload.get("cefr_level"))
-        if not request.known_word else None,
+        if (matches or not request.known_word) else None,
     )
 
 

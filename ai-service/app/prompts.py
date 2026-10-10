@@ -1607,7 +1607,7 @@ longer exist{" — and a glossary of the new passage" if inline_glossary else ""
 {"The glossary is not optional and not a summary: the learner taps words in this text to see what they mean here, and a word missing from it falls through to a dictionary, which answers about every sense the word has ever had instead of this one." if inline_glossary else "The learner is waiting for this. Write the passage and nothing else."}"""
 
 
-MEANING_CHECK_PROMPT_VERSION = "meaning-check-v3"
+MEANING_CHECK_PROMPT_VERSION = "meaning-check-v4"
 
 MEANING_CHECK_SCHEMA = {
     "type": "object",
@@ -1704,6 +1704,18 @@ learner means. Omit it when their Arabic names none of the listed senses.
 - definition_en: a short English definition of "{word}" **in the meaning the \
 learner wrote**, one clause, no example sentence. Required when matches is \
 true. It describes their meaning, never merely the commonest one.
+
+- word_part_of_speech: what "{word}" is **in the meaning the learner wrote** — \
+exactly one of noun, verb, adjective, adverb, pronoun, preposition, \
+conjunction, determiner, interjection, numeral. Required when matches is true. \
+Judge it from their Arabic, not from the list above, which may hold only the \
+verb forms of a word that is also an adjective: a participle glossed as a \
+description is an adjective ("associated" = مرتبط, "limited" = محدود), one \
+glossed as an action is a verb ("associated" = ربط), one glossed as an \
+activity is a noun ("grafting" = تطعيم).
+
+- cefr_level: exactly one of A1, A2, B1, B2, C1, C2 — how hard "{word}" is \
+for a learner of English **in this meaning**. Required when matches is true.
 """
     else:
         known = f"""The word: {word}

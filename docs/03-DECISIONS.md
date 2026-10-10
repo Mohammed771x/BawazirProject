@@ -6228,3 +6228,59 @@ looks at.
 reads 10. Each page also runs one `COUNT` over the learner's own rows, which
 are filtered by `UserId`.
 
+
+## ADR-129 — A meaning the learner writes is described by the checker; a meaning they pick, by the dictionary
+
+**Date:** 2026-10-10 · **Status:** Accepted
+
+**Reported by a student:** `associated = مرتبط` was taught as a verb. Two
+faults behind it:
+
+* The lexicon holds `associated` **only as the past forms of `associate`** —
+  every row is `v`, "past tense of…" or "past participle of…". About 7,000
+  headwords in each edition are like this (`limited`, `related`, …). Picked
+  from the dictionary, `associated` can only be a verb.
+* Written by the learner, it still came out a verb: for a word the lexicon
+  knows, the checker was never asked what kind of word the learner meant, so
+  the part of speech was the lexicon's.
+
+**The product owner's rule:** *picked from the dictionary, everything is the
+dictionary's; written by the learner, the AI checks the meaning and, when it is
+right, supplies everything about it.* So for a written meaning:
+
+| | from | fallback |
+|---|---|---|
+| part of speech | the checker, for the learner's meaning | named sense → lexicon |
+| definition | the checker's, of the learner's meaning | named sense |
+| CEFR band | the checker's, for this meaning | lexicon |
+
+Filtered, because the model reports and the backend decides (rule R2): a part
+of speech the app cannot label, or a band off the ladder, is dropped and the
+fallback applies. A rejected meaning stores nothing. A sense the checker names
+is kept only when its part of speech agrees with the checker's.
+
+`meaning-check-v4` asks `word_part_of_speech` and `cefr_level` of a known word
+too, judged from the learner's Arabic (a participle glossed as a description
+is an adjective), and returns them only for an accepted meaning.
+
+**Verified with real Gemini, locally:** `associated = مرتبط` → adjective,
+`associated = ربط` → verb, `limited = محدود` → adjective, `grafting = تطعيم
+النبات` → noun, `convention = مؤتمر` → "a large meeting" (it had "the act of
+convening"), `quickly = بسرعة` → adverb; `book = سيارة` refused with
+suggestions, `recieve` refused with `receive`, `asdfgh` refused, English as a
+meaning refused. On the simulator: written `مرتبط` shows **صفة**; the dictionary
+list for `associated` still shows only verbs, which is the dictionary's to fix.
+
+**Production:** the fifty learner-written words were re-run through the new
+code; two changed part of speech (`grafting` → noun; `mention = ذكر` → verb —
+`ذكر` reads both ways and the checker chose the verb) and most definitions
+became a description of the learner's meaning. **Not applied:** the product
+owner corrects the affected words (and the `associated` a student picked from
+the dictionary) by hand. A generated script is kept outside the repository.
+
+Known and not changed here: for a few multi-word phrases unknown to the
+lexicon (`volume of the tv`) the checker sometimes returns no definition, so
+the word is stored without one — as before this change.
+
+Six API tests (two confirmed failing on the old code) and three AI-service
+tests.

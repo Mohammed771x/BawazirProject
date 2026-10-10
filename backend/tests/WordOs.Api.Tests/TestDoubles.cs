@@ -98,6 +98,15 @@ public sealed class StubAiContentService : IAiContentService
     /// <summary>The checker's own definition of the learner's meaning.</summary>
     public string? KnownWordDefinition { get; set; }
 
+    /// <summary>
+    /// The part of speech the checker gives a known word's meaning — null, as
+    /// before v4, unless a test says otherwise (ADR-129).
+    /// </summary>
+    public string? KnownWordPartOfSpeech { get; set; }
+
+    /// <summary>The band the checker gives a known word's meaning (ADR-129).</summary>
+    public string? KnownWordLevel { get; set; }
+
     /// <summary>The sense list the checker was last shown, in order.</summary>
     public IReadOnlyList<string> LastCheckDefinitions { get; private set; } = [];
 
@@ -125,8 +134,8 @@ public sealed class StubAiContentService : IAiContentService
             DefinitionEn: RejectMeanings
                 ? null
                 : request.KnownWord ? KnownWordDefinition : "a stub definition",
-            PartOfSpeech: request.KnownWord ? null : UnknownWordPartOfSpeech,
-            Level: request.KnownWord ? null : UnknownWordLevel,
+            PartOfSpeech: request.KnownWord ? KnownWordPartOfSpeech : UnknownWordPartOfSpeech,
+            Level: request.KnownWord ? KnownWordLevel : UnknownWordLevel,
             Sense: request.KnownWord && !RejectMeanings ? KnownWordSense : null));
     }
 

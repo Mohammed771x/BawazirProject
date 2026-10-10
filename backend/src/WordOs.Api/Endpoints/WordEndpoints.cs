@@ -600,27 +600,34 @@ public static class WordEndpoints
 
             storedText = facts?.Text ?? text;
             storedMeaning = custom;
-            // For a word the lexicon has, its own facts — they come from
-            // WordNet and a published CEFR list and are worth more than a
-            // model's recollection of them. For one it does not, the checker's,
-            // filtered: the model reports and this decides (rule R2), so a part
-            // of speech outside the set this app can label and a band outside
-            // the ladder are dropped rather than stored.
-            // The definition is the exception to "the lexicon's facts win": it
-            // belongs to a *sense*, and `facts` is only the commonest one.
-            // Taking it here stored `habit = عادة` beside "attire worn by a
-            // member of a religious order", and `sausage = نقانق` beside "a small
-            // airship" — and every generator downstream read the definition,
-            // not the Arabic (ADR-105).
+            // A meaning the learner wrote is described by the checker that
+            // read it — part of speech, definition and band — and the lexicon
+            // only fills what the checker left out (ADR-129, the product
+            // owner's rule: "picked from the dictionary, the dictionary's;
+            // written by the learner, the AI's").
+            //
+            // The lexicon describes *its* senses, and a learner who writes
+            // their own meaning has often written one it lacks: it holds
+            // `associated` only as the past forms of `associate`, so
+            // `associated = مرتبط` was stored as a verb and taught as one.
+            // Before that, the commonest sense's definition stored `habit =
+            // عادة` beside a monk's robe (ADR-105).
+            //
+            // Filtered, because the model reports and this decides (rule R2):
+            // a part of speech this app cannot label and a band outside the
+            // ladder are dropped, and the fallback applies.
             var sense = SenseForLearnerMeaning(custom, senses, verdict);
-            definitionEn = facts is null
-                ? verdict.DefinitionEn ?? string.Empty
-                : sense?.DefinitionEn ?? verdict.DefinitionEn ?? string.Empty;
-            partOfSpeech = sense?.PartOfSpeech
-                ?? facts?.PartOfSpeech
-                ?? KnownPartOfSpeech(verdict.PartOfSpeech);
-            level = facts?.CefrLevel ?? CefrLevelExtensions.TryFromWire(
-                verdict.Level?.Trim().ToUpperInvariant());
+            definitionEn = CheckersDefinition(verdict)
+                ?? sense?.DefinitionEn
+                ?? string.Empty;
+            partOfSpeech = CheckersPartOfSpeech(verdict) is { Length: > 0 } said
+                ? said
+                : sense?.PartOfSpeech
+                  ?? facts?.PartOfSpeech
+                  ?? string.Empty;
+            level = CefrLevelExtensions.TryFromWire(
+                    verdict.Level?.Trim().ToUpperInvariant())
+                ?? facts?.CefrLevel;
             source = MeaningSource.Learner;
             // Only an approved meaning reaches this line (ADR-112).
             check = MeaningCheckResult.Approved;
@@ -905,15 +912,50 @@ public static class WordEndpoints
         var exact = senses.FirstOrDefault(r =>
             r.MeaningArNormalized.Length > 0
             && r.MeaningArNormalized == normalized);
-        if (exact is not null) return exact;
+        if (exact is not null) return SameKind(exact, verdict);
 
         if (!verdict.Matches) return null;
 
         if (verdict.Sense is int n && n >= 1 && n <= senses.Count)
-            return senses[n - 1];
+            return SameKind(senses[n - 1], verdict);
 
-        return senses.Count == 1 ? senses[0] : null;
+        return senses.Count == 1 ? SameKind(senses[0], verdict) : null;
     }
+
+    /// <summary>
+    /// The sense, unless the checker says the learner's meaning is a
+    /// different part of speech (ADR-129).
+    /// </summary>
+    /// <remarks>
+    /// A sense's definition describes a word of its own kind. `associated =
+    /// مرتبط` matched the row "past participle of associate — make a logical
+    /// connection", which is the closest thing the lexicon has and is a verb;
+    /// stored beside an adjective it teaches the verb. When the two disagree
+    /// the checker's own definition of the learner's meaning is used instead.
+    /// </remarks>
+    private static SenseRow? SameKind(SenseRow sense, MeaningCheck verdict)
+    {
+        var said = CheckersPartOfSpeech(verdict);
+        return said.Length == 0 || KnownPartOfSpeech(sense.PartOfSpeech) == said
+            ? sense
+            : null;
+    }
+
+    /// <summary>
+    /// The part of speech the checker gave the learner's meaning, normalised,
+    /// or empty when it gave none this app can label.
+    /// </summary>
+    private static string CheckersPartOfSpeech(MeaningCheck verdict) =>
+        verdict.Matches ? KnownPartOfSpeech(verdict.PartOfSpeech) : string.Empty;
+
+    /// <summary>
+    /// The checker's definition of the learner's meaning, or null when it
+    /// gave none worth storing.
+    /// </summary>
+    private static string? CheckersDefinition(MeaningCheck verdict) =>
+        verdict.Matches && !string.IsNullOrWhiteSpace(verdict.DefinitionEn)
+            ? verdict.DefinitionEn.Trim()
+            : null;
 
     /// <summary>
     /// Removes a word from the learner's vocabulary (ADR-071).
@@ -1138,7 +1180,8 @@ public static class WordEndpoints
         // wrong. Emptied only for a word the lexicon holds: one it does not
         // has only the definition it was added with.
         var sense = SenseForLearnerMeaning(meaning, senses, verdict);
-        var definition = sense?.DefinitionEn ?? verdict.DefinitionEn;
+        // The checker's first, as on adding (ADR-129).
+        var definition = CheckersDefinition(verdict) ?? sense?.DefinitionEn;
         if (definition is null && senses.Count > 0) definition = string.Empty;
 
         word.ChangeMeaning(
@@ -1147,7 +1190,11 @@ public static class WordEndpoints
             MeaningCheckResult.Approved,
             now,
             definitionEn: definition,
-            partOfSpeech: sense?.PartOfSpeech);
+            // The checker's, as on adding (ADR-129): a learner who rewrites
+            // `associated` from ربط to مرتبط has changed what kind of word it is.
+            partOfSpeech: CheckersPartOfSpeech(verdict) is { Length: > 0 } said
+                ? said
+                : sense?.PartOfSpeech);
 
         await db.SaveChangesAsync(ct);
         return Results.Ok(ToResponse(word, config));

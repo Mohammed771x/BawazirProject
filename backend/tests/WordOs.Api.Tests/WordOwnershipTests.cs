@@ -1102,6 +1102,155 @@ public class WordOwnershipTests(PostgresFixture db) : IAsyncLifetime
             body.GetProperty("definitionEn").GetString());
     }
 
+    // ── ADR-129: a meaning the learner wrote is described by the checker ──
+    //
+    // Reported by a student: `associated = مرتبط` was stored as a verb. The
+    // lexicon holds `associated` only as the past forms of `associate`, the
+    // checker was never asked what kind of word the learner meant, and the
+    // part of speech came from the lexicon. The product owner's rule: picked
+    // from the dictionary, the dictionary's; written by the learner, the AI's.
+
+    /// <summary>A word the lexicon knows only as a verb's past forms.</summary>
+    private async Task<(string Word, string PastTense)> SeedAssociatedLikeAsync()
+    {
+        var word = FreshWord();
+        var past = await SeedAsync(word, "v",
+            "past tense of \"associate\" — make a logical or causal connection",
+            "رَبَطَ (الماضي)", rank: 0);
+        await SeedAsync(word, "v",
+            "past participle of \"associate\" — make a logical or causal connection",
+            "رَبَطَ (التصريف الثالث)", rank: 1);
+        return (word, past);
+    }
+
+    [SkippableFact]
+    public async Task A_meaning_the_learner_wrote_takes_the_checkers_description()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+
+        // The closest listed sense is the participle, and the checker names
+        // it — but describes what the learner actually wrote.
+        Ai.KnownWordSense = 2;
+        Ai.KnownWordPartOfSpeech = "adjective";
+        Ai.KnownWordDefinition = "connected with something else";
+        Ai.KnownWordLevel = "B2";
+
+        var body = await AddAndReadAsync(new { text = word, customMeaning = "مرتبط" });
+
+        Assert.Equal("مرتبط", body.GetProperty("meaning").GetString());
+        Assert.Equal("adjective", body.GetProperty("partOfSpeech").GetString());
+        Assert.Equal("connected with something else",
+            body.GetProperty("definitionEn").GetString());
+        Assert.Equal("B2", body.GetProperty("cefrLevel").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_meaning_picked_from_the_dictionary_is_the_dictionarys()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (_, past) = await SeedAssociatedLikeAsync();
+
+        // Whatever the checker would say, it is not asked.
+        Ai.KnownWordPartOfSpeech = "adjective";
+        Ai.KnownWordDefinition = "connected with something else";
+        Ai.KnownWordLevel = "C2";
+        var before = Ai.MeaningChecks;
+
+        var body = await AddAndReadAsync(new { senseId = past });
+
+        Assert.Equal(before, Ai.MeaningChecks);
+        Assert.Equal("v", body.GetProperty("partOfSpeech").GetString());
+        Assert.StartsWith("past tense of",
+            body.GetProperty("definitionEn").GetString());
+        Assert.Equal("A1", body.GetProperty("cefrLevel").GetString());
+    }
+
+    [SkippableFact]
+    public async Task What_the_checker_leaves_out_the_dictionary_fills()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _, _) = await SeedHabitLikeAsync();
+
+        // A checker that named the sense and nothing else.
+        Ai.KnownWordSense = 2;
+
+        var body = await AddAndReadAsync(new { text = word, customMeaning = "عادة" });
+
+        Assert.Equal("n", body.GetProperty("partOfSpeech").GetString());
+        Assert.Equal("an established custom",
+            body.GetProperty("definitionEn").GetString());
+        Assert.Equal("A1", body.GetProperty("cefrLevel").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_part_of_speech_or_band_this_app_cannot_use_is_dropped()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+
+        // The model reports and the backend decides (rule R2).
+        Ai.KnownWordPartOfSpeech = "participle";
+        Ai.KnownWordLevel = "Z9";
+        Ai.KnownWordDefinition = "connected with something else";
+
+        var body = await AddAndReadAsync(new { text = word, customMeaning = "مرتبط" });
+
+        Assert.Equal("v", body.GetProperty("partOfSpeech").GetString());
+        Assert.Equal("A1", body.GetProperty("cefrLevel").GetString());
+        Assert.Equal("connected with something else",
+            body.GetProperty("definitionEn").GetString());
+    }
+
+    [SkippableFact]
+    public async Task A_rejected_meaning_stores_nothing_whatever_else_the_checker_said()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+
+        Ai.RejectMeanings = true;
+        Ai.KnownWordPartOfSpeech = "adjective";
+
+        var response = await Client.PostAsJsonAsync("/api/words",
+            new { text = word, customMeaning = "سيارة" });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error");
+        Assert.Equal("MEANING_REJECTED", error.GetProperty("code").GetString());
+        Assert.True(error.GetProperty("suggestions").GetArrayLength() > 0);
+
+        await using var context = db.CreateContext();
+        Assert.False(await context.Words.AnyAsync(w => w.Text == word));
+    }
+
+    [SkippableFact]
+    public async Task Rewriting_a_meaning_takes_the_checkers_description()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        var (word, _) = await SeedAssociatedLikeAsync();
+
+        Ai.KnownWordPartOfSpeech = "verb";
+        Ai.KnownWordDefinition = "connect in the mind";
+        var id = await AddAsync(new { text = word, customMeaning = "ربط" });
+
+        Ai.KnownWordPartOfSpeech = "adjective";
+        Ai.KnownWordDefinition = "connected with something else";
+        var response = await ChangeAsync(id, new { meaning = "مرتبط" });
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal("adjective", body.GetProperty("partOfSpeech").GetString());
+        Assert.Equal("connected with something else",
+            body.GetProperty("definitionEn").GetString());
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────
 
     private Task<HttpResponseMessage> ChangeAsync(Guid wordId, object body) =>
