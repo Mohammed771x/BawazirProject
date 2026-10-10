@@ -113,6 +113,7 @@ void main() {
   });
 
   englishDefinitionsInTheArabicInterface();
+  partsOfSpeechInTheLearnersLanguage();
 }
 
 /// An English dictionary definition shown inside the Arabic interface.
@@ -154,5 +155,36 @@ void englishDefinitionsInTheArabicInterface() {
     // And not dragged to the left edge — it hangs from the same side as the
     // Arabic meaning above it.
     expect(tester.widget<Text>(shown.first).textAlign, TextAlign.right);
+  });
+}
+
+/// The kind of word, said in the interface language on the search results.
+///
+/// The results printed the code the dictionary stores — `v`, `n`, `a` on
+/// production, `verb` and `noun` here — under an Arabic interface, while the
+/// word's own card already said فعل. Seen on the simulator for `associated`.
+void partsOfSpeechInTheLearnersLanguage() {
+  testWidgets('a search result says فعل and اسم, not the stored code',
+      (tester) async {
+    await bootApp(
+      tester,
+      locale: const Locale('ar'),
+      surfaceSize: const Size(1200, 2600),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'تسجيل الدخول'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('إضافة كلمة').last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, 'book');
+    await tester.pumpAndSettle(const Duration(milliseconds: 600));
+
+    expect(find.text('فعل'), findsWidgets);
+    expect(find.text('اسم'), findsWidgets);
+    expect(find.text('verb'), findsNothing);
+    expect(find.text('noun'), findsNothing);
   });
 }

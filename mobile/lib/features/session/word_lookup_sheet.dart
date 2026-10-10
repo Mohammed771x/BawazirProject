@@ -379,7 +379,12 @@ class _SenseTile extends ConsumerWidget {
           Row(
             children: [
               if (sense.partOfSpeech.isNotEmpty)
-                StatusPill(label: sense.partOfSpeech, color: color),
+                // The lexicon's code (`v`) in the learner's words (فعل), as
+                // the passage's own chip above already says it.
+                StatusPill(
+                  label: s.partOfSpeechLabel(sense.partOfSpeech),
+                  color: color,
+                ),
               const Spacer(),
               if (added)
                 StatusPill(

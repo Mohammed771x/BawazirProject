@@ -354,7 +354,9 @@ class _CandidateTile extends ConsumerWidget {
                     Text(candidate.text, style: context.text.titleMedium),
                     if (candidate.partOfSpeech.isNotEmpty)
                       Text(
-                        candidate.partOfSpeech,
+                        // In the learner's language: the lexicon stores
+                        // `v`, `n`, `a`, and this printed them as they were.
+                        s.partOfSpeechLabel(candidate.partOfSpeech),
                         style: context.text.labelSmall?.copyWith(
                           color:
                               context.colors.onSurface.withValues(alpha: 0.55),
