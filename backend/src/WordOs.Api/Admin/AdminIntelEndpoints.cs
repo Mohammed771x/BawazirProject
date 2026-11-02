@@ -34,10 +34,12 @@ public static class AdminIntelEndpoints
 
     public sealed record FeedbackStatusRequest(bool Handled);
 
+    /// <param name="Section">May be left empty on a follow-up, which then keeps its parent's.</param>
     public sealed record InquiryRequest(
-        [property: Required, StringLength(32)] string Section,
+        [property: StringLength(32)] string? Section,
         [property: Required, StringLength(1000, MinimumLength = 3)] string Question,
-        IntelFilter? Filter = null);
+        IntelFilter? Filter = null,
+        Guid? ParentId = null);
 
     public static IEndpointRouteBuilder MapAdminIntelEndpoints(this IEndpointRouteBuilder app)
     {
@@ -71,19 +73,19 @@ public static class AdminIntelEndpoints
 
     // ── Plumbing ─────────────────────────────────────────────────────────────
 
-    private static IResult? Deny(ClaimsPrincipal principal) =>
+    internal static IResult? Deny(ClaimsPrincipal principal) =>
         principal.IsOwner() || principal.IsInRole(nameof(UserRole.Analyst))
             ? null
             : Problems.Forbidden("FORBIDDEN", "This area is restricted to administrators.");
 
-    private static Privacy PrivacyFor(ClaimsPrincipal principal) => new(principal.IsOwner());
+    internal static Privacy PrivacyFor(ClaimsPrincipal principal) => new(principal.IsOwner());
 
-    private static async Task<IntelDataset> LoadAsync(
+    internal static async Task<IntelDataset> LoadAsync(
         WordOsDbContext db, WordOsConfiguration config, IOptions<AdminIntelOptions> options,
         TimeProvider clock, CancellationToken ct) =>
         await IntelDataset.LoadAsync(db, config, options.Value, clock.GetUtcNow(), ct);
 
-    private static IntelFilter FilterFrom(HttpRequest r)
+    internal static IntelFilter FilterFrom(HttpRequest r)
     {
         string? Q(string k) => r.Query.TryGetValue(k, out var v) && !string.IsNullOrWhiteSpace(v) ? v.ToString() : null;
         return new IntelFilter(
@@ -94,7 +96,7 @@ public static class AdminIntelEndpoints
             UserId: Guid.TryParse(Q("userId"), out var u) ? u : null);
     }
 
-    private static object PeriodOf(IntelScope scope) => new
+    internal static object PeriodOf(IntelScope scope) => new
     {
         from = scope.Period.From,
         to = scope.Period.To,
@@ -104,7 +106,7 @@ public static class AdminIntelEndpoints
         learners = scope.Learners.Count,
     };
 
-    private static async Task AuditAsync(
+    internal static async Task AuditAsync(
         WordOsDbContext db, ClaimsPrincipal principal, HttpContext http, IConfiguration configuration,
         TimeProvider clock, string action, string? target = null, string? detail = null)
     {
@@ -326,6 +328,7 @@ public static class AdminIntelEndpoints
                 ? IntelMetrics.MostTranslated(scope).Select(x => new { word = x.Word, count = x.Count })
                 : null,
             levelFlows = IntelMetrics.Levels(scope).Flows,
+            byVersion = IntelMetrics.ByContentVersion(scope, s),
         });
     }
 
@@ -882,6 +885,8 @@ public static class AdminIntelEndpoints
                 summary = i.Summary,
                 interpretedBy = i.InterpretedBy,
                 createdAt = i.CreatedAt,
+                parentId = i.ParentId,
+                followUpOn = i.FollowUpOn,
                 author = db.Users.Where(u => u.Id == i.AuthorId).Select(u => u.DisplayName).FirstOrDefault(),
             })
             .ToListAsync(ct);
@@ -905,28 +910,84 @@ public static class AdminIntelEndpoints
     {
         if (Deny(principal) is { } denied) return denied;
         if (!MiniValidator.TryValidate(request, out var errors)) return Results.ValidationProblem(errors);
-        if (!IntelInquiry.Sections.Any(s => s.Key == request.Section))
+
+        // A follow-up carries on where its parent left off (brief §9.5): the
+        // same section and filters unless this message names others, so "and
+        // the period before?" does not mean choosing Reading and B1 again.
+        AdminInquiry? parent = null;
+        if (request.ParentId is { } pid)
+        {
+            parent = await db.AdminInquiries.AsNoTracking().FirstOrDefaultAsync(i => i.Id == pid, ct);
+            if (parent is null) return Problems.BadRequest("UNKNOWN_PARENT", "No such investigation to follow.");
+        }
+        var section = string.IsNullOrWhiteSpace(request.Section) ? parent?.Section : request.Section;
+        if (section is null || !IntelInquiry.Sections.Any(s => s.Key == section))
             return Problems.BadRequest("UNKNOWN_SECTION", "Choose one of the listed sections.");
 
+        var filter = request.Filter
+                     ?? (parent?.FilterJson is { } fj ? JsonSerializer.Deserialize<IntelFilter>(fj, WebJson) : null)
+                     ?? new IntelFilter();
+
         var data = await LoadAsync(db, config, options, clock, ct);
-        var scope = new IntelScope(data, request.Filter ?? new IntelFilter());
+        var (id, json) = await InvestigateAndSaveAsync(db, data, principal, section, request.Question.Trim(), filter,
+            parent?.Id, insight, clock, ct);
+        await AuditAsync(db, principal, http, configuration, clock, "inquiry.created", id.ToString(), section);
+        return Results.Text(json, "application/json");
+    }
+
+    private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
+
+    /// <summary>
+    /// Investigate, with the thread and the area's earlier decisions as
+    /// context, and keep the whole result (ADR-125 §7, ADR-132).
+    /// </summary>
+    internal static async Task<(Guid Id, string Json)> InvestigateAndSaveAsync(
+        WordOsDbContext db, IntelDataset data, ClaimsPrincipal principal, string section, string question,
+        IntelFilter filter, Guid? parentId, IAdminInsightService insight, TimeProvider clock, CancellationToken ct)
+    {
+        var scope = new IntelScope(data, filter);
         var me = await db.Users.AsNoTracking().FirstAsync(u => u.Id == principal.UserId(), ct);
 
+        // The thread, oldest first, at most four turns back: enough for "and
+        // the week before?" to mean something, short enough to stay a prompt.
+        var conversation = new List<object>();
+        var cursor = parentId;
+        while (cursor is { } c && conversation.Count < 4)
+        {
+            var turn = await db.AdminInquiries.AsNoTracking().Where(i => i.Id == c)
+                .Select(i => new { i.Question, i.Summary, i.Section, i.ParentId }).FirstOrDefaultAsync(ct);
+            if (turn is null) break;
+            conversation.Insert(0, new { question = turn.Question, answer = turn.Summary, section = turn.Section });
+            cursor = turn.ParentId;
+        }
+
+        // What was already decided here, and how it turned out — so the
+        // reading can say "this was tried" instead of suggesting it again.
+        var prior = await db.ProductDecisions.AsNoTracking()
+            .Where(d => d.Area == section || d.Area == "general")
+            .OrderByDescending(d => d.UpdatedAt).Take(8)
+            .Select(d => new { d.Title, d.Action, d.Status, d.Verdict, d.ActualOutcome, d.ImplementedOn })
+            .ToListAsync(ct);
+        var priorDecisions = prior.Select(d => (object)new
+        {
+            title = d.Title, action = d.Action, status = d.Status.ToString(), verdict = d.Verdict?.ToString(),
+            outcome = d.ActualOutcome, implementedOn = d.ImplementedOn,
+        }).ToList();
+
         var result = await IntelInquiry.InvestigateAsync(
-            scope, request.Section, request.Question.Trim(), PrivacyFor(principal), insight, ct);
+            scope, section, question, PrivacyFor(principal), insight, ct,
+            new InquiryContext(conversation, priorDecisions));
 
         var now = clock.GetUtcNow();
         var id = Guid.CreateVersion7(now);
-        var full = result with { Id = id, Author = me.DisplayName, CreatedAt = now };
-        var json = JsonSerializer.Serialize(full, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var full = result with { Id = id, Author = me.DisplayName, CreatedAt = now, ParentId = parentId };
+        var json = JsonSerializer.Serialize(full, WebJson);
 
         // Saved under the id the admin was shown, so the link they copy opens it.
-        db.AdminInquiries.Add(AdminInquiry.Create(id, me.Id, request.Section, request.Question,
-            result.Summary, result.InterpretedBy, json, now));
+        db.AdminInquiries.Add(AdminInquiry.Create(id, me.Id, section, question,
+            result.Summary, result.InterpretedBy, json, now, parentId, JsonSerializer.Serialize(filter, WebJson)));
         await db.SaveChangesAsync(ct);
-        await AuditAsync(db, principal, http, configuration, clock, "inquiry.created", id.ToString(), request.Section);
-
-        return Results.Text(json, "application/json");
+        return (id, json);
     }
 
     // ── System ───────────────────────────────────────────────────────────────

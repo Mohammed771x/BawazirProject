@@ -71,9 +71,29 @@ public sealed class AdminInquiry
 
     public DateTimeOffset CreatedAt { get; private set; }
 
+    /// <summary>
+    /// The question this one followed, when the admin carried on a thread
+    /// (ADR-132) — the conversation is the chain of parents.
+    /// </summary>
+    public Guid? ParentId { get; private set; }
+
+    /// <summary>
+    /// The filters it was asked under, so a follow-up can inherit them and a
+    /// re-run can repeat them. Null for investigations saved before ADR-132.
+    /// </summary>
+    public string? FilterJson { get; private set; }
+
+    /// <summary>
+    /// When the admin asked to look at this again — "watch Reading for three
+    /// days". A date the list surfaces, not a process that watches: nothing
+    /// re-runs by itself (brief §10).
+    /// </summary>
+    public DateOnly? FollowUpOn { get; private set; }
+
     public static AdminInquiry Create(
         Guid id, Guid authorId, string section, string question, string summary,
-        string interpretedBy, string resultJson, DateTimeOffset now) =>
+        string interpretedBy, string resultJson, DateTimeOffset now,
+        Guid? parentId = null, string? filterJson = null) =>
         new()
         {
             Id = id,
@@ -84,7 +104,11 @@ public sealed class AdminInquiry
             InterpretedBy = interpretedBy,
             ResultJson = resultJson,
             CreatedAt = now,
+            ParentId = parentId,
+            FilterJson = filterJson,
         };
+
+    public void FollowUp(DateOnly? on) => FollowUpOn = on;
 }
 
 /// <summary>

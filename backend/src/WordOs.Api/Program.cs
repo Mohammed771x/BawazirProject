@@ -562,6 +562,7 @@ app.MapAdminEndpoints();
 app.MapFeedbackEndpoints();
 app.MapEventEndpoints();
 app.MapAdminIntelEndpoints();
+app.MapAdminProductEndpoints();
 app.MapSpeechEndpoints();
 
 app.Run();

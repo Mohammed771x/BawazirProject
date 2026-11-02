@@ -619,6 +619,34 @@ Nothing extra to host: the Dockerfile builds `admin-web/` and the API serves it 
 Thresholds live in the `AdminIntel` configuration section (`AdminIntel__OverdueDays`, …);
 the defaults are in `backend/src/WordOs.Api/Admin/IntelDataset.cs`.
 
+## 6¾ · Decisions, changes and notifications in the admin (ADR-132)
+
+Two additive migrations, `ProductDecisions` and `DecisionReviewSnapshot`: two
+new tables (`product_decisions`, `product_changes`) and new nullable columns on
+`admin_inquiries`. Nothing is rewritten or deleted.
+
+1. **Before pushing**, apply them as `wordos_migrator` (§1, the simple way) and
+   read the first line — it must name the Neon host and `wordos`:
+
+   ```bash
+   cd backend && ConnectionStrings__WordOsMigrations="Host=ep-….neon.tech;Database=wordos;Username=wordos_migrator;Password=$MIGRATOR_PW;SSL Mode=Require" \
+     dotnet ef database update --project src/WordOs.Infrastructure --startup-project src/WordOs.Api
+   ```
+
+   Expect `Applying migration '20261102205112_ProductDecisions'` and
+   `'…_DecisionReviewSnapshot'`, then `Done.`
+2. The grant to `wordos_app` is **inside** `ProductDecisions` (guarded — skipped
+   where the role does not exist). Check it anyway:
+
+   ```bash
+   psql "$NEON_URL" -tAc "select relname, relacl from pg_class where relname in ('product_decisions','product_changes');"
+   # each must include  wordos_app=arwd/…
+   ```
+3. Push. Render deploys the API, the AI service (prompt `admin-insight-v2`) and
+   the admin website together, from the one image.
+4. Check with something that touches the new tables: open
+   `/admin/decisions`, propose one, and open it. A `500` there means step 2.
+
 ## What will run out first
 
 Not the server. In order:

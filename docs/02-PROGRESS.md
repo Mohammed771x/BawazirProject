@@ -3,7 +3,70 @@
 > **The live state of the project.** Update this at the end of every working session.
 > A new session should read `CLAUDE.md` → this file → then start at "Next up".
 
-**Last updated:** 2026-10-08 (My Words paging, ADR-127)
+**Last updated:** 2026-11-03 (admin: decisions, changes, dictionary — ADR-132)
+
+> **2026-11-03 — WordOS Admin: Decide → Implement → Measure (ADR-132).** Not
+> deployed. The second admin brief, audited first: `docs/10-ADMIN-INTELLIGENCE-AUDIT.md`
+> maps every page and requirement to what existed (most of it, ADR-125), what was
+> added, and what is still open. Added: **Decision Log** (`/admin/decisions` —
+> proposal → Owner approval → implemented → review date → verdict, live
+> evaluation frozen at closing, history from the audit trail); **Experiments &
+> Changes** (`/admin/changes` — one log, before/after per change, comparison
+> segment with difference-in-differences, overlapping changes named);
+> **Notifications** (`/admin/notifications` — planned → opened → lesson →
+> completed; the server now records `reminders_planned` when a phone fetches its
+> list); **metric and event dictionary** in Settings, printed from
+> `IntelMeasures`, the only metrics a decision may name; **investigator threads**
+> (follow-ups inherit section and filters, a `discussion` mode that reads no
+> data, follow-up dates, re-run, prior decisions sent to the model,
+> `admin-insight-v2`, "turn into a decision"). Migration `ProductDecisions`
+> (additive) applied locally. API **528** tests green; AI-service insight tests
+> green; `admin-web` build clean; walked through in the browser against the
+> local API and real model. Local test data left in `wordos_dev`: one decision
+> ("تقصير أول محادثة في Speaking") and two investigations.
+> Same day, at the owner's request: the 80 % comprehension threshold dropped;
+> User 360 days open on click; decisions are measured automatically once their
+> review date passes (sidebar badges for those and for due follow-ups); each
+> skill page compares results by content version. API **530** green.
+> **To ship:** apply `ProductDecisions` and `DecisionReviewSnapshot` with
+> `wordos_migrator`, deploy API and AI service together (the prompt version
+> changed). Only open admin item: the phone sending a reminder's kind — an app
+> change, left out on purpose.
+
+> **2026-10-08 — APK 1.3.2 (versionCode 2006, arm64-v8a)** built against
+> `https://wordos-api.onrender.com/api` with the guided tour and the microphone fix, and
+> handed over as `~/Desktop/WordOS-1.3.2.apk`. Client only — no API change, nothing to
+> deploy first. Not committed yet.
+
+> **2026-10-08 — Guided tour (ADR-128).** Not deployed; client only, no API change.
+> A Masar-style spotlight tutorial without the robot: placement says it is required and
+> not final (lower it in Settings), each question kind is pointed at once (the
+> microphone in a circle), and the hub, My Words, a word, Add word, Settings and the
+> first session of each skill each explain themselves once. Settings → Help → Replay
+> the app tour. Engine `mobile/lib/core/tour/`, script
+> `mobile/lib/features/tour/app_tours.dart`, tests `mobile/test/guided_tour_test.dart`.
+> Flutter `analyze` clean, **561** tests green. Checked by eye in a web build against
+> the mock; **not yet run on a phone** — do that before the next APK.
+> Same day: the placement passage and question now keep English left-to-right (the full
+> stop had moved to the front of each line in Arabic), and the app's mock gives a new
+> sign-up one word due in every skill (`MockEngine.openEverySkillForNewAccounts`; tests
+> keep it off) so a demo can open all five sessions straight after placement.
+> Then, from the simulator: the speaking question's tour and the microphone permission
+> prompts came up together, the ten-second recogniser timeout ran out, and the question
+> said "this device cannot listen" for the rest of the run. Now the microphone is asked
+> for only after the tour (`AppTour.whenIdle`), a "no" or a timeout is never cached
+> (both recognisers), the question re-checks when the app returns to the foreground,
+> and both the placement field and the Speaking session offer "Use voice" to ask
+> again. `test/microphone_after_tour_test.dart`; **563** tests green.
+> Then every *phase* of a skill explains itself the first time it appears, at the owner's
+> request: Reading's passage (tap a word, the session's words, "finished reading") and
+> its questions (choose then Check, the book icon back to the text); Listening's player
+> and its questions (the headphones back to the clip, the sentence and the word alone);
+> Speaking's warm-up and conversation (the words to use, the microphone, typing
+> instead, the lesson at the end); Spelling's clue, hint, tiles and Check; Writing's
+> task, box and Check. The tutor waits for the tour before speaking. Each phase's
+> trigger is keyed — the passage and the questions share a place in the tree, and the
+> questions had inherited the passage's spent trigger. **564** tests green.
 
 > **2026-10-08 — My Words showed only the first 50 words (ADR-127).** **Deployed
 > 2026-10-08**: `06969f7` Live on Render (no migration, no data touched). APK 1.3.1
@@ -36,7 +99,7 @@
 | 6 | Python AI service | ✅ FastAPI + real Gemini, token-authenticated |
 | 7 | Integration (swap mock → real, voice capture) | ✅ All five skills on the real API; voice conversation built |
 | 8 | Analytics & Owner dashboard | ✅ Real PostgreSQL-backed analytics |
-| 8.5 | Admin & Product Intelligence website (ADR-125) | ✅ Built, local only |
+| 8.5 | Admin & Product Intelligence website (ADR-125, ADR-132) | ✅ Built, local only — decisions, changes, notifications, dictionary added 2026-11-03 |
 | 9 | Hardening & pilot | ⬜ Not started |
 
 ## Admin & Product Intelligence website — 2026-10-04 (ADR-125)

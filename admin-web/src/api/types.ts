@@ -190,6 +190,12 @@ export interface SkillDetail {
   byLevel: { level: string; sessions: number; firstAttemptAccuracy: number | null; abandoned: number }[]
   daily: { date: string; passed: number; failed: number; sessions: number }[]
   attempts: { attempts: string; words: number }[]
+  /** ADR-132 — the skill split by the prompt version that wrote its content. */
+  byVersion?: {
+    version: string; model: string | null; first: string; last: string; sessions: number; learners: number
+    completion: number | null; abandoned: number; questions: number; firstAttemptAccuracy: number | null
+    retryRate: number | null; fallback: number | null; medianSessionMs: number | null
+  }[]
   next: { recovered: number; waiting: number; deleted: number; total: number }
   words: FailedWord[]
   mostTranslated: { word: string; count: number }[] | null
@@ -385,6 +391,10 @@ export interface Investigation {
   dataNote: string
   periodFrom: string
   periodTo: string
+  /** ADR-132 — absent on investigations saved before it. */
+  parentId?: string | null
+  mode?: 'data' | 'discussion'
+  filter?: Filters | null
 }
 
 export interface InquirySummary {
@@ -395,6 +405,201 @@ export interface InquirySummary {
   interpretedBy: string
   createdAt: string
   author: string | null
+  parentId?: string | null
+  followUpOn?: string | null
+}
+
+// ── Decide → Implement → Measure → Learn (ADR-132) ─────────────────────────
+
+export interface MeasureDef {
+  key: string
+  label: string
+  area: string
+  format: Format
+  goodWhenUp: boolean
+  definition: string
+  formula: string
+  source: string
+  sampleUnit: string
+  limitation: string | null
+  revised: string
+}
+
+export interface Definitions {
+  metrics: MeasureDef[]
+  events: { name: string; source: 'client' | 'server' | 'table'; where: string; meaning: string }[]
+  brief: { requested: string; status: 'recorded' | 'derived' | 'partial' | 'missing'; where: string; note: string | null }[]
+  thresholds: Record<string, number>
+}
+
+export interface MetricTarget { key: string; direction: 'up' | 'down'; target?: number | null }
+
+export type Outcome = 'improved' | 'worsened' | 'flat' | 'insufficient' | 'unknown'
+
+export interface MeasuredMetric {
+  key: string
+  label: string
+  format: Format
+  direction: 'up' | 'down'
+  target: number | null
+  before: number | null
+  beforeSample: number
+  after: number | null
+  afterSample: number
+  change: number | null
+  relativeChange: number | null
+  outcome: Outcome
+  targetMet: boolean | null
+  comparisonBefore: number | null
+  comparisonAfter: number | null
+  comparisonSample: number | null
+  netOfComparison: number | null
+}
+
+export interface Evaluation {
+  computedAt: string
+  population: string
+  populationSize: number
+  before: { from: string; to: string; days: number }
+  after: { from: string; to: string; days: number }
+  afterComplete: boolean
+  comparisonPopulation: string | null
+  targeted: MeasuredMetric[]
+  guardrails: MeasuredMetric[]
+  overlappingChanges: { id: string; title: string; kind: string; shippedOn: string }[]
+  cautions: string[]
+  summary: string
+}
+
+export type DecisionStatus = 'PROPOSED' | 'APPROVED' | 'IMPLEMENTED' | 'CLOSED' | 'REJECTED'
+export type Verdict = 'SUCCEEDED' | 'PARTIAL' | 'NOEFFECT' | 'WORSE' | 'INCONCLUSIVE'
+
+export interface DecisionRow {
+  id: string
+  title: string
+  area: string
+  status: DecisionStatus
+  verdict: Verdict | null
+  assignee: string | null
+  approvedAt: string | null
+  implementedOn: string | null
+  reviewOn: string | null
+  reviewState: 'done' | 'unscheduled' | 'due' | 'scheduled' | 'measured'
+  reviewedAt: string | null
+  metrics: string[]
+  inquiryId: string | null
+  author: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DecisionInput {
+  title: string
+  area: string
+  problem: string
+  action: string
+  evidence?: string | null
+  hypothesis?: string | null
+  assignee?: string | null
+  expectedOutcome?: string | null
+  inquiryId?: string | null
+  segment?: string | null
+  baselineFrom?: string | null
+  baselineTo?: string | null
+  metrics?: MetricTarget[]
+  reviewOn?: string | null
+}
+
+export interface HistoryItem { action: string; detail: string | null; at: string; actor: string | null }
+
+export interface DecisionDetail {
+  decision: DecisionInput & {
+    id: string
+    segmentLabel: string | null
+    status: DecisionStatus
+    verdict: Verdict | null
+    approvedBy: string | null
+    approvedAt: string | null
+    implementedOn: string | null
+    reviewState: DecisionRow['reviewState']
+    actualOutcome: string | null
+    author: string | null
+    createdAt: string
+    updatedAt: string
+    metrics: MetricTarget[]
+  }
+  inquiry: { id: string; section: string; question: string; summary: string; createdAt: string } | null
+  changes: { id: string; title: string; kind: string; isExperiment: boolean; shippedOn: string }[]
+  evaluation: Evaluation | null
+  evaluationNote: string
+  /** Taken by the system once the review date passed; null before, or after the date moved. */
+  review: Evaluation | null
+  reviewedAt: string | null
+  history: HistoryItem[]
+}
+
+export interface ChangeInput {
+  title: string
+  kind: string
+  isExperiment: boolean
+  description: string
+  shippedOn: string
+  problem?: string | null
+  hypothesis?: string | null
+  version?: string | null
+  segment?: string | null
+  comparisonSegment?: string | null
+  decisionId?: string | null
+  metrics?: MetricTarget[]
+  windowDays?: number | null
+}
+
+export interface ChangeRow {
+  id: string
+  title: string
+  kind: string
+  isExperiment: boolean
+  version: string | null
+  shippedOn: string
+  segment: string | null
+  comparisonSegment: string | null
+  decisionId: string | null
+  verdict: Verdict | null
+  metrics: string[]
+  author: string | null
+  concluded: boolean
+}
+
+export interface ChangeDetail {
+  change: ChangeInput & {
+    id: string
+    segmentLabel: string | null
+    comparisonLabel: string | null
+    metrics: MetricTarget[]
+    windowDays: number
+    sideEffects: string | null
+    result: string | null
+    recommendation: string | null
+    verdict: Verdict | null
+    author: string | null
+    createdAt: string
+    updatedAt: string
+  }
+  decision: { id: string; title: string; status: DecisionStatus } | null
+  evaluation: Evaluation
+  frozen: Evaluation | null
+  history: HistoryItem[]
+}
+
+export interface NotificationsPage {
+  period: Period
+  kpis: Kpi[]
+  journey: { key: string; label: string; count: number }[]
+  byKind: { kind: string; planned: number; opened: number; converted: number }[]
+  byHour: number[]
+  trend: { date: string; opened: number; converted: number }[]
+  users: UserRow[]
+  notes: string[]
 }
 
 export interface Meta {
@@ -432,4 +637,22 @@ export interface Session {
   refreshToken: string
   expiresAt: string
   user: { id: string; email: string; displayName: string; role: string }
+}
+
+/** One learner's one day — what a square of the activity calendar opens (ADR-132). */
+export interface DayDetail {
+  date: string
+  phoneReported: boolean
+  summary: {
+    appOpens: number | null; appSessions: number | null; appMs: number | null; learningMs: number | null
+    sessions: number; practice: number; completed: number; abandoned: number; questions: number; attempts: number
+    firstAttemptAccuracy: number | null; passed: number; failed: number; wordsAdded: number; enteredActive: number
+    reviews: number; translations: number; replays: number; hints: number; notificationsOpened: number
+  }
+  skills: {
+    skill: Skill; sessions: number; practice: number; completed: number; abandoned: number; learningMs: number | null
+    questions: number; attempts: number; firstAttemptAccuracy: number | null; passed: number; failed: number; levels: string[]
+  }[]
+  wordsAdded: { id: string; text: string; deleted: boolean }[]
+  events: TimelineEvent[]
 }

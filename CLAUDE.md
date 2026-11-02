@@ -74,8 +74,12 @@ Architecture:
 - **`lib/core/l10n/app_strings.dart`** holds all UI copy (English + Arabic, RTL supported).
 
 - **`lib/core/storage/app_preferences.dart`** holds the *only* device-owned state: UI language,
-  theme (ADR-010) and whether this phone raises daily reminders (ADR-076). Everything else is
-  server state. Default language is **Arabic**.
+  theme (ADR-010), whether this phone raises daily reminders (ADR-076) and which guided
+  tours it has shown (ADR-128). Everything else is server state. Default language is **Arabic**.
+- **`lib/core/tour/`** is the guided tour's engine; every tour's steps are in
+  `lib/features/tour/app_tours.dart`. A screen wraps what a tour points at in a
+  `TourAnchor` and its body in a `TourTrigger`. Widget tests start with every tour
+  seen; pass `toursSeen: false` to the harness to test one.
 - **`lib/core/notifications/`** schedules the daily reminders. Local notifications only — no
   Firebase, no push, no device token. The phone fires them offline with the app closed, so the
   *server* decides what each one says (`GET /api/notifications/daily`) and this layer only
@@ -207,4 +211,9 @@ npm run build      # tsc + vite — must stay clean
 - Global filters live in the URL (`src/lib/filters.tsx`), so a filtered view is a link.
 - Thresholds ("overdue", "abandoned", "weak") are the backend's `AdminIntel` configuration,
   never constants in either place (R3).
+- **Metrics a decision or change may name live in one dictionary**,
+  `backend/src/WordOs.Api/Admin/IntelMeasures.cs` — definition, formula, source and
+  compute function together; Settings prints it. Add a metric there, never inline
+  (ADR-132). Approving, rejecting and closing a decision is Owner-only on the server.
+  The audit of what the admin covers and what is open: `docs/10-ADMIN-INTELLIGENCE-AUDIT.md`.
 

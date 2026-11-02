@@ -6229,6 +6229,42 @@ reads 10. Each page also runs one `COUNT` over the learner's own rows, which
 are filtered by `UserId`.
 
 
+## ADR-128 — A guided tour points at each part of the app the first time it is seen
+
+**Date:** 2026-10-08 · **Status:** Accepted (local only, not deployed). Client only.
+
+**Context.** A new learner met the placement test and then the hub with nothing
+said about either. Two things in particular went unsaid: that placement is required
+but its result is *not* final, and where a level that feels too hard can be lowered.
+The product owner asked for a light tutorial in the style of Masar's — the screen goes
+dark, the thing being explained stays lit, a short sentence says what it is for — but
+without Masar's robot or its animation, and without detail: a pointer, not a manual.
+
+**Decision.**
+1. **One engine** in `mobile/lib/core/tour/`: `TourAnchor` marks an element by name,
+   `TourOverlay` darkens the screen around it with a ringed opening and a card beside
+   it, `TourTrigger` starts a screen's tour once that screen is really in front of the
+   learner — its tab is the active one and nothing is pushed over it.
+2. **One script**, `mobile/lib/features/tour/app_tours.dart`, holds every tour in the
+   order of the eye: placement (before the first question — required, eight questions,
+   not your final level, change it in Settings; then once per *kind* of question —
+   passage, audio, options, microphone in a circle, writing box; then on the result —
+   the levels are not final), the hub (today, Reading, the five skills, the Weekly
+   Review, the counts, Add word, My Words and Settings in the bottom bar), My Words, a
+   word's page, Add word, Settings (levels first: "too hard? lower it") and the first
+   session of each skill (what to do, and the session's level badge).
+3. **Seen once per installation**, like the product tour: `AppPreferences.tourSeen`
+   is device state, not learning state (R4 is about the latter). A tour is marked
+   when it *starts*, so a learner who closed the app half-way is not cornered by it.
+   Settings → Help → **Replay the app tour** clears them all and starts again on the hub.
+4. **Tests start past every tour** (`InMemoryAppPreferences(toursSeen: true)`), because
+   an overlay that swallows taps would fail every test not written about it.
+   `test/guided_tour_test.dart` turns them on.
+
+**Consequences.** Long lists (hub, Settings) build their off-screen children
+(`scrollCacheExtent`) so the tour can find and scroll to them. Copy lives in
+`app_strings.dart` under "Guided tour", in both languages.
+
 ## ADR-129 — A meaning the learner writes is described by the checker; a meaning they pick, by the dictionary
 
 **Date:** 2026-10-10 · **Status:** Accepted
@@ -6384,3 +6420,113 @@ from a passage refused to the dictionary sheet; `relentless`, `serene`,
 `tranquil` added complete. Eight API tests and one AI-service test, seven
 confirmed failing on the previous code; eight older tests rewritten to the
 rule — they had pinned the empty-field behaviour.
+
+---
+
+## ADR-132 — The admin area decides and measures: a decision log, a change log, one metric dictionary
+
+**Date:** 2026-11-03 · **Status:** Accepted (local only, not deployed). Extends ADR-125.
+
+**Context.** The product owner's second admin brief ("WordOS Admin — Product
+Intelligence, Learning Analytics & AI Product Management") asks the site to
+carry on past "what is happening" to *Decide → Implement → Measure → Learn*:
+a decision log with evidence, owners, targets and a review date; an
+experiments and changes log measured before and after; a notifications
+journey; a metric and event dictionary; an investigator that keeps a
+conversation, can discuss without querying, can be looked at again later, and
+remembers what was already decided. It insists on auditing first and adding
+only what is missing. The audit is `docs/10-ADMIN-INTELLIGENCE-AUDIT.md`: pages
+1–7, 9, 10 and 13 already existed on real data (ADR-125); the gaps were the
+four above plus threads and follow-ups.
+
+**Decision.**
+
+1. **Two tables, not five.** `product_decisions` and `product_changes`. An
+   experiment is a change with `IsExperiment`, a hypothesis and a comparison
+   segment — one log, so the change that explains a dip is found from wherever
+   the dip is. A record's change history is its slice of `admin_audit_events`
+   (`TargetId`), not a third table. Investigations gain `ParentId`,
+   `FilterJson` and `FollowUpOn` on `admin_inquiries`. Migration
+   `ProductDecisions` is additive only; nothing existing is rewritten.
+2. **A proposal is not a decision.** Owner and Analyst may propose and record
+   implementation; only the Owner approves, rejects or closes, and once a
+   proposal is approved only the Owner edits what it promised. Closed and
+   rejected decisions are immutable. Checked server-side (`OWNER_ONLY`), not by
+   hiding buttons.
+3. **One metric dictionary, in code** (`IntelMeasures`). Each metric has a key,
+   definition, formula, source tables, sample unit, limitation and revision
+   date, and a single compute function over an `IntelScope`. Decisions and
+   changes may only name metrics from it (`UNKNOWN_METRIC` otherwise); the
+   Settings page prints it verbatim, so the dictionary cannot drift from the
+   arithmetic. Skill metrics reuse `SkillSummaryFor`, retention reuses
+   `RetentionAt`.
+4. **Evaluation is arithmetic, the verdict is a person's** (`IntelEvaluation`).
+   Before/after for the decision's population, with sample sizes; outcome
+   `improved / worsened / flat / insufficient / unknown` by fixed rules
+   (`MinimumSample`, `FlatChange` = 5 % relative); guardrail metrics always
+   shown, to answer "what else moved"; other changes shipped inside the after
+   window named as possible confounders; difference-in-differences when a
+   comparison segment exists; and stated cautions — incomplete window, no
+   comparison group (time link, not cause), small samples, a target up while
+   a guardrail fell. Closing freezes the evaluation as JSON, as ADR-125 §7 does
+   for investigations. A baseline that reaches the ship date is clipped to the
+   day before; while "after" is incomplete only additive counts are scaled to
+   the baseline's length — never rates or distinct learners.
+5. **Reminders: record what is planned, never claim what was sent.** The phone
+   fires reminders offline (ADR-076). `GET /api/notifications/daily` now writes
+   a server event `reminders_planned` (slots `yyyy-MM-ddM:KIND`), once per
+   distinct plan per day, swallowed on failure. The notifications page reads
+   planned → opened → lesson started within `NotificationConversionMinutes`
+   (30, was a literal in two places) → completed, attributes an opening's kind
+   to the last planned slot before it, and says in words that delivery cannot
+   be known and conversion is correlation.
+6. **The investigator remembers.** A follow-up (`parentId`) inherits section
+   and filters; the last four turns and up to eight prior decisions in the
+   area go to the model as context (`admin-insight-v2`), so it can say "this
+   was tried". A `discussion` section reads no data at all and the page labels
+   it. A follow-up date is a marker on the list, not a watcher — nothing runs
+   by itself — and "re-run" asks the same question over the days since, as a
+   child of the original. "Turn into a decision" pre-fills a proposal with the
+   question, reading, evidence and analysed period.
+7. **Every new threshold is configuration** (`AdminIntel`):
+   `NotificationConversionMinutes` 30, `EvaluationWindowDays` 14,
+   `FlatChange` 0.05.
+
+**Not done, deliberately** (each in the audit document with its reason):
+a separate content/version table (each passage is generated for its session
+and stored with it and its prompt version, so there is no shared text to
+deduplicate); `question_presented` as its own event (the elapsed time from
+presentation already arrives with each answer); automatic evaluation when a
+review date passes (no scheduler exists — the list marks it "due" and opening
+it computes); the phone sending a reminder's kind on open (a client change,
+left for the next app release).
+
+**Consequences.** Production needs migration `ProductDecisions` applied by
+`wordos_migrator`; default privileges covered `wordos_app` locally. The
+notifications page is empty until a deployed API has served reminder plans —
+history before that cannot be reconstructed, and the page says so.
+
+**Addendum, same day.** The product owner dropped the 80 % comprehension
+threshold and asked for the rest of the open list to be finished:
+
+8. **A day of a learner opens.** `GET /admin/intel/users/{id}/days/{date}` —
+   the 360's calendar squares are clickable; the day shows app opens and app
+   time (null, not zero, when the phone sent nothing), learning time, lessons
+   by skill with their level, results, words added and the day's timeline.
+   Reading it is written to the audit trail like the 360 itself.
+9. **Review dates measure themselves.** Once a decision's review day is fully
+   past, the first read of the log or the decision takes the measurement of
+   the whole "after" window and keeps it (`ReviewEvaluationJson`,
+   `ReviewedAt`, audit `decision.reviewed`). No scheduler: the window is
+   closed, so measuring later gives the same figures, and a background process
+   would be one more thing to keep alive on Render. Moving the review date or
+   changing the metrics, segment or baseline discards it. It is a measurement,
+   not a verdict — the decision stays open for the Owner. The sidebar counts
+   decisions awaiting review and investigations whose follow-up date has come.
+   Migration `DecisionReviewSnapshot`, additive.
+10. **Results by content version.** Each skill page splits its sessions by
+   `PromptVersion` and model: completion, first-attempt accuracy, retries, AI
+   fallback, median duration. The version is the content's version, since each
+   passage is written for its own session (no content table needed).
+
+Left on purpose: the phone sending a reminder's kind, which is an app change.

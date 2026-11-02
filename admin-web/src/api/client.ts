@@ -1,6 +1,7 @@
 import type {
-  AttentionGroups, AuditItem, Behavior, CohortSide, FeedbackPage, Filters, FrictionDetail,
-  InquirySummary, Investigation, Learning, Meta, Overview, Retention, Session, SkillDetail,
+  AttentionGroups, AuditItem, Behavior, ChangeDetail, DayDetail, ChangeInput, ChangeRow, CohortSide, DecisionDetail,
+  DecisionInput, DecisionRow, Definitions, FeedbackPage, Filters, FrictionDetail,
+  InquirySummary, Investigation, Learning, Meta, NotificationsPage, Overview, Retention, Session, SkillDetail,
   SystemInfo, TimelineEvent, User360, UsersList,
 } from './types'
 
@@ -26,13 +27,29 @@ export interface AdminApi {
   attention(f: Filters): Promise<AttentionGroups>
   user(id: string): Promise<User360>
   timeline(id: string, verbose: boolean): Promise<{ events: TimelineEvent[] }>
+  day(id: string, date: string): Promise<DayDetail>
   compare(a: string, b: string, f: Filters): Promise<{ a: CohortSide; b: CohortSide }>
   feedback(status?: string, category?: string): Promise<FeedbackPage>
   addNote(feedbackId: string, body: string): Promise<void>
   setFeedbackHandled(feedbackId: string, handled: boolean): Promise<void>
   inquiries(): Promise<{ items: InquirySummary[] }>
   inquiry(id: string): Promise<Investigation>
-  ask(section: string, question: string, f: Filters): Promise<Investigation>
+  /** `section` may be empty on a follow-up: the parent's is kept (ADR-132). */
+  ask(section: string | null, question: string, f: Filters | null, parentId?: string): Promise<Investigation>
+  setFollowUp(id: string, on: string | null): Promise<void>
+  rerun(id: string): Promise<Investigation>
+  definitions(): Promise<Definitions>
+  notifications(f: Filters): Promise<NotificationsPage>
+  decisions(q?: { status?: string; area?: string; q?: string }): Promise<{ items: DecisionRow[]; counts: { proposed: number; active: number; due: number; closed: number } }>
+  decision(id: string): Promise<DecisionDetail>
+  proposeDecision(d: DecisionInput): Promise<{ id: string }>
+  editDecision(id: string, d: DecisionInput): Promise<void>
+  transition(id: string, t: { action: string; on?: string | null; reviewOn?: string | null; verdict?: string | null; note?: string | null }): Promise<void>
+  changes(q?: { kind?: string; experiments?: boolean }): Promise<{ items: ChangeRow[]; kinds: string[] }>
+  change(id: string): Promise<ChangeDetail>
+  recordChange(c: ChangeInput): Promise<{ id: string }>
+  editChange(id: string, c: ChangeInput): Promise<void>
+  concludeChange(id: string, c: { result?: string | null; sideEffects?: string | null; recommendation?: string | null; verdict?: string | null; freezeEvaluation?: boolean }): Promise<void>
   system(): Promise<SystemInfo>
   audit(): Promise<{ items: AuditItem[] }>
 }
@@ -201,6 +218,7 @@ export class HttpAdminApi implements AdminApi {
   user = (id: string) => this.request<User360>(`/admin/intel/users/${id}`)
   timeline = (id: string, verbose: boolean) =>
     this.request<{ events: TimelineEvent[] }>(`/admin/intel/users/${id}/timeline${query({ verbose: verbose ? 'true' : undefined })}`)
+  day = (id: string, date: string) => this.request<DayDetail>(`/admin/intel/users/${id}/days/${date}`)
   compare = (a: string, b: string, f: Filters) =>
     this.request<{ a: CohortSide; b: CohortSide }>(`/admin/intel/cohorts/compare${query({ ...f, a, b })}`)
   feedback = (status?: string, category?: string) =>
@@ -213,11 +231,39 @@ export class HttpAdminApi implements AdminApi {
   }
   inquiries = () => this.request<{ items: InquirySummary[] }>('/admin/intel/inquiries')
   inquiry = (id: string) => this.request<Investigation>(`/admin/intel/inquiries/${id}`)
-  ask = (section: string, question: string, filter: Filters) =>
+  ask = (section: string | null, question: string, filter: Filters | null, parentId?: string) =>
     this.request<Investigation>('/admin/intel/inquiries', {
       method: 'POST',
-      body: JSON.stringify({ section, question, filter }),
+      body: JSON.stringify({ section, question, filter, parentId }),
     })
+  setFollowUp = async (id: string, on: string | null) => {
+    await this.request(`/admin/intel/inquiries/${id}`, { method: 'PATCH', body: JSON.stringify({ on }) })
+  }
+  rerun = (id: string) => this.request<Investigation>(`/admin/intel/inquiries/${id}/rerun`, { method: 'POST' })
+  definitions = () => this.request<Definitions>('/admin/intel/definitions')
+  notifications = (f: Filters) => this.request<NotificationsPage>(`/admin/intel/notifications${query({ ...f })}`)
+  decisions = (q: { status?: string; area?: string; q?: string } = {}) =>
+    this.request<{ items: DecisionRow[]; counts: { proposed: number; active: number; due: number; closed: number } }>(`/admin/intel/decisions${query(q)}`)
+  decision = (id: string) => this.request<DecisionDetail>(`/admin/intel/decisions/${id}`)
+  proposeDecision = (d: DecisionInput) =>
+    this.request<{ id: string }>('/admin/intel/decisions', { method: 'POST', body: JSON.stringify(d) })
+  editDecision = async (id: string, d: DecisionInput) => {
+    await this.request(`/admin/intel/decisions/${id}`, { method: 'PUT', body: JSON.stringify(d) })
+  }
+  transition = async (id: string, t: { action: string; on?: string | null; reviewOn?: string | null; verdict?: string | null; note?: string | null }) => {
+    await this.request(`/admin/intel/decisions/${id}/transition`, { method: 'POST', body: JSON.stringify(t) })
+  }
+  changes = (q: { kind?: string; experiments?: boolean } = {}) =>
+    this.request<{ items: ChangeRow[]; kinds: string[] }>(`/admin/intel/changes${query({ kind: q.kind, experiments: q.experiments === undefined ? undefined : String(q.experiments) })}`)
+  change = (id: string) => this.request<ChangeDetail>(`/admin/intel/changes/${id}`)
+  recordChange = (c: ChangeInput) =>
+    this.request<{ id: string }>('/admin/intel/changes', { method: 'POST', body: JSON.stringify(c) })
+  editChange = async (id: string, c: ChangeInput) => {
+    await this.request(`/admin/intel/changes/${id}`, { method: 'PUT', body: JSON.stringify(c) })
+  }
+  concludeChange = async (id: string, c: { result?: string | null; sideEffects?: string | null; recommendation?: string | null; verdict?: string | null; freezeEvaluation?: boolean }) => {
+    await this.request(`/admin/intel/changes/${id}/conclude`, { method: 'POST', body: JSON.stringify(c) })
+  }
   system = () => this.request<SystemInfo>('/admin/intel/system')
   audit = () => this.request<{ items: AuditItem[] }>('/admin/intel/audit')
 

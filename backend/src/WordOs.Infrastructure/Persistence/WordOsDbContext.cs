@@ -67,6 +67,10 @@ public class WordOsDbContext(
 
     public DbSet<AdminAuditEvent> AdminAuditEvents => Set<AdminAuditEvent>();
 
+    public DbSet<ProductDecision> ProductDecisions => Set<ProductDecision>();
+
+    public DbSet<ProductChange> ProductChanges => Set<ProductChange>();
+
     public DbSet<Word> Words => Set<Word>();
 
     public DbSet<WordSkillState> WordSkillStates => Set<WordSkillState>();
@@ -318,10 +322,79 @@ public class WordOsDbContext(
             e.Property(x => x.Summary).HasMaxLength(2000);
             e.Property(x => x.InterpretedBy).HasMaxLength(8);
             e.Property(x => x.ResultJson).HasColumnType("jsonb");
+            e.Property(x => x.FilterJson).HasColumnType("jsonb");
             e.HasIndex(x => x.CreatedAt);
+            e.HasIndex(x => x.ParentId);
 
             e.HasOne<User>().WithMany()
                 .HasForeignKey(x => x.AuthorId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // A decision's metrics are a short list read and written whole with the
+        // decision; a child table would be a join for every row of the log.
+        var metricsConverter = new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<IReadOnlyList<MetricTarget>, string>(
+            v => System.Text.Json.JsonSerializer.Serialize(v, (System.Text.Json.JsonSerializerOptions?)null),
+            v => System.Text.Json.JsonSerializer.Deserialize<List<MetricTarget>>(v, (System.Text.Json.JsonSerializerOptions?)null) ?? new List<MetricTarget>());
+        var metricsComparer = new Microsoft.EntityFrameworkCore.ChangeTracking.ValueComparer<IReadOnlyList<MetricTarget>>(
+            (a, c) => a!.SequenceEqual(c!),
+            v => v.Aggregate(0, (h, m) => HashCode.Combine(h, m.GetHashCode())),
+            v => v.ToList());
+
+        b.Entity<ProductDecision>(e =>
+        {
+            e.ToTable("product_decisions");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Title).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Area).HasMaxLength(32).IsRequired();
+            e.Property(x => x.Problem).HasMaxLength(4000).IsRequired();
+            e.Property(x => x.Evidence).HasMaxLength(4000);
+            e.Property(x => x.Hypothesis).HasMaxLength(4000);
+            e.Property(x => x.Action).HasMaxLength(4000).IsRequired();
+            e.Property(x => x.Assignee).HasMaxLength(100);
+            e.Property(x => x.ExpectedOutcome).HasMaxLength(2000);
+            e.Property(x => x.Segment).HasMaxLength(64);
+            e.Property(x => x.Metrics).HasColumnType("jsonb")
+                .HasConversion(metricsConverter, metricsComparer);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(16);
+            e.Property(x => x.Verdict).HasConversion<string?>().HasMaxLength(16);
+            e.Property(x => x.ActualOutcome).HasMaxLength(4000);
+            e.Property(x => x.EvaluationJson).HasColumnType("jsonb");
+            e.Property(x => x.ReviewEvaluationJson).HasColumnType("jsonb");
+            e.HasIndex(x => new { x.Status, x.ReviewOn });
+            e.HasIndex(x => x.InquiryId);
+
+            e.HasOne<User>().WithMany()
+                .HasForeignKey(x => x.AuthorId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<AdminInquiry>().WithMany()
+                .HasForeignKey(x => x.InquiryId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        b.Entity<ProductChange>(e =>
+        {
+            e.ToTable("product_changes");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Title).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Kind).HasMaxLength(24).IsRequired();
+            e.Property(x => x.Description).HasMaxLength(4000).IsRequired();
+            e.Property(x => x.Problem).HasMaxLength(4000);
+            e.Property(x => x.Hypothesis).HasMaxLength(4000);
+            e.Property(x => x.Version).HasMaxLength(64);
+            e.Property(x => x.Segment).HasMaxLength(64);
+            e.Property(x => x.ComparisonSegment).HasMaxLength(64);
+            e.Property(x => x.Metrics).HasColumnType("jsonb")
+                .HasConversion(metricsConverter, metricsComparer);
+            e.Property(x => x.SideEffects).HasMaxLength(2000);
+            e.Property(x => x.Result).HasMaxLength(4000);
+            e.Property(x => x.Recommendation).HasMaxLength(2000);
+            e.Property(x => x.Verdict).HasConversion<string?>().HasMaxLength(16);
+            e.Property(x => x.EvaluationJson).HasColumnType("jsonb");
+            e.HasIndex(x => x.ShippedOn);
+            e.HasIndex(x => x.DecisionId);
+
+            e.HasOne<User>().WithMany()
+                .HasForeignKey(x => x.AuthorId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<ProductDecision>().WithMany()
+                .HasForeignKey(x => x.DecisionId).OnDelete(DeleteBehavior.SetNull);
         });
 
         b.Entity<AdminAuditEvent>(e =>

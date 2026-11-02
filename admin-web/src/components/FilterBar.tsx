@@ -2,6 +2,7 @@ import { RotateCcw } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { useFilters } from '../lib/filters'
 import { SKILL_LABEL } from '../lib/format'
+import { plusDays } from '../lib/product'
 
 const RANGES = [
   { days: 1, label: 'اليوم' },
@@ -62,7 +63,5 @@ export function FilterBar() {
 }
 
 function isoDay(offset: number) {
-  const d = new Date()
-  d.setDate(d.getDate() + offset)
-  return d.toISOString().slice(0, 10)
+  return plusDays(offset)
 }

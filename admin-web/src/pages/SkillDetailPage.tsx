@@ -6,7 +6,7 @@ import { BarChart, ChartFrame, HBars, LineChart, SKILL_COLOR } from '../componen
 import { Card, CATEGORY_NAME, CATEGORY_TONE, Empty, Help, KpiTile, Loader } from '../components/ui'
 import { UserTable } from '../components/UserTable'
 import { filterKey, useFilters } from '../lib/filters'
-import { formatValue, levelLabel, SKILL_AR, skillLabel } from '../lib/format'
+import { formatDate, formatValue, levelLabel, SKILL_AR, skillLabel } from '../lib/format'
 import { useAsync } from '../lib/useAsync'
 
 /**
@@ -100,6 +100,27 @@ function Body({ d }: { d: SkillDetail }) {
           )}
         </Card>
       </div>
+      {d.byVersion && d.byVersion.length > 0 && (
+        <Card flush title="حسب نسخة المحتوى" subtitle="كل محتوى يُولَّد لتمرينه ويُحفظ مع نسخة الـprompt والنموذج اللذين كتباه — قارن الأداء قبل تغيير النسخة وبعده. أعداد صغيرة تتأثر بمستخدم واحد.">
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>النسخة</th><th>الفترة</th><th className="n">تمارين</th><th className="n">متعلمون</th><th className="n">إكمال</th><th className="n">دقة أول محاولة</th><th className="n">إعادة المحاولة</th><th className="n">بديل AI</th><th className="n">الوسيط</th></tr></thead>
+              <tbody>{d.byVersion.map((v) => (
+                <tr key={`${v.version}-${v.model}`}>
+                  <td><div className="ltr" style={{ textAlign: 'start', fontWeight: 500 }}>{v.version}</div><div className="ltr muted" style={{ textAlign: 'start', fontSize: 11 }}>{v.model ?? ''}</div></td>
+                  <td className="muted" style={{ fontSize: 12 }}>{formatDate(v.first)} — {formatDate(v.last)}</td>
+                  <td className="n">{v.sessions}</td><td className="n">{v.learners}</td>
+                  <td className="n">{formatValue(v.completion, 'pct')}</td>
+                  <td className="n">{formatValue(v.firstAttemptAccuracy, 'pct')}<div className="muted" style={{ fontSize: 11 }}>n={v.questions}</div></td>
+                  <td className="n">{formatValue(v.retryRate, 'pct')}</td>
+                  <td className="n">{formatValue(v.fallback, 'pct')}</td>
+                  <td className="n">{formatValue(v.medianSessionMs, 'ms')}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </Card>
+      )}
       <Card flush title="من فشل؟" subtitle="المتعلمون الذين يحملون فشل هذه المهارة — اضغط لفتح User 360">
         <UserTable rows={d.byUser} evidenceLabel="في هذه المهارة" compact empty="لم يفشل أحد في الفترة" />
       </Card>

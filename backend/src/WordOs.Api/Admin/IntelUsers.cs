@@ -239,7 +239,7 @@ public static class Attention
         var opened = events.Where(e => e.Name == AnalyticsEventNames.NotificationOpened
                                        && now - e.OccurredAt <= TimeSpan.FromDays(30)).ToList();
         var wasted = opened.Count(n => !sessions.Any(s => s.StartedAt >= n.OccurredAt
-                                                          && s.StartedAt - n.OccurredAt <= TimeSpan.FromMinutes(30)));
+                                                          && s.StartedAt - n.OccurredAt <= TimeSpan.FromMinutes(data.Options.NotificationConversionMinutes)));
         if (wasted >= 2)
             reasons.Add(new("notification_no_learning", $"فتح التذكير {wasted} مرات دون أن يبدأ تمرينًا"));
 

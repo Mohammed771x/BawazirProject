@@ -360,6 +360,51 @@ public static class IntelMetrics
             MedianAnswerMs: Median(answerTimes));
     }
 
+    /// <summary>
+    /// The same skill, split by the version of the prompt that wrote its
+    /// content (ADR-132).
+    /// </summary>
+    /// <remarks>
+    /// Each passage, clip, conversation or task is generated for its own
+    /// session and stored with the <c>PromptVersion</c> that wrote it, so the
+    /// version is the content's version: "did learners do better after
+    /// <c>reading-v11</c>?" is answered here without a separate content table.
+    /// The model is shown beside it, because a model change is a content change
+    /// too. Practice sessions are left out; they are not part of the journey.
+    /// </remarks>
+    public static IReadOnlyList<object> ByContentVersion(IntelScope scope, SkillType skill)
+    {
+        var data = scope.Data;
+        var sessions = scope.Sessions.Where(x => x.Skill == skill && !x.IsPractice && scope.Period.Contains(x.StartedAt)).ToList();
+        return sessions
+            .GroupBy(x => (Version: string.IsNullOrWhiteSpace(x.PromptVersion) ? "—" : x.PromptVersion, x.AiModel))
+            .Select(g =>
+            {
+                var items = g.SelectMany(x => x.Items).Where(i => i.Attempts > 0).ToList();
+                var known = items.Where(i => i.FirstAttemptCorrect is not null).ToList();
+                var durations = g.Select(data.DurationMs).OfType<double>().ToList();
+                return new
+                {
+                    version = g.Key.Version,
+                    model = string.IsNullOrWhiteSpace(g.Key.AiModel) ? null : g.Key.AiModel,
+                    first = g.Min(x => x.StartedAt),
+                    last = g.Max(x => x.StartedAt),
+                    sessions = g.Count(),
+                    learners = g.Select(x => x.UserId).Distinct().Count(),
+                    completion = Ratio(g.Count(x => x.IsComplete), g.Count()),
+                    abandoned = g.Count(data.IsStale),
+                    questions = items.Count,
+                    firstAttemptAccuracy = Ratio(known.Count(i => i.FirstAttemptCorrect == true), known.Count),
+                    retryRate = Ratio(items.Count(i => i.Attempts > 1), items.Count),
+                    fallback = Ratio(g.Count(x => x.UsedAiFallback), g.Count()),
+                    medianSessionMs = Median(durations),
+                };
+            })
+            .OrderByDescending(v => v.last)
+            .Cast<object>()
+            .ToList();
+    }
+
     // ── Failure analysis (admin brief §12) ───────────────────────────────────
 
     public static readonly IReadOnlyDictionary<string, (string Label, string Category)> ReasonCatalogue =

@@ -1,10 +1,11 @@
 import {
-  Activity, AlertOctagon, LayoutDashboard, LogOut, Menu, MessageSquareText, Moon, Repeat,
+  Activity, AlertOctagon, Bell, FlaskConical, Gavel, LayoutDashboard, LogOut, Menu, MessageSquareText, Moon, Repeat,
   Search, Settings, Sun, Users, GraduationCap,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { isMock } from '../api'
+import { api, isMock } from '../api'
+import { today } from '../lib/product'
 import { useAuth } from '../auth/AuthContext'
 import { FilterBar } from './FilterBar'
 import { initials } from './UserTable'
@@ -15,15 +16,20 @@ const NAV = [
   { to: '/learning', label: 'التعلم والمهارات', icon: GraduationCap },
   { to: '/behavior', label: 'سلوك المستخدم وUX', icon: Activity },
   { to: '/retention', label: 'Retention', icon: Repeat },
+  { to: '/notifications', label: 'الإشعارات', icon: Bell },
   { to: '/problems', label: 'المشكلات والتحليل', icon: AlertOctagon },
   { to: '/feedback', label: 'Feedback', icon: MessageSquareText },
   { to: '/inquiry', label: 'تحليل واستفسار', icon: Search },
+  { to: '/decisions', label: 'سجل القرارات', icon: Gavel },
+  { to: '/changes', label: 'التجارب والتغييرات', icon: FlaskConical },
   { to: '/settings', label: 'إعدادات النظام', icon: Settings },
 ]
 
 // Pages that are about one thing, not a population: global filters would
-// change nothing there, so they are not shown.
-const NO_FILTERS = [/^\/feedback/, /^\/inquiry/, /^\/settings/, /^\/users\/[^/]+/]
+// change nothing there, so they are not shown. Decisions and changes carry
+// their own population and windows.
+const NO_FILTERS = [/^\/feedback/, /^\/inquiry/, /^\/settings/, /^\/users\/[^/]+/, /^\/decisions/, /^\/changes/]
+const NO_SEARCH = ['/feedback', '/inquiry', '/settings', '/decisions', '/changes']
 
 function useTheme() {
   const [theme, setTheme] = useState<string | null>(() => {
@@ -47,6 +53,25 @@ export function Layout() {
 
   useEffect(() => setOpen(false), [location.pathname])
 
+  // What is waiting on a person: decisions past their review date (the log
+  // measures them on the way), and investigations whose follow-up date has
+  // come. Nothing here runs by itself — this is where the dates surface.
+  const [waiting, setWaiting] = useState<Record<string, number>>({})
+  useEffect(() => {
+    let live = true
+    Promise.all([api.decisions({}), api.inquiries()])
+      .then(([d, i]) => {
+        if (!live) return
+        const now = today()
+        setWaiting({
+          '/decisions': d.counts.due,
+          '/inquiry': i.items.filter((x) => x.followUpOn && x.followUpOn <= now).length,
+        })
+      })
+      .catch(() => { /* a badge is a convenience; the pages say the same */ })
+    return () => { live = false }
+  }, [location.pathname])
+
   return (
     <div className="shell">
       <aside className={`sidebar ${open ? 'open' : ''}`} aria-label="التنقل">
@@ -58,9 +83,10 @@ export function Layout() {
           </div>
         </div>
         {NAV.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to + (showFilters && location.search && to !== '/feedback' && to !== '/inquiry' && to !== '/settings' ? location.search : '')}
+          <NavLink key={to} to={to + (showFilters && location.search && !NO_SEARCH.includes(to) ? location.search : '')}
             end={end} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
             <Icon />{label}
+            {waiting[to] ? <span className="badge warn" style={{ marginInlineStart: 'auto' }} title="بانتظار المراجعة">{waiting[to]}</span> : null}
           </NavLink>
         ))}
         <div className="sidebar-foot">

@@ -54,6 +54,21 @@ public sealed class AdminIntelOptions
 
     /// <summary>Most users any list in the admin area returns at once.</summary>
     public int MaxListedUsers { get; init; } = 200;
+
+    /// <summary>
+    /// A lesson started this soon after a reminder was opened counts as the
+    /// reminder's conversion — a time link, never proof of cause (ADR-132).
+    /// </summary>
+    public int NotificationConversionMinutes { get; init; } = 30;
+
+    /// <summary>
+    /// Days measured on each side of a decision or change when nobody said
+    /// otherwise — two weeks covers one full pass of the five-skill pipeline.
+    /// </summary>
+    public int EvaluationWindowDays { get; init; } = 14;
+
+    /// <summary>A relative change smaller than this reads as "no change".</summary>
+    public double FlatChange { get; init; } = 0.05;
 }
 
 /// <summary>

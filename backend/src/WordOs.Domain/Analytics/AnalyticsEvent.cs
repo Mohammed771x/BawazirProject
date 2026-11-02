@@ -192,6 +192,14 @@ public static class AnalyticsEventNames
     /// </summary>
     public const string SessionAbandoned = "session_abandoned";
 
+    /// <summary>
+    /// The reminders the server handed a phone to schedule (ADR-132). Not
+    /// "sent": the phone fires them itself, offline (ADR-076), and nothing
+    /// tells the server one went off. What it can know is what it planned,
+    /// and that is recorded — once per distinct plan per day.
+    /// </summary>
+    public const string RemindersPlanned = "reminders_planned";
+
     /// <summary>What a phone is allowed to send. Server events are not on it.</summary>
     public static readonly IReadOnlySet<string> ClientNames = new HashSet<string>
     {
@@ -204,7 +212,7 @@ public static class AnalyticsEventNames
     public static readonly IReadOnlySet<string> ServerNames = new HashSet<string>
     {
         AnswerSubmitted, WritingEvaluated, SpeakingTurn, SpeakingWordEvaluated,
-        ReviewAnswered, AiCall, SessionAbandoned,
+        ReviewAnswered, AiCall, SessionAbandoned, RemindersPlanned,
     };
 
     public static bool IsKnown(string name) =>

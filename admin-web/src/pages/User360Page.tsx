@@ -2,10 +2,10 @@ import { ArrowRight, Mail, MessageCircle } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../api'
-import type { User360 } from '../api/types'
+import type { DayDetail, User360 } from '../api/types'
 import { BarChart, ChartFrame, SKILL_COLOR, seriesColor } from '../components/charts/Charts'
 import { Timeline } from '../components/Timeline'
-import { Card, Empty, Loader, Tabs } from '../components/ui'
+import { Card, Drawer, Empty, Loader, Tabs } from '../components/ui'
 import { initials } from '../components/UserTable'
 import { FLAG_LABEL, formatDate, formatDateTime, formatValue, levelLabel, relative, skillLabel, STATE_LABEL } from '../lib/format'
 import { useAsync } from '../lib/useAsync'
@@ -27,7 +27,7 @@ function Body({ data, id }: { data: User360; id: string }) {
       <Header data={data} />
       <div className="grid g-main">
         <LearningOverview data={data} />
-        <ActivityCard data={data} />
+        <ActivityCard data={data} id={id} />
       </div>
       <SkillPerformance data={data} />
       <WordPerformance data={data} />
@@ -119,19 +119,94 @@ function LearningOverview({ data }: { data: User360 }) {
   )
 }
 
-function ActivityCard({ data }: { data: User360 }) {
+function ActivityCard({ data, id }: { data: User360; id: string }) {
+  const [day, setDay] = useState<string | null>(null)
   const max = Math.max(1, ...data.activity.map((a) => a.count))
   const level = (c: number) => (c === 0 ? 'var(--surface-3)' : `var(--seq-${Math.min(4, Math.ceil((c / max) * 4))})`)
   const active = data.activity.filter((a) => a.count > 0).length
   return (
-    <Card title="النشاط — آخر 90 يومًا" subtitle={`${active} يومًا نشطًا`}>
-      <div className="activity" role="img" aria-label={`${active} يومًا نشطًا من 90`}>
-        {data.activity.map((a) => <span key={a.date} title={`${a.date}: ${a.count} أحداث`} style={{ background: level(a.count) }} />)}
+    <Card title="النشاط — آخر 90 يومًا" subtitle={`${active} يومًا نشطًا — اضغط أي يوم لتفاصيله`}>
+      <div className="activity" role="group" aria-label={`${active} يومًا نشطًا من 90`}>
+        {data.activity.map((a) => (
+          <span key={a.date} role="button" tabIndex={0} title={`${a.date}: ${a.count} أحداث`} aria-label={`${a.date}: ${a.count} أحداث`}
+            style={{ background: level(a.count), cursor: 'pointer', outline: day === a.date ? '2px solid var(--brand)' : undefined }}
+            onClick={() => setDay(a.date)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDay(a.date) } }} />
+        ))}
       </div>
       <div className="row muted" style={{ fontSize: 11.5, marginTop: 10, gap: 4 }}>
         أقل {[0, 1, 2, 3, 4].map((i) => <span key={i} style={{ width: 10, height: 10, borderRadius: 3, background: i ? `var(--seq-${i})` : 'var(--surface-3)', display: 'inline-block' }} />)} أكثر
       </div>
+      <Drawer open={!!day} onClose={() => setDay(null)} title={day ? `يوم ${formatDate(day, true)}` : ''}>
+        {day && <DayView id={id} date={day} />}
+      </Drawer>
     </Card>
+  )
+}
+
+/**
+ * One day of one learner (brief page 3): how often they came, what they
+ * studied, how it went, what they added — and every event, as on the timeline.
+ */
+function DayView({ id, date }: { id: string; date: string }) {
+  const state = useAsync(() => api.day(id, date), [id, date])
+  return <Loader state={state}>{(d) => <DayBody d={d} />}</Loader>
+}
+
+function DayBody({ d }: { d: DayDetail }) {
+  const s = d.summary
+  const ms = (v: number | null) => (v === null ? '—' : formatValue(v, 'ms'))
+  const tiles: [string, string][] = [
+    ['فتح التطبيق', s.appOpens === null ? '—' : String(s.appOpens)],
+    ['جلسات التطبيق', s.appSessions === null ? '—' : String(s.appSessions)],
+    ['وقت التطبيق', ms(s.appMs)],
+    ['وقت التعلم الفعلي', ms(s.learningMs)],
+    ['تمارين', `${s.sessions}${s.practice ? ` + ${s.practice} تدريب` : ''}`],
+    ['مكتملة / منسحب منها', `${s.completed} / ${s.abandoned}`],
+    ['أسئلة (محاولات)', `${s.questions} (${s.attempts})`],
+    ['دقة المحاولة الأولى', formatValue(s.firstAttemptAccuracy, 'pct')],
+    ['اجتاز / فشل', `${s.passed} / ${s.failed}`],
+    ['كلمات أُضيفت', String(s.wordsAdded)],
+    ['دخلت Active', String(s.enteredActive)],
+    ['مراجعات', String(s.reviews)],
+  ]
+  const nothing = s.sessions + s.practice + s.wordsAdded + s.reviews + d.events.length === 0
+  return (
+    <div className="stack lg">
+      {!d.phoneReported && <div className="note" style={{ fontSize: 12.5 }}>لم يرسل التطبيق أحداثًا في هذا اليوم، فوقت التطبيق ومرات الفتح غير معروفة (ليست صفرًا).</div>}
+      {nothing ? <Empty title="لا نشاط في هذا اليوم" /> : (
+        <>
+          <div className="evidence-grid">
+            {tiles.map(([l, v]) => <div key={l} className="evidence"><div className="l">{l}</div><div className="v" style={{ fontSize: 18 }}>{v}</div></div>)}
+          </div>
+          {(s.translations + s.replays + s.hints + s.notificationsOpened) > 0 && (
+            <div className="muted" style={{ fontSize: 12.5 }}>ترجمة {s.translations} · إعادة تشغيل {s.replays} · تلميحات {s.hints} · فتح من تذكير {s.notificationsOpened}</div>
+          )}
+          {d.skills.length > 0 && (
+            <table className="table">
+              <thead><tr><th>المهارة</th><th className="n">تمارين</th><th className="n">الوقت</th><th className="n">أسئلة</th><th className="n">أول محاولة</th><th className="n">اجتاز/فشل</th><th>المستوى</th></tr></thead>
+              <tbody>{d.skills.map((k) => (
+                <tr key={k.skill}>
+                  <td><span style={{ color: SKILL_COLOR[k.skill] }}>●</span> {skillLabel(k.skill)}</td>
+                  <td className="n">{k.sessions}{k.abandoned ? <span className="muted"> (−{k.abandoned})</span> : null}</td>
+                  <td className="n">{ms(k.learningMs)}</td>
+                  <td className="n">{k.questions}</td>
+                  <td className="n">{formatValue(k.firstAttemptAccuracy, 'pct')}</td>
+                  <td className="n">{k.passed}/{k.failed}</td>
+                  <td className="ltr" style={{ textAlign: 'start' }}>{k.levels.map(levelLabel).join('، ')}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+          {d.wordsAdded.length > 0 && (
+            <div className="row wrap" style={{ gap: 6 }}>
+              <span className="muted" style={{ fontSize: 12.5 }}>أضاف:</span>
+              {d.wordsAdded.map((w) => <span key={w.id} className={`badge ltr ${w.deleted ? 'bad' : ''}`} title={w.deleted ? 'حذفها لاحقًا' : undefined}>{w.text}</span>)}
+            </div>
+          )}
+          {d.events.length > 0 && <Timeline events={d.events} />}
+        </>
+      )}
+    </div>
   )
 }
 

@@ -989,7 +989,7 @@ Each response carries `period: {from, to, prevFrom, prevTo, days, learners}`;
 | GET | `/admin/intel/meta` | who is asking, whether they see contact details, filter vocabularies, when tracking began |
 | GET | `/admin/intel/overview` | `{period, health:[Kpi], engagement:[DayPoint], funnel:[FunnelStage], lifecycle, skills:[SkillSummary], signals:[Signal]}` |
 | GET | `/admin/intel/learning` | `{period, skills:[{current, previous}], failures:[SkillFailures], categories, levels:{flows, bySkill, byLevel, distribution}, weeklyReview, mostFailedWords}` |
-| GET | `/admin/intel/skills/{skill}` | one skill drilled down: `summary, previous, content, failures, byUser, byLevel, daily, attempts, next, words, mostTranslated, levelFlows` |
+| GET | `/admin/intel/skills/{skill}` | one skill drilled down: `summary, previous, content, failures, byUser, byLevel, daily, attempts, next, words, mostTranslated, levelFlows, byVersion` (`byVersion`: per prompt version and model — ADR-132) |
 | GET | `/admin/intel/behavior` | `{period, tracked, friction:[FrictionItem], time, content, mostTranslated, screens, errors}` |
 | GET | `/admin/intel/friction/{key}` | `{item, users, outcome:{completed, open, abandoned}, byLevel, bySkill, byDay, performance, content}` |
 | GET | `/admin/intel/retention` | `{kpis (D1/D7/D30, returning, recall), cohorts, recall:{curve, bySkill, review, samples, configuredGapDays}, recovery, weeklyReview}` |
@@ -1001,9 +1001,11 @@ Each response carries `period: {from, to, prevFrom, prevTo, days, learners}`;
 | GET | `/admin/intel/feedback?status=&category=` | `{summary, repeated:[{term, messages}], items:[… notes:[…]]}` |
 | POST | `/admin/intel/feedback/{id}/notes` | `{body}` → note |
 | PATCH | `/admin/intel/feedback/{id}` | `{handled}` |
-| GET | `/admin/intel/inquiries` | history: `{items:[{id, section, question, summary, interpretedBy, createdAt, author}]}` |
+| GET | `/admin/intel/inquiries` | history: `{items:[{id, section, question, summary, interpretedBy, createdAt, author, parentId, followUpOn}]}` |
 | GET | `/admin/intel/inquiries/{id}` | the `Investigation` exactly as it was shown |
-| POST | `/admin/intel/inquiries` | `{section, question, filter?}` → `Investigation` (rate-limited with the expensive routes) |
+| POST | `/admin/intel/inquiries` | `{section?, question, filter?, parentId?}` → `Investigation` (rate-limited with the expensive routes). With `parentId`, a missing `section`/`filter` is the parent's (ADR-132). `section: "discussion"` reads no data |
+| PATCH | `/admin/intel/inquiries/{id}` | `{on: "yyyy-MM-dd" \| null}` — the follow-up date (ADR-132) |
+| POST | `/admin/intel/inquiries/{id}/rerun` | the same question over the days since it was asked → a child `Investigation` |
 | GET | `/admin/intel/system` | configuration, thresholds, tracking health (24 h), app versions, admins |
 | GET | `/admin/intel/audit` | Owner only — last 200 admin actions |
 
@@ -1029,4 +1031,57 @@ Each response carries `period: {from, to, prevFrom, prevTo, days, learners}`;
 > series, never a learner's name, address or words — and returns only prose and
 > a choice of which charts answer best. A figure it mentions that is not in the
 > evidence is a bug in the prompt, not a fact.
+
+`Investigation` also carries `parentId`, `mode` (`data` | `discussion`) and the
+`filter` it was asked under (ADR-132; absent on older saved ones). The evidence
+sent to the model carries `conversation` (≤ 4 earlier turns of the thread) and
+`priorDecisions` (≤ 8 decisions in the same area or `general`, with status,
+verdict and outcome) — `admin-insight-v2`.
+
+### Decide → Implement → Measure (ADR-132)
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/admin/intel/definitions` | the dictionary: `{metrics:[MeasureDef], events:[{name, source, where, meaning}], brief:[{requested, status, where, note}], thresholds}` |
+| GET | `/admin/intel/notifications` | global filters → `{period, kpis, journey, byKind, byHour, trend, users, notes}` |
+| GET | `/admin/intel/users/{id}/days/{yyyy-MM-dd}` | one reporting day: `{date, phoneReported, summary, skills, wordsAdded, events:[TimelineEvent]}` (audited as `user.viewed`) |
+| GET | `/admin/intel/decisions?status=&area=&q=` | `{items:[DecisionRow], counts:{proposed, active, due, closed}}`. Reading it first measures any decision whose review date has passed; `reviewState` ∈ `scheduled, unscheduled, due, measured, done` |
+| GET | `/admin/intel/decisions/{id}` | `{decision, inquiry, changes, evaluation, evaluationNote, review, reviewedAt, history}` — evaluation is live until closed, then the snapshot taken at closing; `review` is the measurement taken automatically once `reviewOn` has passed |
+| POST | `/admin/intel/decisions` | `DecisionInput` → `201 {id}`, status `PROPOSED` |
+| PUT | `/admin/intel/decisions/{id}` | `DecisionInput` → `204`. `403 OWNER_ONLY` past `PROPOSED` for an Analyst; `409 DECISION_FINAL` once closed or rejected |
+| POST | `/admin/intel/decisions/{id}/transition` | `{action, on?, reviewOn?, verdict?, note?}` → `204`. `approve`/`reject`/`close` are Owner only; `close` requires `verdict` and freezes the evaluation; `409 INVALID_TRANSITION` out of order |
+| GET | `/admin/intel/changes?kind=&experiments=` | `{items:[ChangeRow], kinds}` |
+| GET | `/admin/intel/changes/{id}` | `{change, decision, evaluation (live), frozen, history}` |
+| POST | `/admin/intel/changes` | `ChangeInput` → `201 {id}` |
+| PUT | `/admin/intel/changes/{id}` | `ChangeInput` → `204` |
+| POST | `/admin/intel/changes/{id}/conclude` | `{result?, sideEffects?, recommendation?, verdict?, freezeEvaluation}` → `204` |
+
+```jsonc
+// DecisionInput
+{ "title": "…", "area": "speaking",        // an investigator section, or "general"
+  "problem": "…", "action": "…", "evidence": "…", "hypothesis": "…", "assignee": "…",
+  "expectedOutcome": "…", "inquiryId": "…", "segment": "level:B1",
+  "baselineFrom": "2026-10-05", "baselineTo": "2026-11-02",
+  "metrics": [{"key": "speaking.abandonment_rate", "direction": "down", "target": 0.2}],   // ≤ 8, keys from /definitions
+  "reviewOn": "2026-11-17" }
+// ChangeInput
+{ "title": "…", "kind": "translation",     // content|translation|speaking|notifications|scheduling|ai_feedback|performance|ux|other
+  "isExperiment": true, "description": "…", "shippedOn": "2026-11-01", "problem": "…", "hypothesis": "…",
+  "version": "1.4.0", "segment": "level:B1", "comparisonSegment": "level:A2", "decisionId": "…",
+  "metrics": [MetricTarget], "windowDays": 14 }
+// Evaluation — arithmetic only; the verdict is written by a person
+{ "population": "…", "populationSize": 49, "before": {"from","to","days"}, "after": {"from","to","days"},
+  "afterComplete": false, "comparisonPopulation": null,
+  "targeted": [{"key","label","format","direction","target","before","beforeSample","after","afterSample",
+                "change","relativeChange","outcome",   // improved|worsened|flat|insufficient|unknown
+                "targetMet","comparisonBefore","comparisonAfter","comparisonSample","netOfComparison"}],
+  "guardrails": [MeasuredMetric], "overlappingChanges": [{"id","title","kind","shippedOn"}],
+  "cautions": ["…"], "summary": "…" }
+```
+
+Windows: a decision's baseline is its `baselineFrom..baselineTo`, clipped to
+end the day before `implementedOn`, or the `EvaluationWindowDays` before it;
+its "after" runs from `implementedOn` to `reviewOn` (or the baseline's length).
+A change measures `windowDays` on each side of `shippedOn`. While "after" is
+incomplete, additive counts are scaled to the baseline's length.
 

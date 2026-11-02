@@ -1,4 +1,4 @@
-import { Bot, FlaskConical, History, ListChecks, Sparkles } from 'lucide-react'
+import { Bot, CalendarClock, CornerDownLeft, FlaskConical, Gavel, History, ListChecks, MessagesSquare, RefreshCw, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
@@ -10,13 +10,7 @@ import { useFilters } from '../lib/filters'
 import { formatDate, formatDateTime, formatValue } from '../lib/format'
 import { useAsync } from '../lib/useAsync'
 import { Delta } from '../components/ui'
-
-const SECTIONS: [string, string][] = [
-  ['product_health', 'Product Health'], ['users', 'المستخدمون'], ['engagement', 'Engagement'], ['activation', 'Activation'],
-  ['words', 'الكلمات'], ['skills', 'Skills'], ['reading', 'Reading'], ['listening', 'Listening'], ['speaking', 'Speaking'],
-  ['writing', 'Writing'], ['spelling', 'Spelling'], ['level', 'Level'], ['retention', 'Retention'],
-  ['weekly_review', 'Weekly Review'], ['ux', 'UX'], ['feedback', 'Feedback'], ['notifications', 'Notifications'], ['ai', 'AI'],
-]
+import { SECTIONS, STATUS_LABEL, sectionLabel, today, verdictLabel } from '../lib/product'
 
 const EXAMPLES: [string, string][] = [
   ['listening', 'لماذا انخفضت نسبة إكمال Listening هذا الشهر؟'],
@@ -28,7 +22,12 @@ const EXAMPLES: [string, string][] = [
   ['speaking', 'لماذا ينسحب المستخدمون من Speaking؟'],
 ]
 
-const sectionLabel = (key: string) => SECTIONS.find(([k]) => k === key)?.[1] ?? key
+/**
+ * The reporting day an instant belongs to. Period bounds are local midnights;
+ * twelve hours either side lands inside the right day for any offset the
+ * server could be configured with, without the page knowing which one it is.
+ */
+const dayOf = (iso: string, shift: 1 | -1) => new Date(Date.parse(iso) + shift * 12 * 36e5).toISOString().slice(0, 10)
 
 export function InquiryPage() {
   const { id } = useParams()
@@ -71,8 +70,9 @@ function Ask() {
       </div>
       <div className="grid g-main" style={{ alignItems: 'start' }}>
         <div className="stack lg">
-          <Card title="1. اختر القسم" subtitle="القسم يحدد أي أدلة تُجمع أولًا">
+          <Card title="1. اختر القسم" subtitle="القسم يحدد أي أدلة تُجمع أولًا — أو اختر النقاش لمناقشة فكرة دون استعلام">
             <div className="section-picker">
+              <button className={section === 'discussion' ? 'active' : ''} onClick={() => setSection('discussion')}><MessagesSquare size={14} /> نقاش دون استعلام</button>
               {SECTIONS.map(([k, l]) => <button key={k} className={section === k ? 'active' : ''} onClick={() => setSection(k)}>{l}</button>)}
             </div>
           </Card>
@@ -104,8 +104,11 @@ function Ask() {
             : (
               <div>
                 {h.items.map((i) => (
-                  <Link key={i.id} to={`/inquiry/${i.id}`} style={{ display: 'block', padding: '12px 20px', borderTop: '1px solid var(--border)' }}>
-                    <div style={{ fontWeight: 500, fontSize: 13.5 }}>{i.question}</div>
+                  <Link key={i.id} to={`/inquiry/${i.id}`} style={{ display: 'block', padding: '12px 20px', borderTop: '1px solid var(--border)', paddingInlineStart: i.parentId ? 36 : 20 }}>
+                    <div style={{ fontWeight: 500, fontSize: 13.5 }}>
+                      {i.parentId && <CornerDownLeft size={12} className="muted" />} {i.question}
+                      {i.followUpOn && <> <span className={`badge ${i.followUpOn <= today() ? 'warn' : ''}`}><CalendarClock /> {i.followUpOn <= today() ? 'حان موعد المتابعة' : `متابعة ${formatDate(i.followUpOn)}`}</span></>}
+                    </div>
                     <div className="muted" style={{ fontSize: 12 }}>{sectionLabel(i.section)} · {formatDate(i.createdAt, true)} · {i.author ?? '—'}</div>
                     <div className="text-2" style={{ fontSize: 12.5, marginTop: 2, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{i.summary}</div>
                   </Link>
@@ -125,8 +128,96 @@ function SavedInvestigation({ id }: { id: string }) {
   return (
     <>
       <Link to="/inquiry" className="muted" style={{ fontSize: 13 }}>→ تحليل واستفسار</Link>
-      <Loader state={state}>{(inv) => <InvestigationView inv={inv} />}</Loader>
+      <Loader state={state}>{(inv) => (
+        <>
+          {inv.parentId && <Link to={`/inquiry/${inv.parentId}`} className="note row" style={{ fontSize: 13 }}><CornerDownLeft size={14} /> متابعة لتحقيق سابق — افتح السؤال الأصلي</Link>}
+          <InvestigationView inv={inv} />
+          <ThreadTools inv={inv} />
+        </>
+      )}</Loader>
     </>
+  )
+}
+
+/**
+ * What can be done with a saved investigation (brief §9.5, §10, ADR-132):
+ * carry the conversation on, set a date to look again, ask it again now, or
+ * turn it into a proposed decision. None of these watches anything by itself
+ * — a follow-up date is a reminder on this page, not a process.
+ */
+function ThreadTools({ inv }: { inv: Investigation }) {
+  const navigate = useNavigate()
+  const [question, setQuestion] = useState('')
+  const [followUp, setFollowUp] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
+  const [saved, setSaved] = useState<string | null>(null)
+  const area = inv.section === 'discussion' ? undefined : inv.section
+  const related = useAsync(() => (area ? api.decisions({ area }) : Promise.resolve({ items: [], counts: { proposed: 0, active: 0, due: 0, closed: 0 } })), [area])
+
+  const run = async (kind: string, fn: () => Promise<Investigation | void>) => {
+    setBusy(kind); setError(null)
+    try {
+      const r = await fn()
+      if (r) navigate(`/inquiry/${r.id}`)
+    } catch (e) { setError(e as Error) } finally { setBusy(null) }
+  }
+
+  const toDecision = () => {
+    const p = new URLSearchParams({
+      inquiry: inv.id,
+      area: inv.section === 'discussion' ? 'general' : inv.section,
+      problem: inv.question,
+      evidence: [inv.summary, ...inv.evidence.slice(0, 6).map((e) => `${e.label}: ${formatValue(e.value, e.format)}`)].join('\n'),
+      hypothesis: inv.hypotheses[0] ?? '',
+    })
+    if (inv.mode !== 'discussion') { p.set('from', dayOf(inv.periodFrom, 1)); p.set('to', dayOf(inv.periodTo, -1)) }
+    if (inv.filter?.segment) p.set('segment', inv.filter.segment)
+    navigate(`/decisions/new?${p}`)
+  }
+
+  return (
+    <div className="stack lg">
+      <Card title="تابع النقاش" subtitle="السؤال التالي يرث القسم والفلاتر من هذا التحقيق — اكتب «والفترة السابقة؟» دون إعادة الاختيار">
+        <div className="stack">
+          <textarea className="textarea" rows={2} value={question} maxLength={1000} placeholder="سؤال المتابعة…" onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && question.trim().length >= 3) void run('ask', () => api.ask(null, question.trim(), null, inv.id)) }} />
+          <div className="row wrap" style={{ gap: 8 }}>
+            <button className="btn primary" disabled={!!busy || question.trim().length < 3} onClick={() => run('ask', () => api.ask(null, question.trim(), null, inv.id))}>
+              <Sparkles /> {busy === 'ask' ? 'جارٍ التحقيق…' : 'اسأل'}
+            </button>
+            <button className="btn" disabled={!!busy} onClick={() => run('rerun', () => api.rerun(inv.id))} title="السؤال نفسه على الأيام منذ طُرح">
+              <RefreshCw /> {busy === 'rerun' ? 'جارٍ…' : 'أعد التحقيق على الأيام منذ طرحه'}
+            </button>
+            <button className="btn" onClick={toDecision}><Gavel /> حوّله إلى اقتراح قرار</button>
+          </div>
+          <div className="row wrap" style={{ gap: 8 }}>
+            <span className="muted" style={{ fontSize: 13 }}>راقب وعُد إليه في:</span>
+            <input className="input ltr" type="date" min={today()} value={followUp} onChange={(e) => setFollowUp(e.target.value)} aria-label="موعد المتابعة" />
+            <button className="btn sm" disabled={!followUp || !!busy} onClick={() => run('follow', async () => { await api.setFollowUp(inv.id, followUp); setSaved(followUp) })}>
+              <CalendarClock /> حفظ موعد المتابعة
+            </button>
+            {saved && <span className="badge good">سيظهر في قائمة التحقيقات عند {formatDate(saved)}</span>}
+          </div>
+          <span className="muted" style={{ fontSize: 12 }}>النظام لا يراقب البيانات باستمرار: موعد المتابعة تذكير في هذه الصفحة، وعند حلوله أعد التحقيق لترى ما تغير.</span>
+          {error && <ErrorState error={error} />}
+        </div>
+      </Card>
+      {area && (
+        <Card flush title="قرارات سابقة في هذا المجال" subtitle="راجعها قبل اقتراح قرار جديد — الـAI يراها أيضًا عند التحليل">
+          <Loader state={related} skeleton={<div style={{ padding: 20 }}><Skeleton h={40} /></div>}>{(r) => r.items.length === 0 ? <Empty title="لا قرارات سابقة هنا" /> : (
+            <table className="table"><tbody>{r.items.map((d) => {
+              const v = verdictLabel(d.verdict)
+              const [sl, st] = STATUS_LABEL[d.status] ?? [d.status, '']
+              return (
+                <tr key={d.id}><td><Link to={`/decisions/${d.id}`}>{d.title}</Link></td><td><span className={`badge ${st}`}>{sl}</span></td>
+                  <td>{v ? <span className={`badge ${v[2]}`}>{v[1]}</span> : <span className="muted">—</span>}</td><td className="muted">{formatDate(d.updatedAt, true)}</td></tr>
+              )
+            })}</tbody></table>
+          )}</Loader>
+        </Card>
+      )}
+    </div>
   )
 }
 
@@ -141,7 +232,10 @@ export function InvestigationView({ inv }: { inv: Investigation }) {
       <div className="layer">
         <div className="row between wrap" style={{ marginBottom: 6 }}>
           <span className="muted" style={{ fontSize: 12.5 }}>{inv.sectionLabel} · {formatDateTime(inv.createdAt)}{inv.author && ` · ${inv.author}`} · الفترة {formatDate(inv.periodFrom)} — {formatDate(inv.periodTo)}</span>
-          <span className="badge">{inv.interpretedBy === 'ai' ? <><Bot /> فسّره الـAI من الأدلة</> : <><ListChecks /> تفسير بالقواعد — الـAI غير متاح</>}</span>
+          <span className="row" style={{ gap: 6 }}>
+            {inv.mode === 'discussion' && <span className="badge warn"><MessagesSquare /> نقاش — لم تُقرأ بيانات</span>}
+            <span className="badge">{inv.interpretedBy === 'ai' ? <><Bot /> فسّره الـAI من الأدلة</> : <><ListChecks /> تفسير بالقواعد — الـAI غير متاح</>}</span>
+          </span>
         </div>
         <h2 style={{ fontSize: 17, marginBottom: 10 }}>{inv.question}</h2>
         <div className="layer-tag interp">النتيجة المختصرة</div>

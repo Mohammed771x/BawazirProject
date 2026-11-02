@@ -4,9 +4,12 @@ import { LoginPage } from './auth/LoginPage'
 import { Layout } from './components/Layout'
 import { PageSkeleton } from './components/ui'
 import { BehaviorPage, FrictionPage } from './pages/BehaviorPage'
+import { ChangesPage } from './pages/ChangesPage'
+import { DecisionsPage } from './pages/DecisionsPage'
 import { FeedbackPage } from './pages/FeedbackPage'
 import { InquiryPage } from './pages/InquiryPage'
 import { LearningPage } from './pages/LearningPage'
+import { NotificationsPage } from './pages/NotificationsPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { ProblemsPage } from './pages/ProblemsPage'
 import { RetentionPage } from './pages/RetentionPage'
@@ -16,8 +19,9 @@ import { User360Page } from './pages/User360Page'
 import { UsersPage } from './pages/UsersPage'
 
 /**
- * Nine sections, each with its drill-downs beneath it:
- * Overview → Analysis → Investigation → User → Event.
+ * Twelve sections, each with its drill-downs beneath it:
+ * Overview → Analysis → Investigation → User → Event, and then
+ * Decide → Implement → Measure (ADR-132).
  */
 export default function App() {
   const { meta, ready } = useAuth()
@@ -35,10 +39,15 @@ export default function App() {
         <Route path="behavior" element={<BehaviorPage />} />
         <Route path="behavior/friction/:key" element={<FrictionPage />} />
         <Route path="retention" element={<RetentionPage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
         <Route path="problems" element={<ProblemsPage />} />
         <Route path="feedback" element={<FeedbackPage />} />
         <Route path="inquiry" element={<InquiryPage />} />
         <Route path="inquiry/:id" element={<InquiryPage />} />
+        <Route path="decisions" element={<DecisionsPage />} />
+        <Route path="decisions/:id" element={<DecisionsPage />} />
+        <Route path="changes" element={<ChangesPage />} />
+        <Route path="changes/:id" element={<ChangesPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

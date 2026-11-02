@@ -1,7 +1,8 @@
 import type { AdminApi } from './client'
 import type {
-  AttentionGroups, Behavior, CohortSide, FeedbackItem, FeedbackPage, Filters, FrictionDetail,
-  FrictionItem, InquirySummary, Investigation, Kpi, Learning, Meta, Overview, Retention, Session,
+  AttentionGroups, Behavior, ChangeDetail, ChangeInput, DayDetail, ChangeRow, CohortSide, DecisionDetail, DecisionInput,
+  DecisionRow, Definitions, Evaluation, FeedbackItem, FeedbackPage, Filters, FrictionDetail,
+  FrictionItem, InquirySummary, Investigation, Kpi, Learning, MeasureDef, Meta, NotificationsPage, Overview, Retention, Session,
   Skill, SkillDetail, SkillSummary, TimelineEvent, User360, UserRow,
 } from './types'
 
@@ -395,8 +396,10 @@ export class MockAdminApi implements AdminApi {
     const h = HISTORY.find((x) => x.id === id) ?? HISTORY[0]
     return this.ask(h.section, h.question)
   }
-  ask(section: string, question: string): Promise<Investigation> {
+  ask(sectionOrNull: string | null, question: string, _f?: Filters | null, parentId?: string): Promise<Investigation> {
+    const section = sectionOrNull ?? 'speaking'
     const inv: Investigation = {
+      parentId: parentId ?? null, mode: section === 'discussion' ? 'discussion' : 'data',
       id: `q-${Date.now()}`, section, sectionLabel: section, question, createdAt: new Date().toISOString(), author: 'Owner',
       summary: 'الانسحاب من Speaking يتركز بعد أول رد لم يستخدم الكلمة المطلوبة، وأعلى ما يكون عند مستوى B1+.',
       evidence: [
@@ -416,6 +419,107 @@ export class MockAdminApi implements AdminApi {
     return wait(inv, 900)
   }
 
+  day(_id: string, date: string): Promise<DayDetail> {
+    return wait({
+      date, phoneReported: true,
+      summary: { appOpens: 3, appSessions: 2, appMs: 1_260_000, learningMs: 840_000, sessions: 2, practice: 0, completed: 2, abandoned: 0, questions: 14, attempts: 17,
+        firstAttemptAccuracy: 0.79, passed: 4, failed: 1, wordsAdded: 2, enteredActive: 0, reviews: 0, translations: 5, replays: 2, hints: 0, notificationsOpened: 1 },
+      skills: [
+        { skill: 'READING' as Skill, sessions: 1, practice: 0, completed: 1, abandoned: 0, learningMs: 480_000, questions: 8, attempts: 9, firstAttemptAccuracy: 0.88, passed: 3, failed: 0, levels: ['B1'] },
+        { skill: 'SPEAKING' as Skill, sessions: 1, practice: 0, completed: 1, abandoned: 0, learningMs: 360_000, questions: 6, attempts: 8, firstAttemptAccuracy: 0.67, passed: 1, failed: 1, levels: ['B1'] },
+      ],
+      wordsAdded: [{ id: 'w1', text: 'reliable', deleted: false }, { id: 'w2', text: 'vivid', deleted: false }],
+      events: [],
+    })
+  }
+  async setFollowUp(id: string, on: string | null) {
+    const h = HISTORY.find((x) => x.id === id)
+    if (h) h.followUpOn = on
+  }
+  rerun(id: string) {
+    const h = HISTORY.find((x) => x.id === id) ?? HISTORY[0]
+    return this.ask(h.section, h.question, null, id)
+  }
+  definitions(): Promise<Definitions> {
+    return wait({ metrics: MOCK_METRICS, events: [{ name: 'answer_submitted', source: 'server' as const, where: 'analytics_events', meaning: 'كل محاولة إجابة' }],
+      brief: [{ requested: 'notification_sent', status: 'partial' as const, where: 'reminders_planned', note: 'المخطط لا المرسل' }], thresholds: { minimumSample: 3 } })
+  }
+  notifications(): Promise<NotificationsPage> {
+    const r = rng(9)
+    return wait({
+      period: { from: iso(30), to: iso(0), prevFrom: iso(60), prevTo: iso(30), days: 30, learners: 120 },
+      kpis: [
+        { key: 'planned', label: 'تذكيرات مخططة', value: 1840, previous: 1710, format: 'int' as const, hint: 'ليست «مُرسلة»' },
+        { key: 'targeted_users', label: 'مستخدمون مستهدفون', value: 96, previous: 91, format: 'int' as const },
+        { key: 'opened', label: 'فتح التذكير', value: 212, previous: 180, format: 'int' as const },
+        { key: 'open_users', label: 'مستخدمون فتحوا', value: 61, previous: 55, format: 'int' as const },
+        { key: 'conversion', label: 'تذكير → تمرين', value: 0.44, previous: 0.39, format: 'pct' as const },
+        { key: 'completion', label: 'تذكير → تمرين مكتمل', value: 0.31, previous: 0.3, format: 'pct' as const },
+      ],
+      journey: [{ key: 'planned', label: 'مخطط', count: 1840 }, { key: 'opened', label: 'فُتح', count: 212 }, { key: 'started', label: 'بدأ تمرينًا', count: 93 }, { key: 'completed', label: 'أكمل التمرين', count: 66 }],
+      byKind: [{ kind: 'WORDS_DUE', planned: 900, opened: 120, converted: 61 }, { kind: 'STREAK', planned: 500, opened: 50, converted: 18 }, { kind: 'REVIEW_READY', planned: 440, opened: 42, converted: 14 }],
+      byHour: Array.from({ length: 24 }, (_, h) => (h === 8 || h === 20 ? 40 : Math.floor(r() * 8))),
+      trend: Array.from({ length: 30 }, (_, i) => { const o = Math.floor(r() * 12); return { date: iso(29 - i).slice(0, 10), opened: o, converted: Math.floor(o * 0.45) } }),
+      users: USERS.slice(0, 4).map((u) => ({ ...u, evidence: 'فتح التذكير 3 مرات دون أن يبدأ تمرينًا' })),
+      notes: ['بيانات تجريبية.', 'التذكيرات يطلقها الهاتف نفسه (ADR-076): لا معدل وصول.'],
+    })
+  }
+  decisions(): Promise<{ items: DecisionRow[]; counts: { proposed: number; active: number; due: number; closed: number } }> {
+    return wait({ items: DECISIONS.map((d) => d.row), counts: { proposed: 1, active: 1, due: 1, closed: 1 } })
+  }
+  decision(id: string): Promise<DecisionDetail> {
+    const d = DECISIONS.find((x) => x.row.id === id) ?? DECISIONS[0]
+    return wait({
+      decision: { ...d.input, id: d.row.id, segmentLabel: d.input.segment ?? null, status: d.row.status, verdict: d.row.verdict, approvedBy: 'Owner', approvedAt: d.row.approvedAt,
+        implementedOn: d.row.implementedOn, reviewOn: d.row.reviewOn, reviewState: d.row.reviewState, actualOutcome: null, author: 'Owner', createdAt: d.row.createdAt, updatedAt: d.row.updatedAt, metrics: d.input.metrics ?? [] },
+      inquiry: null, changes: [], evaluation: d.row.implementedOn ? MOCK_EVALUATION : null, review: null, reviewedAt: null,
+      evaluationNote: d.row.implementedOn ? 'قياس حي.' : 'لم يُنفَّذ القرار بعد.', history: [{ action: 'decision.proposed', detail: d.row.title, at: d.row.createdAt, actor: 'Owner' }],
+    })
+  }
+  async proposeDecision(d: DecisionInput) {
+    const id = `d-${Date.now()}`
+    DECISIONS.unshift({ input: d, row: { id, title: d.title, area: d.area, status: 'PROPOSED', verdict: null, assignee: d.assignee ?? null, approvedAt: null, implementedOn: null,
+      reviewOn: d.reviewOn ?? null, reviewState: 'scheduled', reviewedAt: null, metrics: (d.metrics ?? []).map((m) => m.key), inquiryId: d.inquiryId ?? null, author: 'Owner', createdAt: iso(0), updatedAt: iso(0) } })
+    return { id }
+  }
+  async editDecision(id: string, d: DecisionInput) {
+    const x = DECISIONS.find((y) => y.row.id === id)
+    if (x) { x.input = d; x.row.title = d.title }
+  }
+  async transition(id: string, t: { action: string; on?: string | null; verdict?: string | null }) {
+    const x = DECISIONS.find((y) => y.row.id === id)
+    if (!x) return
+    if (t.action === 'approve') x.row.status = 'APPROVED'
+    if (t.action === 'reject') x.row.status = 'REJECTED'
+    if (t.action === 'implement') { x.row.status = 'IMPLEMENTED'; x.row.implementedOn = t.on ?? iso(0).slice(0, 10) }
+    if (t.action === 'close') { x.row.status = 'CLOSED'; x.row.verdict = (t.verdict?.toUpperCase() ?? 'INCONCLUSIVE') as DecisionRow['verdict'] }
+  }
+  changes(): Promise<{ items: ChangeRow[]; kinds: string[] }> {
+    return wait({ items: CHANGES.map((c) => c.row), kinds: ['content', 'translation', 'speaking', 'notifications', 'scheduling', 'ai_feedback', 'performance', 'ux', 'other'] })
+  }
+  change(id: string): Promise<ChangeDetail> {
+    const c = CHANGES.find((x) => x.row.id === id) ?? CHANGES[0]
+    return wait({
+      change: { ...c.input, id: c.row.id, segmentLabel: c.input.segment ?? null, comparisonLabel: c.input.comparisonSegment ?? null, metrics: c.input.metrics ?? [],
+        windowDays: c.input.windowDays ?? 14, sideEffects: null, result: null, recommendation: null, verdict: c.row.verdict, author: 'Owner', createdAt: iso(5), updatedAt: iso(1) },
+      decision: null, evaluation: { ...MOCK_EVALUATION, comparisonPopulation: c.input.comparisonSegment ?? null }, frozen: null, history: [],
+    })
+  }
+  async recordChange(c: ChangeInput) {
+    const id = `c-${Date.now()}`
+    CHANGES.unshift({ input: c, row: { id, title: c.title, kind: c.kind, isExperiment: c.isExperiment, version: c.version ?? null, shippedOn: c.shippedOn,
+      segment: c.segment ?? null, comparisonSegment: c.comparisonSegment ?? null, decisionId: c.decisionId ?? null, verdict: null, metrics: (c.metrics ?? []).map((m) => m.key), author: 'Owner', concluded: false } })
+    return { id }
+  }
+  async editChange(id: string, c: ChangeInput) {
+    const x = CHANGES.find((y) => y.row.id === id)
+    if (x) { x.input = c; x.row.title = c.title }
+  }
+  async concludeChange(id: string, c: { verdict?: string | null }) {
+    const x = CHANGES.find((y) => y.row.id === id)
+    if (x && c.verdict) { x.row.verdict = c.verdict.toUpperCase() as ChangeRow['verdict']; x.row.concluded = true }
+  }
+
   system() {
     return wait({
       configuration: { skillIntervalDays: 2, weeklyReviewPeriodDays: 7, weeklyReviewMaturityDays: 7, maxAttemptsPerItem: 3, reportingUtcOffsetHours: 3 },
@@ -429,3 +533,42 @@ export class MockAdminApi implements AdminApi {
     return wait({ items: [{ id: 1, action: 'user.viewed', targetId: USERS[0].id, detail: null, address: '127.0.0.1', createdAt: iso(0), actor: 'Owner' }] })
   }
 }
+
+// ── Decisions and changes (ADR-132), invented ───────────────────────────────
+
+const MOCK_METRICS: MeasureDef[] = [
+  { key: 'learning_learners', label: 'النشطون تعليميًا', area: 'engagement', format: 'int', goodWhenUp: true, definition: 'متعلم بدأ نشاطًا تعليميًا.', formula: 'تمرين أو مراجعة داخل الفترة.', source: 'skill_sessions, weekly_reviews', sampleUnit: 'متعلم', limitation: null, revised: '2026-11-03' },
+  { key: 'speaking.abandonment_rate', label: 'Speaking: الانسحاب', area: 'speaking', format: 'pct', goodWhenUp: false, definition: 'تمارين بدأت ولم تكتمل.', formula: 'منسحب / بدأ.', source: 'skill_sessions', sampleUnit: 'تمرين', limitation: null, revised: '2026-11-03' },
+  { key: 'reading.first_attempt_accuracy', label: 'Reading: دقة المحاولة الأولى', area: 'reading', format: 'pct', goodWhenUp: true, definition: 'صحيح من أول محاولة.', formula: 'FirstAttemptCorrect / أسئلة.', source: 'session_items', sampleUnit: 'سؤال', limitation: null, revised: '2026-11-03' },
+  { key: 'retention_d7', label: 'Retention D7', area: 'retention', format: 'pct', goodWhenUp: true, definition: 'عودة في اليوم 7 أو بعده.', formula: 'عادوا / مؤهلون.', source: 'users', sampleUnit: 'متعلم', limitation: null, revised: '2026-11-03' },
+]
+
+const MOCK_EVALUATION: Evaluation = {
+  computedAt: iso(0), population: 'كل المتعلمين', populationSize: 120,
+  before: { from: iso(20).slice(0, 10), to: iso(7).slice(0, 10), days: 14 }, after: { from: iso(6).slice(0, 10), to: iso(-7).slice(0, 10), days: 14 },
+  afterComplete: false, comparisonPopulation: null,
+  targeted: [{ key: 'speaking.abandonment_rate', label: 'Speaking: الانسحاب', format: 'pct', direction: 'down', target: 0.2, before: 0.31, beforeSample: 84, after: 0.24, afterSample: 40,
+    change: -0.07, relativeChange: -0.226, outcome: 'improved', targetMet: false, comparisonBefore: null, comparisonAfter: null, comparisonSample: null, netOfComparison: null }],
+  guardrails: [{ key: 'sessions', label: 'Sessions', format: 'int', direction: 'up', target: null, before: 410, beforeSample: 410, after: 395, afterSample: 170,
+    change: -15, relativeChange: -0.036, outcome: 'flat', targetMet: null, comparisonBefore: null, comparisonAfter: null, comparisonSample: null, netOfComparison: null }],
+  overlappingChanges: [], cautions: ['بيانات تجريبية.', 'لا توجد مجموعة مقارنة: التغير ارتباط زمني وليس دليلًا على السبب.'],
+  summary: 'من 1 مقاييس مستهدفة: تحسن 1.',
+}
+
+const DECISIONS: { row: DecisionRow; input: DecisionInput }[] = [
+  {
+    input: { title: 'تقصير أول محادثة في Speaking', area: 'speaking', problem: 'الانسحاب من Speaking 31%', action: 'ثلاث أدوار بدل خمسة للمحادثة الأولى',
+      hypothesis: 'المحادثة الأولى طويلة للمبتدئين', metrics: [{ key: 'speaking.abandonment_rate', direction: 'down', target: 0.2 }], reviewOn: iso(-7).slice(0, 10) },
+    row: { id: 'd-1', title: 'تقصير أول محادثة في Speaking', area: 'speaking', status: 'IMPLEMENTED', verdict: null, assignee: 'فريق التطبيق', approvedAt: iso(9),
+      implementedOn: iso(6).slice(0, 10), reviewOn: iso(-7).slice(0, 10), reviewState: 'scheduled', reviewedAt: null, metrics: ['speaking.abandonment_rate'], inquiryId: null, author: 'Owner', createdAt: iso(10), updatedAt: iso(6) },
+  },
+]
+
+const CHANGES: { row: ChangeRow; input: ChangeInput }[] = [
+  {
+    input: { title: 'مثال جملة عند الترجمة', kind: 'translation', isExperiment: true, description: 'B1 يرون مثالًا عند فتح الترجمة', shippedOn: iso(5).slice(0, 10),
+      segment: 'level:B1', comparisonSegment: 'level:A2', metrics: [{ key: 'reading.first_attempt_accuracy', direction: 'up' }], windowDays: 14 },
+    row: { id: 'c-1', title: 'مثال جملة عند الترجمة', kind: 'translation', isExperiment: true, version: '1.4.0', shippedOn: iso(5).slice(0, 10), segment: 'level:B1',
+      comparisonSegment: 'level:A2', decisionId: null, verdict: null, metrics: ['reading.first_attempt_accuracy'], author: 'Owner', concluded: false },
+  },
+]

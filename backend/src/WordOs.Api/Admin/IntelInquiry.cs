@@ -55,7 +55,19 @@ public sealed record Investigation(
     string InterpretedBy,
     string DataNote,
     DateTimeOffset PeriodFrom,
-    DateTimeOffset PeriodTo);
+    DateTimeOffset PeriodTo,
+    Guid? ParentId = null,
+    string Mode = "data",
+    IntelFilter? Filter = null);
+
+/// <summary>
+/// What the investigator is told besides the data (ADR-132): the thread it is
+/// continuing, and what was already decided in this area — so it does not
+/// suggest again, unremarked, something that was tried and did not work.
+/// </summary>
+public sealed record InquiryContext(
+    IReadOnlyList<object> Conversation,
+    IReadOnlyList<object> PriorDecisions);
 
 /// <summary>
 /// "Ask the data" (admin brief §25) — section first, then the question.
@@ -69,8 +81,16 @@ public sealed record Investigation(
 /// </remarks>
 public static partial class IntelInquiry
 {
+    /// <summary>
+    /// The section that reads no data: "how might we improve Reading?" is a
+    /// conversation, and running every Reading query to answer it would be
+    /// both slow and beside the point (brief §9.2).
+    /// </summary>
+    public const string Discussion = "discussion";
+
     public static readonly IReadOnlyList<(string Key, string Label)> Sections =
     [
+        (Discussion, "نقاش دون استعلام"),
         ("product_health", "Product Health"),
         ("users", "المستخدمون"),
         ("engagement", "Engagement"),
@@ -115,10 +135,11 @@ public static partial class IntelInquiry
 
     public static async Task<Investigation> InvestigateAsync(
         IntelScope scope, string section, string question, Privacy privacy,
-        IAdminInsightService insight, CancellationToken ct)
+        IAdminInsightService insight, CancellationToken ct, InquiryContext? context = null)
     {
         var b = new Builder(scope, privacy);
-        var mentioned = SkillsIn(question);
+        var discussion = section == Discussion;
+        var mentioned = discussion ? [] : SkillsIn(question);
 
         switch (section)
         {
@@ -142,7 +163,10 @@ public static partial class IntelInquiry
             case "ai": Ai(b); break;
         }
 
-        // What the question itself points at, beyond its section.
+        // What the question itself points at, beyond its section. A
+        // discussion queries nothing — that is the point of choosing it.
+        if (!discussion)
+        {
         foreach (var skill in mentioned.Where(s => !section.Equals(s.ToString(), StringComparison.OrdinalIgnoreCase)).Take(2))
             Skill(b, skill, light: true);
         if (Mentions(question, "ترجم", "translat")) TranslationVersusAccuracy(b);
@@ -151,9 +175,12 @@ public static partial class IntelInquiry
         if (Mentions(question, "10 كلمات", "أكثر من", "many words", "يضيفون") && Mentions(question, "إتقان", "mastery", "mastered", "يتقن", "Mastery"))
             WordsVersusMastery(b);
         if (LevelIn(question) is { } level) LevelSlice(b, level, mentioned.Count > 0 ? mentioned[0] : null);
+        }
 
         var sectionLabel = Sections.First(s => s.Key == section).Label;
-        var note = DataNote(scope, b);
+        var note = discussion
+            ? "نقاش دون استعلام: لم تُقرأ أي بيانات، فلا أرقام في هذه الإجابة. اختر قسمًا لطلب الأرقام."
+            : DataNote(scope, b);
 
         // ── Interpretation: the model if it answers, the rules if it does not ─
         var evidenceForModel = JsonSerializer.Serialize(new
@@ -166,6 +193,9 @@ public static partial class IntelInquiry
             affectedUsers = b.Users.Count,
             ruleFindings = b.Findings,
             dataNote = note,
+            mode = discussion ? "discussion" : "data",
+            conversation = context?.Conversation ?? [],
+            priorDecisions = context?.PriorDecisions ?? [],
         }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
         var ai = await insight.InterpretAsync(new InsightRequest(sectionLabel, question, evidenceForModel), ct);
@@ -177,7 +207,9 @@ public static partial class IntelInquiry
             if (chosen.Count > 0) charts = chosen.Concat(b.Charts.Except(chosen)).ToList();
         }
 
-        var summary = ai?.Summary ?? RuleSummary(b, sectionLabel);
+        var summary = ai?.Summary ?? (discussion
+            ? "تعذر الوصول إلى نموذج الذكاء الاصطناعي، والنقاش دون بيانات يحتاج إليه. اختر قسمًا ليُجيب النظام بالأرقام والقواعد."
+            : RuleSummary(b, sectionLabel));
         var interpretation = ai?.Interpretation is { Count: > 0 } i ? i : b.Findings;
         var hypotheses = ai?.Hypotheses is { Count: > 0 } h ? h : b.Hypotheses.Distinct().ToList();
         var leads = ai?.Investigate is { Count: > 0 } l ? l : b.Leads;
@@ -186,7 +218,8 @@ public static partial class IntelInquiry
             Guid.Empty, section, sectionLabel, question, scope.Data.Now, null,
             summary, b.Evidence, charts, b.Users, b.UsersLabel, b.Where, b.Comparison,
             interpretation, hypotheses, leads,
-            ai is null ? "rules" : "ai", note, scope.Period.From, scope.Period.To);
+            ai is null ? "rules" : "ai", note, scope.Period.From, scope.Period.To,
+            Mode: discussion ? "discussion" : "data", Filter: scope.Filter);
     }
 
     // ── Sections ─────────────────────────────────────────────────────────────
@@ -578,10 +611,9 @@ public static partial class IntelInquiry
     private static void Notifications(Builder b)
     {
         var opened = b.Scope.EventsIn(AnalyticsEventNames.NotificationOpened).ToList();
-        var converted = opened.Count(n => b.Scope.Sessions.Any(s => s.UserId == n.UserId && s.StartedAt >= n.OccurredAt
-                                                                   && s.StartedAt - n.OccurredAt <= TimeSpan.FromMinutes(30)));
+        var converted = opened.Count(n => IntelMeasures.ConvertedAfter(b.Scope, n));
         b.Evidence.Add(new("فتح التذكير", opened.Count, "int", "تُرسل محليًا من الهاتف — الإرسال نفسه لا يُرى من الخادم"));
-        b.Evidence.Add(new("Notification → تعلم خلال 30 دقيقة", IntelMetrics.Ratio(converted, opened.Count), "pct", $"{converted} من {opened.Count}"));
+        b.Evidence.Add(new($"Notification → تعلم خلال {b.Scope.Data.Options.NotificationConversionMinutes} دقيقة", IntelMetrics.Ratio(converted, opened.Count), "pct", $"{converted} من {opened.Count}"));
         b.Evidence.Add(new("مستخدمون فتحوا التذكير", opened.Select(o => o.UserId).Distinct().Count(), "int"));
         var byHour = Enumerable.Range(0, 24).Select(h => (double?)opened.Count(o => o.OccurredAt.ToOffset(TimeSpan.FromHours(b.Scope.Data.Config.ReportingUtcOffsetHours)).Hour == h)).ToList();
         b.Charts.Add(new("notification_hours", "bar", "متى يفتح المستخدمون التذكير (ساعة محلية)", "int",

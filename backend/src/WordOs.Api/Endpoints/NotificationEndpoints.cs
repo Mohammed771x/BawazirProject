@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using WordOs.Domain.Analytics;
 using WordOs.Domain.Common;
 using WordOs.Domain.Review;
 using WordOs.Domain.Reminders;
@@ -185,7 +186,65 @@ public static class NotificationEndpoints
             })
             .ToList();
 
+        await RecordPlanAsync(db, userId.Value, reminders, now, offset, ct);
+
         return Results.Ok(new RemindersResponse(reminders));
+    }
+
+    /// <summary>
+    /// Keep what was planned, so the admin area can say how many learners a
+    /// reminder was set for and of what kind (ADR-132).
+    /// </summary>
+    /// <remarks>
+    /// The phone asks again whenever it reschedules, and each answer replaces
+    /// the last on the device — so a plan identical to one already recorded
+    /// today adds nothing and is skipped. Slots are <c>yyyy-MM-ddM:KIND</c>
+    /// (M morning, E evening), comma-separated: flat, bounded, no learner
+    /// text. Analytics never fails the request it describes.
+    /// </remarks>
+    private static async Task RecordPlanAsync(
+        WordOsDbContext db, Guid userId, IReadOnlyList<ReminderResponse> reminders,
+        DateTimeOffset now, TimeSpan offset, CancellationToken ct)
+    {
+        try
+        {
+            var slots = string.Join(",", reminders.Select(r =>
+                $"{r.Date:yyyy-MM-dd}{(r.Slot == "MORNING" ? "M" : "E")}:{r.Kind}"));
+            var props = System.Text.Json.JsonSerializer.Serialize(new { slots, count = reminders.Count });
+            if (props.Length > AnalyticsEvent.MaxPropsLength) return;
+
+            var local = now.ToOffset(offset);
+            var startOfDay = new DateTimeOffset(local.Date, offset).ToUniversalTime();
+            // Compared here, not in SQL: jsonb normalises what it stores, so
+            // equality with the text just serialised is not a string match.
+            var today = await db.AnalyticsEvents.AsNoTracking()
+                .Where(e => e.UserId == userId && e.Name == AnalyticsEventNames.RemindersPlanned && e.OccurredAt >= startOfDay)
+                .Select(e => e.PropsJson).ToListAsync(ct);
+            if (today.Any(p => SamePlan(p, slots))) return;
+
+            db.AnalyticsEvents.Add(AnalyticsEvent.Create(
+                userId, AnalyticsEventNames.RemindersPlanned, AnalyticsSource.Server, now, now,
+                propsJson: props));
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            // A reminder list the phone cannot get is worse than a plan we did not record.
+        }
+    }
+
+    private static bool SamePlan(string? props, string slots)
+    {
+        if (props is null) return false;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(props);
+            return doc.RootElement.TryGetProperty("slots", out var v) && v.GetString() == slots;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
