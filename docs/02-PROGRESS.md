@@ -5,8 +5,12 @@
 
 **Last updated:** 2026-11-03 (admin: decisions, changes, dictionary — ADR-132)
 
-> **2026-11-03 — WordOS Admin: Decide → Implement → Measure (ADR-132).** Not
-> deployed. The second admin brief, audited first: `docs/10-ADMIN-INTELLIGENCE-AUDIT.md`
+> **2026-11-03 — WordOS Admin: Decide → Implement → Measure (ADR-132).**
+> **Deployed 2026-11-03:** migrations `ProductDecisions` and
+> `DecisionReviewSnapshot` applied to Neon as `wordos_migrator`, then `8e6f1c2`
+> pushed; Render served it ~80 s later (new admin routes answer 401, `/admin/`
+> carries the new pages). Still to check signed in as the Owner: propose a
+> decision at `/admin/decisions` and open it — that touches the new tables. The second admin brief, audited first: `docs/10-ADMIN-INTELLIGENCE-AUDIT.md`
 > maps every page and requirement to what existed (most of it, ADR-125), what was
 > added, and what is still open. Added: **Decision Log** (`/admin/decisions` —
 > proposal → Owner approval → implemented → review date → verdict, live
