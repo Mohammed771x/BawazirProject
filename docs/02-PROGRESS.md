@@ -5,6 +5,26 @@
 
 **Last updated:** 2026-11-03 (admin: decisions, changes, dictionary — ADR-132)
 
+> **2026-11-03 — WordOS AI moves to Groq's free tier (ADR-134).** Not committed.
+> At the owner's request the chat no longer spends the paid Gemini key:
+> `openai/gpt-oss-120b`, low reasoning, the existing `GROQ_API_KEY`, nothing
+> trimmed. Per-minute waits are absorbed (≤ 45 s); when Groq's quota is spent or
+> Groq is down, Gemini writes that answer and it says so on top (checked live:
+> all nine brief scenarios answered through the fallback, 2–6 s each). **The free tier's daily ceiling is 200 000 tokens** (~15 data
+> questions); the model-choice lab used all of 2026-11-03's. Render needs
+> `GROQ_API_KEY` on the service before this ships.
+
+> **2026-11-03 — WordOS AI (ADR-133).** Not committed, not deployed — waiting
+> for the owner's go-ahead after the cost report. The investigator becomes a
+> conversation at `/admin/ai`: no section to pick, the model names read-only
+> tools the backend runs (13 of them), keeps the thread, reuses fresh results,
+> shows the sources of every answer, saves an answer as an investigation or
+> opens a pre-filled proposal. Learner names go to the screen, never to the
+> model. Migration `AiConversations` (additive, grants inside). API **539**
+> green, AI-service agent tests green; checked against the real model:
+> numbers, a "why" analysis, "and B1?", an idea with no query, unrecorded data
+> refused, a decision's result read from its evaluation.
+
 > **2026-11-03 — WordOS Admin: Decide → Implement → Measure (ADR-132).**
 > **Deployed 2026-11-03:** migrations `ProductDecisions` and
 > `DecisionReviewSnapshot` applied to Neon as `wordos_migrator`, then `8e6f1c2`

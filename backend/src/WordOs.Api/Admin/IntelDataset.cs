@@ -69,6 +69,22 @@ public sealed class AdminIntelOptions
 
     /// <summary>A relative change smaller than this reads as "no change".</summary>
     public double FlatChange { get; init; } = 0.05;
+
+    /// <summary>Most rounds of tool calls WordOS AI may take for one message before it must answer.</summary>
+    public int AgentMaxRounds { get; init; } = 4;
+
+    /// <summary>A tool result this recent, with the same arguments in the same conversation, is reused.</summary>
+    public int AgentCacheMinutes { get; init; } = 10;
+
+    /// <summary>Earlier messages of the conversation the model sees with each new one.</summary>
+    public int AgentHistoryMessages { get; init; } = 12;
+
+    /// <summary>
+    /// How long one step may take. The model runs on Groq's free tier, whose
+    /// per-minute limit the AI service waits out for up to 45 seconds before a
+    /// call of its own, so a step needs more than the lesson timeout (ADR-134).
+    /// </summary>
+    public int AgentStepTimeoutSeconds { get; init; } = 100;
 }
 
 /// <summary>

@@ -1,6 +1,6 @@
 import type { AdminApi } from './client'
 import type {
-  AttentionGroups, Behavior, ChangeDetail, ChangeInput, DayDetail, ChangeRow, CohortSide, DecisionDetail, DecisionInput,
+  AiConversation, AiMessage, AttentionGroups, Behavior, ChangeDetail, ChangeInput, DayDetail, ChangeRow, CohortSide, DecisionDetail, DecisionInput,
   DecisionRow, Definitions, Evaluation, FeedbackItem, FeedbackPage, Filters, FrictionDetail,
   FrictionItem, InquirySummary, Investigation, Kpi, Learning, MeasureDef, Meta, NotificationsPage, Overview, Retention, Session,
   Skill, SkillDetail, SkillSummary, TimelineEvent, User360, UserRow,
@@ -419,6 +419,43 @@ export class MockAdminApi implements AdminApi {
     return wait(inv, 900)
   }
 
+  aiConversations() {
+    return wait({ items: AI_CONVERSATIONS.filter((c) => !c.archived) })
+  }
+  aiConversation(id: string) {
+    const c = AI_CONVERSATIONS.find((x) => x.id === id) ?? AI_CONVERSATIONS[0]
+    return wait({ conversation: c, messages: AI_MESSAGES[c.id] ?? [] })
+  }
+  async aiSend(text: string, conversationId?: string) {
+    const id = conversationId ?? `ai-${Date.now()}`
+    if (!conversationId) AI_CONVERSATIONS.unshift({ id, title: text.slice(0, 40), archived: false, createdAt: iso(0), updatedAt: iso(0) })
+    const user: AiMessage = { id: `m-${Date.now()}`, role: 'user', content: text, failed: false, createdAt: iso(0), inquiryId: null, sources: [], attachments: [] }
+    const reply: AiMessage = {
+      id: `m-${Date.now() + 1}`, role: 'assistant', failed: false, createdAt: iso(0), inquiryId: null,
+      content: '**بيانات تجريبية.** خلال آخر 7 أيام:\n\n1. **النشاط:** 42 متعلمًا نشطًا مقابل 37 في الأسبوع السابق.\n2. **Listening:** الانسحاب 31% (n=84 تمرينًا) ويستحق الفحص.\n\n| المقياس | الحالية | السابقة |\n|---|---|---|\n| النشطون | 42 | 37 |\n| Sessions | 410 | 395 |\n\nأقترح أن نبدأ بفحص Listening حسب المستوى.',
+      sources: [{ tool: 'health', args: '{"days":7}', why: 'صورة عامة', meta: { from: iso(6).slice(0, 10), to: iso(0).slice(0, 10), learners: 120, sample: '120 متعلمًا' }, cached: false, error: null, at: iso(0) }],
+      attachments: [],
+    }
+    ;(AI_MESSAGES[id] ??= []).push(user, reply)
+    await wait(null, 900)
+    return { conversation: { id, title: AI_CONVERSATIONS.find((c) => c.id === id)!.title }, user, reply }
+  }
+  async aiRegenerate(conversationId: string) {
+    const list = AI_MESSAGES[conversationId] ?? []
+    const last = list[list.length - 1]
+    return { reply: { ...last, id: `m-${Date.now()}`, content: last?.content ?? '' } }
+  }
+  async aiPatch(id: string, patch: { title?: string; archived?: boolean }) {
+    const c = AI_CONVERSATIONS.find((x) => x.id === id)
+    if (c) Object.assign(c, patch)
+  }
+  async aiDelete(id: string) {
+    const i = AI_CONVERSATIONS.findIndex((x) => x.id === id)
+    if (i >= 0) AI_CONVERSATIONS.splice(i, 1)
+  }
+  async aiSaveInvestigation() {
+    return { id: HISTORY[0].id }
+  }
   day(_id: string, date: string): Promise<DayDetail> {
     return wait({
       date, phoneReported: true,
@@ -572,3 +609,8 @@ const CHANGES: { row: ChangeRow; input: ChangeInput }[] = [
       comparisonSegment: 'level:A2', decisionId: null, verdict: null, metrics: ['reading.first_attempt_accuracy'], author: 'Owner', concluded: false },
   },
 ]
+
+const AI_CONVERSATIONS: AiConversation[] = [
+  { id: 'ai-1', title: 'وضع Listening هذا الشهر', archived: false, createdAt: iso(2), updatedAt: iso(2) },
+]
+const AI_MESSAGES: Record<string, AiMessage[]> = {}

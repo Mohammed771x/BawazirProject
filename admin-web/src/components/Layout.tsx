@@ -1,6 +1,6 @@
 import {
   Activity, AlertOctagon, Bell, FlaskConical, Gavel, LayoutDashboard, LogOut, Menu, MessageSquareText, Moon, Repeat,
-  Search, Settings, Sun, Users, GraduationCap,
+  Bot, Settings, Sun, Users, GraduationCap,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
@@ -19,7 +19,7 @@ const NAV = [
   { to: '/notifications', label: 'الإشعارات', icon: Bell },
   { to: '/problems', label: 'المشكلات والتحليل', icon: AlertOctagon },
   { to: '/feedback', label: 'Feedback', icon: MessageSquareText },
-  { to: '/inquiry', label: 'تحليل واستفسار', icon: Search },
+  { to: '/ai', label: 'WordOS AI', icon: Bot },
   { to: '/decisions', label: 'سجل القرارات', icon: Gavel },
   { to: '/changes', label: 'التجارب والتغييرات', icon: FlaskConical },
   { to: '/settings', label: 'إعدادات النظام', icon: Settings },
@@ -28,8 +28,8 @@ const NAV = [
 // Pages that are about one thing, not a population: global filters would
 // change nothing there, so they are not shown. Decisions and changes carry
 // their own population and windows.
-const NO_FILTERS = [/^\/feedback/, /^\/inquiry/, /^\/settings/, /^\/users\/[^/]+/, /^\/decisions/, /^\/changes/]
-const NO_SEARCH = ['/feedback', '/inquiry', '/settings', '/decisions', '/changes']
+const NO_FILTERS = [/^\/feedback/, /^\/inquiry/, /^\/ai/, /^\/settings/, /^\/users\/[^/]+/, /^\/decisions/, /^\/changes/]
+const NO_SEARCH = ['/feedback', '/inquiry', '/ai', '/settings', '/decisions', '/changes']
 
 function useTheme() {
   const [theme, setTheme] = useState<string | null>(() => {
@@ -65,7 +65,7 @@ export function Layout() {
         const now = today()
         setWaiting({
           '/decisions': d.counts.due,
-          '/inquiry': i.items.filter((x) => x.followUpOn && x.followUpOn <= now).length,
+          '/ai': i.items.filter((x) => x.followUpOn && x.followUpOn <= now).length,
         })
       })
       .catch(() => { /* a badge is a convenience; the pages say the same */ })

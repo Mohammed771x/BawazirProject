@@ -103,6 +103,8 @@ public sealed class ApiFactory(string connectionString)
             // The admin interpreter never reaches a model either (ADR-125).
             services.RemoveAll<IAdminInsightService>();
             services.AddSingleton<IAdminInsightService>(Insight);
+            services.RemoveAll<IAdminAgentService>();
+            services.AddSingleton<IAdminAgentService>(Agent);
 
             services.RemoveAll<IAiContentService>();
             services.AddSingleton(Ai);
@@ -130,6 +132,9 @@ public sealed class ApiFactory(string connectionString)
 
     /// <summary>The stand-in for the admin area's interpreter.</summary>
     public StubAdminInsightService Insight { get; } = new();
+
+    /// <summary>WordOS AI's model side, scripted step by step (ADR-133).</summary>
+    public StubAdminAgentService Agent { get; } = new();
 
     /// <summary>The stand-in for Gemini-then-Groq transcription.</summary>
     public StubSpeechTranscriber Speech { get; } = new();

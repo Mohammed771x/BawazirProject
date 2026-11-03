@@ -520,3 +520,26 @@ public sealed class StubAdminInsightService : IAdminInsightService
         return Task.FromResult(Next);
     }
 }
+
+/// <summary>
+/// WordOS AI's model, scripted (ADR-133): each step takes the next queued
+/// result; an empty queue is "the model is unavailable".
+/// </summary>
+public sealed class StubAdminAgentService : IAdminAgentService
+{
+    public Queue<AgentStepResult> Script { get; } = new();
+
+    public List<AgentStepRequest> Requests { get; } = [];
+
+    public static AgentStepResult Tools(params (string Tool, string Args)[] calls) =>
+        new("tools", calls.Select(c => new AgentToolCall(c.Tool, c.Args, "test")).ToList(), "", [], "", "test-model", "admin-agent-v1", 10);
+
+    public static AgentStepResult Answer(string text, string title = "", params string[] attachments) =>
+        new("answer", [], text, attachments, title, "test-model", "admin-agent-v1", 10);
+
+    public Task<AgentStepResult?> StepAsync(AgentStepRequest request, CancellationToken ct = default)
+    {
+        lock (Requests) Requests.Add(request);
+        return Task.FromResult(Script.TryDequeue(out var next) ? next : null);
+    }
+}

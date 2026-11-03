@@ -6530,3 +6530,113 @@ threshold and asked for the rest of the open list to be finished:
    passage is written for its own session (no content table needed).
 
 Left on purpose: the phone sending a reminder's kind, which is an app change.
+
+---
+
+## ADR-133 — WordOS AI: a conversation, with the backend running the tools the model names
+
+**Date:** 2026-11-03 · **Status:** Accepted (local only, not deployed). Replaces the
+section-first investigator of ADR-125 §7 / ADR-132 §6 as the admin's way in.
+
+**Context.** The product owner's brief "WordOS AI — Intelligent Conversational
+Product Manager": a ChatGPT-like page, no section or analysis type to pick first;
+the AI decides whether a message needs data, queries only what it needs, keeps
+the conversation, shows where its numbers came from, and turns a result into an
+investigation or a proposal on request — never a decision by itself.
+
+**Decision.**
+
+1. **The backend runs the loop; the model only decides and writes.** Each step
+   (`POST /ai/admin/agent`, prompt `admin-agent-v1`) gets the conversation, the
+   tool results so far, the tool catalogue and the metric dictionary — both
+   written by the backend, so the prompt cannot drift from what exists. It
+   returns either tool calls or the answer. At most `AgentMaxRounds` (4) rounds,
+   then it must answer; an empty answer is asked for once more. No native
+   function calling: the existing JSON-schema path, arguments as a JSON string.
+2. **Thirteen read-only tools, no SQL** (`AgentTools`): health, metrics,
+   compare, skill, time, words, users, retention, notifications, behavior,
+   content_versions, technical, decisions. Each runs the same computations the
+   pages run over an `IntelScope`, returns aggregates with period, learners in
+   scope and sample, bounded at 11 000 characters. Arguments are validated; an
+   unknown tool or bad argument returns an error the model reads, not a 500.
+3. **Learners never reach the model.** `users` gives the model counts and
+   anonymous evidence (`U1`, level, days since joining, why); names, masked by
+   role as everywhere else, go to the page as an attachment.
+4. **Context and reuse.** The model sees the last `AgentHistoryMessages` (12)
+   messages, and the aggregates behind the last two answers. A tool result with
+   the same normalised arguments in the same conversation within
+   `AgentCacheMinutes` (10) is reused and marked so; a new period or filter
+   queries again.
+5. **Storage.** `ai_conversations` and `ai_messages` (own conversations only;
+   rename, archive, search, delete). Each answer keeps its sources (tool,
+   arguments, why, period, sample, result) and attachments. Migration
+   `AiConversations`, additive, grants `wordos_app` inside it.
+6. **Investigation and decision stay separate acts.** "Save as investigation"
+   writes an `admin_inquiries` row (section `chat`) the investigation and
+   decision pages already read; "propose a decision" saves first and opens the
+   decision form pre-filled. Deleting a conversation keeps what was saved from it.
+7. **The prompt's rules** (checked against the real model): ideas and opinions
+   get no queries; every number comes from a tool with its period and sample;
+   no null, keys or internal references in the answer; failure reasons are not
+   abandonment reasons; correlation is not cause; never promise to monitor;
+   a decision's result is read from its evaluation.
+
+**Cost, measured locally:** one step ≈ 4 600–6 300 tokens; a data question
+takes 2–3 steps (≈ 10–18k tokens), an idea 1 step (≈ 5k).
+
+**Not done.** Streaming the answer as it is written (one response per message
+for now); the old section-first form is removed from the menu (`/inquiry`
+redirects to `/ai`), its endpoints stay for saved investigations.
+
+## ADR-134 — WordOS AI runs on Groq's free tier (`openai/gpt-oss-120b`), not the paid Gemini key
+
+**Date:** 2026-11-03 · **Status:** accepted (owner's request)
+
+**Context.** WordOS AI (ADR-133) spent the paid Gemini key that writes lessons.
+The owner asked for a free model instead: the Owner asks a few questions a day
+at most. A separate lab (outside the repository, synthetic data, the same
+twelve scenarios on three Groq models) recommended `openai/gpt-oss-120b` with
+`reasoning_effort=low`: it completed every case, kept "and B2?" on the right
+comparison, read a decision's result from its evaluation and admitted missing
+delivery data; `gpt-oss-20b` invented a sample size and Qwen called a tool that
+does not exist.
+
+**Decision.**
+1. **Only WordOS AI moves.** `/ai/admin/agent` calls Groq's chat completions
+   (`app/groq_chat.py`) with the existing `GROQ_API_KEY` (the one Speaking
+   already uses for Whisper). Lessons, review, speech, voice and the older
+   insight endpoints stay where they were. `AGENT_PROVIDER=gemini` puts the chat
+   back on Gemini altogether.
+2. **The prompt, tools, dictionary, loop and limits are unchanged.** Nothing
+   was trimmed to fit the free tier — the owner said so explicitly.
+3. **The answer's shape** is the same JSON schema, checked by Groq
+   non-strictly. Strict mode was tried and rejected a well-formed answer that
+   left out an optional field (`calls` on an answer); a reply that fails the
+   check is asked for once more.
+4. **Living inside the free quota** — measured on the project's key:
+   8 000 tokens a minute, **200 000 tokens a day**, 1 000 requests a day. A
+   step is 4 500–6 500 tokens and a data question 2–3 steps, so the second step
+   usually waits for the minute to roll over: a 429 is waited out for up to
+   `AGENT_GROQ_MAX_WAIT_SECONDS` (45) in total; a 413 is retried once with a
+   smaller output ceiling. Past that, the AI service answers **429
+   `AI_RATE_LIMITED` with `retry_after_seconds`**, the loop stops, and the
+   admin reads "reached the free limit — try again in about N minutes", never
+   "something broke". The backend's step timeout is its own setting,
+   `AdminIntel:AgentStepTimeoutSeconds` (100), above the wait. With the
+   fallback on (the default), a used-up quota goes to Gemini instead (item 5).
+
+5. **When Groq cannot answer, Gemini does — and says so.** A used-up quota
+   (429 past the wait) or an unreachable Groq (502) sends that step to Gemini;
+   the answer starts "تنبيه: انتهت حصة Groq المجانية… فحوّلتُ هذه الإجابة إلى
+   Gemini". The owner asked for it: a chat that stops annoys the Owner more
+   than a few cents spent. `AGENT_FALLBACK=none` turns it off, and only then
+   does the "try again in N minutes" answer appear.
+
+**Consequences.** A data question takes ~30–70 s instead of ~10 s, almost all
+of it waiting for the per-minute window. The daily ceiling is some fifteen
+data questions (ideas cost a third of that); the lab that chose the model used
+up the whole of 2026-11-03's quota on its own. Answers still need reading
+with care: the lab saw the model name an internal metric or attach a ratio to
+the wrong denominator once each. Past the free tier the chat keeps answering on
+the paid Gemini key, a few tenths of a cent a question, and says so on each
+answer; Groq's paid tier would be the same code with a different key.

@@ -210,7 +210,7 @@ public static class AdminIntelEndpoints
 
     public sealed record SkillCount(string? Skill, int Count);
 
-    private static IReadOnlyList<FailedWord> MostFailedWords(IntelScope scope, SkillType? skill, int take) =>
+    internal static IReadOnlyList<FailedWord> MostFailedWords(IntelScope scope, SkillType? skill, int take) =>
         scope.Words
             .Select(w => (w, fails: w.Events.Where(e => e.Type == WordEventType.SkillFailed
                                                          && scope.Period.Contains(e.CreatedAt)

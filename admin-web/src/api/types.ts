@@ -656,3 +656,39 @@ export interface DayDetail {
   wordsAdded: { id: string; text: string; deleted: boolean }[]
   events: TimelineEvent[]
 }
+
+// ── WordOS AI (ADR-133) ────────────────────────────────────────────────────
+
+export interface AiConversation { id: string; title: string; archived: boolean; createdAt: string; updatedAt: string }
+
+/** One tool the backend ran for an answer — the "sources of the analysis". */
+export interface AiSource {
+  tool: string
+  args: string
+  why: string | null
+  meta: { from: string; to: string; learners: number; sample: string } | null
+  cached: boolean
+  error: string | null
+  at: string
+}
+
+export interface AiAttachment {
+  id: string
+  kind: 'table' | 'chart' | 'users'
+  title: string
+  columns?: string[] | null
+  rows?: string[][] | null
+  chart?: ChartSpec | null
+  users?: UserRow[] | null
+}
+
+export interface AiMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  failed: boolean
+  createdAt: string
+  inquiryId: string | null
+  sources: AiSource[]
+  attachments: AiAttachment[]
+}

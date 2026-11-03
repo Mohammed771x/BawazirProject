@@ -216,4 +216,10 @@ npm run build      # tsc + vite — must stay clean
   compute function together; Settings prints it. Add a metric there, never inline
   (ADR-132). Approving, rejecting and closing a decision is Owner-only on the server.
   The audit of what the admin covers and what is open: `docs/10-ADMIN-INTELLIGENCE-AUDIT.md`.
+- **WordOS AI** (`/admin/ai`, ADR-133): the model never queries anything itself — it
+  names tools from `backend/src/WordOs.Api/Admin/AgentTools.cs`, which the backend
+  runs read-only. A new kind of question means a new tool there, never raw SQL, and
+  nothing identifying a learner goes into a tool's model-facing result. Its model is
+  Groq's free `openai/gpt-oss-120b` (`ai-service/app/groq_chat.py`, ADR-134), never
+  Gemini only when Groq's quota (~15 data questions a day) is spent, saying so on the answer.
 

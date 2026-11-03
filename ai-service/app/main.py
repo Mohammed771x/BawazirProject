@@ -29,9 +29,10 @@ from pydantic import BaseModel, Field
 
 from .config import ConfigurationError, load_settings
 from .gemini import GeminiClient, GeminiError
+from .groq_chat import GroqChatClient, GroqSettings
 from .speech import SpeechSettings, Transcriber, TranscriptionError
 from .tts import SynthesisError, Synthesizer, TtsSettings, encode_audio
-from . import insight_prompts, prompts
+from . import agent_prompts, insight_prompts, prompts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +46,18 @@ except ConfigurationError as exc:  # pragma: no cover - startup failure path
     raise SystemExit(f"\n{exc}\n") from exc
 
 CLIENT = GeminiClient(SETTINGS.gemini_api_key, SETTINGS.gemini_model)
+
+# WordOS AI, the admin's analyst, runs on Groq's free tier and not on the paid
+# key that writes lessons (ADR-134). AGENT_PROVIDER=gemini puts it back; there
+# is no silent fallback to Gemini, because that would be spending the owner
+# said not to spend.
+AGENT_PROVIDER = os.environ.get("AGENT_PROVIDER", "groq").strip().lower()
+AGENT_CLIENT = (CLIENT if AGENT_PROVIDER == "gemini"
+                else GroqChatClient(GroqSettings.from_env()))
+# When Groq's free quota is used up, or Groq cannot be reached, the step is
+# written by Gemini instead and the admin is told so — the owner would rather
+# pay for that answer than have the chat stop. AGENT_FALLBACK=none turns it off.
+AGENT_FALLBACK = os.environ.get("AGENT_FALLBACK", "gemini").strip().lower() == "gemini"
 
 # Optional, unlike the text key: a service without speech keys still writes
 # every lesson, and Speaking answers 503 to a recording so the learner types
@@ -1214,7 +1227,7 @@ class Generated(NamedTuple):
 
 def _generate_json(
     prompt: str, schema: dict, temperature: float = 0.7,
-    system: str | None = None,
+    system: str | None = None, client=None,
 ) -> Generated:
     """Calls Gemini and returns the answer with its token cost.
 
@@ -1233,14 +1246,22 @@ def _generate_json(
         )
 
     try:
-        response = CLIENT.generate(
+        response = (client or CLIENT).generate(
             prompt,
             system_instruction=system or prompts.system_instruction(),
             json_schema=schema,
             temperature=temperature,
         )
     except GeminiError as exc:
-        log.warning("gemini failure: %s", exc)
+        log.warning("model failure: %s", exc)
+        # A free quota used up is not a failure: say so, and when it is back
+        # (ADR-134). Only WordOS AI's Groq client raises this.
+        if exc.status == 429 and getattr(exc, "retry_after", None) is not None:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail={
+                "code": "AI_RATE_LIMITED",
+                "message": "The model's free quota is used up for now.",
+                "retry_after_seconds": int(exc.retry_after) + 1,
+            }) from exc
         raise _upstream(str(exc)) from exc
     finally:
         _in_flight.release()
@@ -1472,4 +1493,128 @@ def admin_investigate(request: InsightRequest) -> InsightResponse:
         prompt_version=insight_prompts.INSIGHT_PROMPT_VERSION,
         model=SETTINGS.gemini_model,
         tokens=tokens,
+    )
+
+
+# ── WordOS AI: one step of the admin agent (ADR-133) ─────────────────────────
+
+
+class AgentTurn(BaseModel):
+    role: str = Field(pattern="^(user|assistant)$")
+    text: str = Field(max_length=12_000)
+    # The aggregates an earlier answer rested on, so a follow-up can reuse them.
+    data: str | None = Field(default=None, max_length=12_000)
+
+
+class AgentCall(BaseModel):
+    tool: str = Field(max_length=48)
+    args_json: str = Field(default="{}", max_length=2_000)
+    why: str = Field(default="", max_length=300)
+
+
+class AgentStepDone(BaseModel):
+    calls: list[AgentCall] = Field(max_length=8)
+    results: list[str] = Field(max_length=8)
+
+
+class AgentRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4_000)
+    conversation: list[AgentTurn] = Field(default_factory=list, max_length=24)
+    steps: list[AgentStepDone] = Field(default_factory=list, max_length=6)
+    # Both written by the backend, which owns the tools and the definitions.
+    tools: str = Field(max_length=20_000)
+    dictionary: str = Field(max_length=20_000)
+    today: str = Field(max_length=10)
+    must_answer: bool = False
+
+
+class AgentResponse(BaseModel):
+    action: str
+    calls: list[AgentCall]
+    answer: str
+    attachments: list[str]
+    title: str
+    prompt_version: str
+    model: str
+    tokens: int
+    # "quota" or "unavailable" when Groq could not write this step and Gemini
+    # did (ADR-134); None when Groq answered.
+    fallback: str | None = None
+
+
+@app.post(
+    "/ai/admin/agent",
+    response_model=AgentResponse,
+    dependencies=[Depends(require_service_token)],
+)
+def admin_agent(request: AgentRequest) -> AgentResponse:
+    """One step of WordOS AI: ask for tools, or answer.
+
+    The backend runs the loop and the tools; this only decides and writes.
+    Results are bounded on the way in, and the model's choices are cleaned on
+    the way out — the backend validates every call again before running it.
+    """
+    for step in request.steps:
+        for r in step.results:
+            if len(r) > 12_000:
+                raise HTTPException(status_code=422, detail={
+                    "code": "RESULT_TOO_LARGE", "message": "A tool result is over 12,000 characters."})
+
+    prompt = agent_prompts.agent_prompt(
+        message=request.message,
+        conversation=[t.model_dump() for t in request.conversation],
+        steps=[s.model_dump() for s in request.steps],
+        tools=request.tools,
+        dictionary=request.dictionary,
+        today=request.today,
+        must_answer=request.must_answer,
+        first_message=not request.conversation,
+    )
+    model = getattr(AGENT_CLIENT, "model", SETTINGS.gemini_model)
+    fallback = None
+    try:
+        payload, tokens = _generate_json(
+            prompt, agent_prompts.AGENT_SCHEMA, temperature=0.3,
+            system=agent_prompts.SYSTEM, client=AGENT_CLIENT)
+    except HTTPException as exc:
+        # Only Groq's own failures move to Gemini: a full queue here (503)
+        # would be just as full for Gemini.
+        if AGENT_CLIENT is CLIENT or not AGENT_FALLBACK or exc.status_code not in (429, 502):
+            raise
+        fallback = "quota" if exc.status_code == 429 else "unavailable"
+        log.warning("admin agent: Groq %s, this step goes to Gemini", fallback)
+        payload, tokens = _generate_json(
+            prompt, agent_prompts.AGENT_SCHEMA, temperature=0.3,
+            system=agent_prompts.SYSTEM, client=CLIENT)
+        model = SETTINGS.gemini_model
+    log.info("admin agent step=%d tokens=%d model=%s", len(request.steps), tokens, model)
+
+    calls = []
+    for c in payload.get("calls") or []:
+        if not isinstance(c, dict) or not str(c.get("tool", "")).strip():
+            continue
+        calls.append(AgentCall(
+            tool=str(c["tool"]).strip()[:48],
+            args_json=str(c.get("args_json") or "{}")[:2_000],
+            why=str(c.get("why") or "")[:300],
+        ))
+    calls = calls[:4]
+
+    answer = str(payload.get("answer") or "").strip()
+    action = "tools" if payload.get("action") == "tools" and calls and not request.must_answer else "answer"
+    # An empty answer before the last round goes back to the backend as
+    # empty, and it asks once more with must_answer; only then is it final.
+    if action == "answer" and not answer and request.must_answer:
+        answer = "لم أتمكن من صياغة إجابة هذه المرة. أعد المحاولة أو أعد صياغة السؤال."
+
+    return AgentResponse(
+        action=action,
+        calls=calls if action == "tools" else [],
+        answer=answer if action == "answer" else "",
+        attachments=[str(a).strip() for a in (payload.get("attachments") or []) if str(a).strip()][:3],
+        title=str(payload.get("title") or "").strip()[:80],
+        prompt_version=agent_prompts.AGENT_PROMPT_VERSION,
+        model=model,
+        tokens=tokens,
+        fallback=fallback,
     )

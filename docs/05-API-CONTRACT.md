@@ -1079,6 +1079,37 @@ verdict and outcome) — `admin-insight-v2`.
   "cautions": ["…"], "summary": "…" }
 ```
 
+### WordOS AI (ADR-133)
+
+| Method | Path | Response |
+|---|---|---|
+| GET | `/admin/intel/ai/conversations?q=&archived=` | the caller's own: `{items:[{id, title, archived, createdAt, updatedAt}]}` — `q` matches titles and message text |
+| GET | `/admin/intel/ai/conversations/{id}` | `{conversation, messages:[AiMessage]}` — `404` for someone else's |
+| PATCH | `/admin/intel/ai/conversations/{id}` | `{title?, archived?}` → `204` |
+| DELETE | `/admin/intel/ai/conversations/{id}` | `204`; investigations saved from it remain |
+| POST | `/admin/intel/ai/messages` | `{text, conversationId?}` → `{conversation:{id,title}, user:AiMessage, reply:AiMessage}`; no id starts a conversation (rate-limited as expensive) |
+| POST | `/admin/intel/ai/conversations/{id}/regenerate` | answers the last question again → `{reply}`; an answer saved as an investigation is kept |
+| POST | `/admin/intel/ai/messages/{id}/investigation` | saves an answer as an investigation (section `chat`) → `{id}` |
+
+```jsonc
+// AiMessage
+{ "id": "…", "role": "assistant", "content": "markdown", "failed": false, "createdAt": "…", "inquiryId": null,
+  "sources": [{"tool": "skill", "args": "{\"skill\":\"reading\"}", "why": "…",
+               "meta": {"from": "2026-10-05", "to": "2026-11-03", "learners": 49, "sample": "18 تمرينًا"},
+               "cached": false, "error": null, "at": "…"}],
+  "attachments": [{"id": "r0c0t", "kind": "table|chart|users", "title": "…", "columns": [], "rows": [[]], "chart": ChartSpec, "users": [UserRow]}] }
+```
+
+The AI service's `POST /ai/admin/agent` (token-guarded) takes
+`{message, conversation:[{role,text,data?}], steps:[{calls:[{tool,args_json,why}], results:[string]}], tools, dictionary, today, must_answer}`
+and returns `{action: "tools"|"answer", calls, answer, attachments, title, prompt_version, model, tokens}`.
+Its model is Groq `openai/gpt-oss-120b` on the free tier (ADR-134). When that
+quota is used up, or Groq is unreachable, the step is written by Gemini and the
+response carries `fallback: "quota"|"unavailable"` (null when Groq answered);
+the backend starts the stored answer with a notice saying so. Only with
+`AGENT_FALLBACK=none` does it answer **429** `{"error": {"code": "AI_RATE_LIMITED", "message", "retry_after_seconds"}}`,
+and the backend then stores a failed reply saying roughly when to ask again.
+
 Windows: a decision's baseline is its `baselineFrom..baselineTo`, clipped to
 end the day before `implementedOn`, or the `EvaluationWindowDays` before it;
 its "after" runs from `implementedOn` to `reviewOn` (or the baseline's length).

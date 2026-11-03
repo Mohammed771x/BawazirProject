@@ -1,5 +1,5 @@
 import type {
-  AttentionGroups, AuditItem, Behavior, ChangeDetail, DayDetail, ChangeInput, ChangeRow, CohortSide, DecisionDetail,
+  AiConversation, AiMessage, AttentionGroups, AuditItem, Behavior, ChangeDetail, DayDetail, ChangeInput, ChangeRow, CohortSide, DecisionDetail,
   DecisionInput, DecisionRow, Definitions, FeedbackPage, Filters, FrictionDetail,
   InquirySummary, Investigation, Learning, Meta, NotificationsPage, Overview, Retention, Session, SkillDetail,
   SystemInfo, TimelineEvent, User360, UsersList,
@@ -50,6 +50,13 @@ export interface AdminApi {
   recordChange(c: ChangeInput): Promise<{ id: string }>
   editChange(id: string, c: ChangeInput): Promise<void>
   concludeChange(id: string, c: { result?: string | null; sideEffects?: string | null; recommendation?: string | null; verdict?: string | null; freezeEvaluation?: boolean }): Promise<void>
+  aiConversations(q?: string, archived?: boolean): Promise<{ items: AiConversation[] }>
+  aiConversation(id: string): Promise<{ conversation: AiConversation; messages: AiMessage[] }>
+  aiSend(text: string, conversationId?: string): Promise<{ conversation: { id: string; title: string }; user: AiMessage; reply: AiMessage }>
+  aiRegenerate(conversationId: string): Promise<{ reply: AiMessage }>
+  aiPatch(id: string, patch: { title?: string; archived?: boolean }): Promise<void>
+  aiDelete(id: string): Promise<void>
+  aiSaveInvestigation(messageId: string): Promise<{ id: string }>
   system(): Promise<SystemInfo>
   audit(): Promise<{ items: AuditItem[] }>
 }
@@ -264,6 +271,24 @@ export class HttpAdminApi implements AdminApi {
   concludeChange = async (id: string, c: { result?: string | null; sideEffects?: string | null; recommendation?: string | null; verdict?: string | null; freezeEvaluation?: boolean }) => {
     await this.request(`/admin/intel/changes/${id}/conclude`, { method: 'POST', body: JSON.stringify(c) })
   }
+  aiConversations = (q?: string, archived?: boolean) =>
+    this.request<{ items: AiConversation[] }>(`/admin/intel/ai/conversations${query({ q, archived: archived ? 'true' : undefined })}`)
+  aiConversation = (id: string) =>
+    this.request<{ conversation: AiConversation; messages: AiMessage[] }>(`/admin/intel/ai/conversations/${id}`)
+  aiSend = (text: string, conversationId?: string) =>
+    this.request<{ conversation: { id: string; title: string }; user: AiMessage; reply: AiMessage }>('/admin/intel/ai/messages', {
+      method: 'POST', body: JSON.stringify({ text, conversationId }),
+    })
+  aiRegenerate = (conversationId: string) =>
+    this.request<{ reply: AiMessage }>(`/admin/intel/ai/conversations/${conversationId}/regenerate`, { method: 'POST' })
+  aiPatch = async (id: string, patch: { title?: string; archived?: boolean }) => {
+    await this.request(`/admin/intel/ai/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  }
+  aiDelete = async (id: string) => {
+    await this.request(`/admin/intel/ai/conversations/${id}`, { method: 'DELETE' })
+  }
+  aiSaveInvestigation = (messageId: string) =>
+    this.request<{ id: string }>(`/admin/intel/ai/messages/${messageId}/investigation`, { method: 'POST' })
   system = () => this.request<SystemInfo>('/admin/intel/system')
   audit = () => this.request<{ items: AuditItem[] }>('/admin/intel/audit')
 

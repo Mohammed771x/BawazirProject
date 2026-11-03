@@ -3,6 +3,7 @@ import { useAuth } from './auth/AuthContext'
 import { LoginPage } from './auth/LoginPage'
 import { Layout } from './components/Layout'
 import { PageSkeleton } from './components/ui'
+import { AiPage } from './pages/AiPage'
 import { BehaviorPage, FrictionPage } from './pages/BehaviorPage'
 import { ChangesPage } from './pages/ChangesPage'
 import { DecisionsPage } from './pages/DecisionsPage'
@@ -42,7 +43,11 @@ export default function App() {
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="problems" element={<ProblemsPage />} />
         <Route path="feedback" element={<FeedbackPage />} />
-        <Route path="inquiry" element={<InquiryPage />} />
+        <Route path="ai" element={<AiPage />} />
+        <Route path="ai/:id" element={<AiPage />} />
+        {/* The section-first investigator is replaced by WordOS AI (ADR-133);
+            saved investigations still open by their link. */}
+        <Route path="inquiry" element={<Navigate to="/ai" replace />} />
         <Route path="inquiry/:id" element={<InquiryPage />} />
         <Route path="decisions" element={<DecisionsPage />} />
         <Route path="decisions/:id" element={<DecisionsPage />} />

@@ -647,6 +647,25 @@ new tables (`product_decisions`, `product_changes`) and new nullable columns on
 4. Check with something that touches the new tables: open
    `/admin/decisions`, propose one, and open it. A `500` there means step 2.
 
+## 6⅞ · WordOS AI and its free model (ADR-133, ADR-134)
+
+One additive migration, `AiConversations` (two tables, `ai_conversations` and
+`ai_messages`, grant to `wordos_app` inside it). Apply it **before pushing**,
+exactly as in §6¾ step 1; expect `Applying migration '…_AiConversations'`,
+then `Done.`
+
+The chat runs on **Groq**, not Gemini. On Render, the service must have
+`GROQ_API_KEY` (the same key Speaking uses for Whisper). Without it — or when
+its free quota is spent — each answer is written by Gemini and starts with a
+notice saying so (`AGENT_FALLBACK=none` stops that). No other
+variable is needed; the optional ones and their defaults are
+`AGENT_GROQ_MODEL=openai/gpt-oss-120b`, `AGENT_REASONING_EFFORT=low`,
+`AGENT_GROQ_MAX_WAIT_SECONDS=45`, and `AGENT_PROVIDER=gemini` to go back.
+
+Check: open `/admin/ai`, ask "كم عدد المستخدمين النشطين آخر 7 أيام؟". Expect an
+answer in under about a minute with a "sources" line. A "تنبيه … Gemini" line on
+top means the day's Groq tokens are spent — Groq comes back by itself.
+
 ## What will run out first
 
 Not the server. In order:

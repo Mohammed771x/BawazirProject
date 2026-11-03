@@ -23,6 +23,10 @@ import pytest
 os.environ["GEMINI_API_KEY"] = "test-key-not-a-real-credential"
 os.environ["GEMINI_MODEL"] = "gemini-3.1-flash-lite"
 os.environ["AI_SERVICE_TOKEN"] = "test-service-token"
+# WordOS AI's Groq key too: `.env` would otherwise hand the suite the real one,
+# and a test once reached Groq through it (ADR-134).
+os.environ["GROQ_API_KEY"] = "test-groq-key-not-a-real-credential"
+os.environ.pop("AGENT_PROVIDER", None)
 os.environ.pop("AI_ALLOW_UNAUTHENTICATED", None)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -50,6 +54,7 @@ def never_call_gemini(monkeypatch):
             "This test called Gemini for real. Use the `stub_gemini` fixture.")
 
     monkeypatch.setattr(main.CLIENT, "generate", refuse)
+    monkeypatch.setattr(main.AGENT_CLIENT, "generate", refuse)
 
 
 @pytest.fixture
@@ -95,6 +100,7 @@ def stub_gemini(monkeypatch):
             )
 
         monkeypatch.setattr(main.CLIENT, "generate", fake_generate)
+        monkeypatch.setattr(main.AGENT_CLIENT, "generate", fake_generate)
         return recorder
 
     return install
@@ -129,6 +135,7 @@ def stub_gemini_sequence(monkeypatch):
             )
 
         monkeypatch.setattr(main.CLIENT, "generate", fake_generate)
+        monkeypatch.setattr(main.AGENT_CLIENT, "generate", fake_generate)
         return recorder
 
     return install

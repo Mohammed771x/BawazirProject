@@ -127,7 +127,7 @@ function SavedInvestigation({ id }: { id: string }) {
   const state = useAsync(() => api.inquiry(id), [id])
   return (
     <>
-      <Link to="/inquiry" className="muted" style={{ fontSize: 13 }}>→ تحليل واستفسار</Link>
+      <Link to="/ai" className="muted" style={{ fontSize: 13 }}>→ WordOS AI</Link>
       <Loader state={state}>{(inv) => (
         <>
           {inv.parentId && <Link to={`/inquiry/${inv.parentId}`} className="note row" style={{ fontSize: 13 }}><CornerDownLeft size={14} /> متابعة لتحقيق سابق — افتح السؤال الأصلي</Link>}
@@ -166,7 +166,7 @@ function ThreadTools({ inv }: { inv: Investigation }) {
   const toDecision = () => {
     const p = new URLSearchParams({
       inquiry: inv.id,
-      area: inv.section === 'discussion' ? 'general' : inv.section,
+      area: inv.section === 'discussion' || inv.section === 'chat' ? 'general' : inv.section,
       problem: inv.question,
       evidence: [inv.summary, ...inv.evidence.slice(0, 6).map((e) => `${e.label}: ${formatValue(e.value, e.format)}`)].join('\n'),
       hypothesis: inv.hypotheses[0] ?? '',
@@ -176,8 +176,29 @@ function ThreadTools({ inv }: { inv: Investigation }) {
     navigate(`/decisions/new?${p}`)
   }
 
+  const fromChat = inv.section === 'chat'
+
   return (
     <div className="stack lg">
+      {fromChat ? (
+        <Card title="ما التالي؟" subtitle="حُفظ هذا التحقيق من محادثة WordOS AI">
+          <div className="stack">
+            <div className="row wrap" style={{ gap: 8 }}>
+              <Link className="btn primary" to="/ai"><Sparkles /> تابع في WordOS AI</Link>
+              <button className="btn" onClick={toDecision}><Gavel /> حوّله إلى اقتراح قرار</button>
+            </div>
+            <div className="row wrap" style={{ gap: 8 }}>
+              <span className="muted" style={{ fontSize: 13 }}>راقب وعُد إليه في:</span>
+              <input className="input ltr" type="date" min={today()} value={followUp} onChange={(e) => setFollowUp(e.target.value)} aria-label="موعد المتابعة" />
+              <button className="btn sm" disabled={!followUp || !!busy} onClick={() => run('follow', async () => { await api.setFollowUp(inv.id, followUp); setSaved(followUp) })}>
+                <CalendarClock /> حفظ موعد المتابعة
+              </button>
+              {saved && <span className="badge good">سيظهر في قائمة التحقيقات عند {formatDate(saved)}</span>}
+            </div>
+            {error && <ErrorState error={error} />}
+          </div>
+        </Card>
+      ) : (
       <Card title="تابع النقاش" subtitle="السؤال التالي يرث القسم والفلاتر من هذا التحقيق — اكتب «والفترة السابقة؟» دون إعادة الاختيار">
         <div className="stack">
           <textarea className="textarea" rows={2} value={question} maxLength={1000} placeholder="سؤال المتابعة…" onChange={(e) => setQuestion(e.target.value)}
@@ -203,7 +224,8 @@ function ThreadTools({ inv }: { inv: Investigation }) {
           {error && <ErrorState error={error} />}
         </div>
       </Card>
-      {area && (
+      )}
+      {area && !fromChat && (
         <Card flush title="قرارات سابقة في هذا المجال" subtitle="راجعها قبل اقتراح قرار جديد — الـAI يراها أيضًا عند التحليل">
           <Loader state={related} skeleton={<div style={{ padding: 20 }}><Skeleton h={40} /></div>}>{(r) => r.items.length === 0 ? <Empty title="لا قرارات سابقة هنا" /> : (
             <table className="table"><tbody>{r.items.map((d) => {

@@ -71,6 +71,10 @@ public class WordOsDbContext(
 
     public DbSet<ProductChange> ProductChanges => Set<ProductChange>();
 
+    public DbSet<AiConversation> AiConversations => Set<AiConversation>();
+
+    public DbSet<AiMessage> AiMessages => Set<AiMessage>();
+
     public DbSet<Word> Words => Set<Word>();
 
     public DbSet<WordSkillState> WordSkillStates => Set<WordSkillState>();
@@ -395,6 +399,34 @@ public class WordOsDbContext(
                 .HasForeignKey(x => x.AuthorId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<ProductDecision>().WithMany()
                 .HasForeignKey(x => x.DecisionId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        b.Entity<AiConversation>(e =>
+        {
+            e.ToTable("ai_conversations");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Title).HasMaxLength(120).IsRequired();
+            e.HasIndex(x => new { x.AuthorId, x.UpdatedAt });
+
+            e.HasOne<User>().WithMany()
+                .HasForeignKey(x => x.AuthorId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<AiMessage>(e =>
+        {
+            e.ToTable("ai_messages");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Role).HasMaxLength(16).IsRequired();
+            e.Property(x => x.Content).HasMaxLength(20000).IsRequired();
+            e.Property(x => x.SourcesJson).HasColumnType("jsonb");
+            e.Property(x => x.AttachmentsJson).HasColumnType("jsonb");
+            e.Property(x => x.Model).HasMaxLength(64);
+            e.HasIndex(x => new { x.ConversationId, x.CreatedAt });
+
+            e.HasOne<AiConversation>().WithMany()
+                .HasForeignKey(x => x.ConversationId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<AdminInquiry>().WithMany()
+                .HasForeignKey(x => x.InquiryId).OnDelete(DeleteBehavior.SetNull);
         });
 
         b.Entity<AdminAuditEvent>(e =>

@@ -198,6 +198,18 @@ builder.Services.AddHttpClient<IAdminInsightService, HttpAdminInsightService>((p
     client.Timeout = TimeSpan.FromSeconds(Math.Min(aiOptions.TimeoutSeconds, 30));
 });
 
+// WordOS AI (ADR-133): one step per call, the backend runs the loop. Its
+// model is on Groq's free tier, and a step may wait out the per-minute limit
+// first, so the timeout is its own setting rather than the lessons' (ADR-134).
+builder.Services.AddHttpClient<IAdminAgentService, HttpAdminAgentService>((provider, client) =>
+{
+    var aiOptions = provider
+        .GetRequiredService<IOptions<AiServiceOptions>>().Value;
+    var intel = provider.GetRequiredService<IOptions<AdminIntelOptions>>().Value;
+    client.BaseAddress = new Uri(aiOptions.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(intel.AgentStepTimeoutSeconds);
+});
+
 builder.Services.Configure<AdminIntelOptions>(
     builder.Configuration.GetSection(AdminIntelOptions.SectionName));
 
@@ -563,6 +575,7 @@ app.MapFeedbackEndpoints();
 app.MapEventEndpoints();
 app.MapAdminIntelEndpoints();
 app.MapAdminProductEndpoints();
+app.MapAdminAgentEndpoints();
 app.MapSpeechEndpoints();
 
 app.Run();

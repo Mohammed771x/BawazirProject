@@ -622,6 +622,10 @@ public static class AdminProductEndpoints
         if (Deny(principal) is { } denied) return denied;
         var original = await db.AdminInquiries.AsNoTracking().FirstOrDefaultAsync(i => i.Id == id, ct);
         if (original is null) return Problems.NotFound("NOT_FOUND", "No such investigation.");
+        // An answer saved from WordOS AI has no fixed section to re-run; it is
+        // continued in a conversation instead (ADR-133).
+        if (!IntelInquiry.Sections.Any(sec => sec.Key == original.Section))
+            return Problems.BadRequest("NOT_RERUNNABLE", "Ask WordOS AI again instead.");
 
         var data = await LoadAsync(db, config, options, clock, ct);
         var inherited = original.FilterJson is null ? new IntelFilter()
