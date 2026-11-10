@@ -1194,6 +1194,8 @@ class AppStrings {
   String fromWord(String base) => _('from "$base"', 'من «$base»');
   String get addToMyWords => _('Add to my words', 'أضفها إلى كلماتي');
   String get alreadyInYourWords => _('Already in your words', 'موجودة في كلماتك');
+  /// On a dictionary result the learner already owns (ADR-136).
+  String get wordAlreadyAdded => _('Added', 'مضافة');
   // Speaking: the pre-conversation briefing (Part 2 §26).
   String get beforeYouSpeak => _('Before you start', 'قبل أن تبدأ');
   String get warmupHint => _(

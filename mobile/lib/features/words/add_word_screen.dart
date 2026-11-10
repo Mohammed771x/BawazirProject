@@ -259,7 +259,12 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
                     for (var i = 0; i < _candidates.length; i++) ...[
                       _CandidateTile(
                         candidate: _candidates[i],
-                        onTap: () => _select(_candidates[i]),
+                        // Already one of the learner's words: nothing to add,
+                        // and an add would only come back WORD_ALREADY_ADDED
+                        // (ADR-136). The server says which, not this screen.
+                        onTap: _candidates[i].alreadyAdded
+                            ? null
+                            : () => _select(_candidates[i]),
                       ),
                       const SizedBox(height: AppSpacing.xs),
 
@@ -334,7 +339,9 @@ class _CandidateTile extends ConsumerWidget {
   const _CandidateTile({required this.candidate, required this.onTap});
 
   final WordCandidate candidate;
-  final VoidCallback onTap;
+
+  /// Null for a sense the learner already owns.
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -344,7 +351,16 @@ class _CandidateTile extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (candidate.isSpellingSuggestion)
+          if (candidate.alreadyAdded)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+              child: StatusPill(
+                label: s.wordAlreadyAdded,
+                color: context.palette.success,
+                icon: Icons.check_circle_rounded,
+              ),
+            )
+          else if (candidate.isSpellingSuggestion)
             Padding(
               padding: const EdgeInsets.only(bottom: AppSpacing.xs),
               child: StatusPill(

@@ -3,10 +3,17 @@
 > **The live state of the project.** Update this at the end of every working session.
 > A new session should read `CLAUDE.md` → this file → then start at "Next up".
 
-**Last updated:** 2026-11-11 (voice that outlived its question — ADR-135)
+**Last updated:** 2026-11-11 (dictionary marks words already added — ADR-136)
+
+> **2026-11-11 — The dictionary search says "Added" (ADR-136).** Committed
+> locally, not pushed. `/words/lookup` carries `alreadyAdded` per sense; the add
+> screen shows a pill and the tile cannot be tapped. **Needs an API deploy and
+> the next APK** — additive, either order works. No migration.
+> Also written: `docs/11-SYSTEM-OVERVIEW.md`, the whole system in one file, for
+> handing to a reviewer.
 
 > **2026-11-11 — A sentence followed the learner to the next question (ADR-135).**
-> Not committed, not released — client only, no API change, no migration.
+> Committed locally as `c956a29`, not released — client only, no API change, no migration.
 > The phone's voice reports a stopped utterance's ending late, and it was applied
 > to the utterance that replaced it; the service then lost a voice it could no
 > longer stop. Endings are counted now and a stop always reaches the voice. The

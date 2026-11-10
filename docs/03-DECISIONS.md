@@ -6689,3 +6689,34 @@ the app's mock seeds a word at every skill for a new sign-up
 (`MockEngine(openEverySkillForNewAccounts: true)`, ADR-128's demo aid), and
 the seeded tester account. Which one the report was is still to be confirmed
 with the learner's account and build.
+
+## ADR-136 — The dictionary search says which words the learner already has
+
+**Date:** 2026-11-11 · **Status:** Accepted · API (additive) + client
+
+**Asked by the owner:** a word the learner already added should read "added"
+when they find it in the dictionary, and not be offered again.
+
+Before this a result they owned looked like any other, and tapping it came back
+`409 WORD_ALREADY_ADDED` — shown as an error for something they did not do
+wrong.
+
+**Decided:**
+
+1. `GET /api/words/lookup` marks each candidate with `alreadyAdded`, computed by
+   the server against the asking learner's words (rule R1 — the client does not
+   hold the list to compare with). One query per search, bounded by the 25 rows
+   the search returns.
+2. The identity is the one the add path refuses a duplicate on: the same sense,
+   or the same text with the same meaning (a meaning the learner wrote can land
+   on a lexicon sense's wording). So owning `book = كتاب` does not mark
+   `book = يحجز` — they are two journeys (§19–20).
+3. Deleted words are out of it through the query filter, so a word the learner
+   removed is offered again and starts a new journey (ADR-071).
+4. The app shows an "Added / مضافة" pill on the result and the tile is not
+   tappable. The 409 stays as the server's guard.
+5. Only `/lookup`. `/define` (a word tapped in a passage) and the
+   `MEANING_IS_ANOTHER_WORD` candidates leave it false.
+
+**Rollout:** additive — an old app ignores the field, a new app on an old
+server reads it as false and behaves as before. Deploy the API, then the app.

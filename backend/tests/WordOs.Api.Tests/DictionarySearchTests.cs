@@ -216,6 +216,49 @@ public class DictionarySearchTests(PostgresFixture db) : IAsyncLifetime
         Assert.Empty(results);
     }
 
+    [SkippableFact]
+    public async Task A_sense_the_learner_owns_is_marked_and_the_others_are_not()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+
+        // Two senses of one word: owning one does not own the other, because
+        // identity is the sense and `book = كتاب` and `book = يحجز` are two
+        // journeys (ADR-136).
+        var word = $"bk{Guid.NewGuid():N}"[..7];
+        var owned = await SeedAsync(word, "n", "a written work", "كتاب");
+        var other = await SeedAsync(word, "v", "to reserve", "يحجز");
+
+        Assert.All(await LookupAsync(word), r =>
+            Assert.False(r.GetProperty("alreadyAdded").GetBoolean()));
+
+        var added = await Client.PostAsJsonAsync(
+            "/api/words", new { senseId = owned });
+        added.EnsureSuccessStatusCode();
+
+        var results = await LookupAsync(word);
+        bool Flag(string id) => results
+            .Single(r => r.GetProperty("senseId").GetString() == id)
+            .GetProperty("alreadyAdded").GetBoolean();
+
+        Assert.True(Flag(owned));
+        Assert.False(Flag(other));
+
+        // The Arabic search answers from the same lookup and carries it too.
+        var byMeaning = await LookupAsync("كتاب");
+        Assert.Contains(byMeaning, r =>
+            r.GetProperty("senseId").GetString() == owned
+            && r.GetProperty("alreadyAdded").GetBoolean());
+
+        // Deleted is gone for the learner: the word is offered again (ADR-071).
+        var wordId = (await added.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("id").GetString();
+        (await Client.DeleteAsync($"/api/words/{wordId}")).EnsureSuccessStatusCode();
+
+        results = await LookupAsync(word);
+        Assert.False(Flag(owned));
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private async Task SignInAsync()

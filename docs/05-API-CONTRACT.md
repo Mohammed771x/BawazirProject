@@ -234,7 +234,7 @@ handed one item at a time instead of a fixed list.
 
 | Method | Path | Body → Response |
 |---|---|---|
-| GET | `/words/lookup?q=bo` | → `[WordCandidate]` (either language; spelling suggestions when nothing matches) |
+| GET | `/words/lookup?q=bo` | → `[WordCandidate]` (either language; spelling suggestions when nothing matches; `alreadyAdded` true on a sense the learner owns — ADR-136) |
 | GET | `/words/define?w=researching` | → `{query, matchedText, senses:[WordCandidate]}` |
 | POST | `/words` | `{senseId, text?, meaning?}` → `Word` — a lexicon sense |
 | POST | `/words` | `{text, customMeaning}` → `Word` — a meaning the learner wrote, AI-checked; a rejected meaning is never saved (ADR-072, ADR-074, ADR-112) |
@@ -402,7 +402,10 @@ handed one item at a time instead of a fixed list.
 // WordCandidate — one sense
 { "senseId":"oewn-06410904-n",
   "text":"book", "meaning":"كتاب", "definitionEn":"a written or printed work…",
-  "partOfSpeech":"noun", "suggestedLevel":"A1", "isSpellingSuggestion": false }
+  "partOfSpeech":"noun", "suggestedLevel":"A1", "isSpellingSuggestion": false,
+  // True only from /words/lookup, for a sense the asking learner already owns
+  // (same sense, or same text and meaning). Deleted words do not count. ADR-136.
+  "alreadyAdded": false }
 
 // Word
 {

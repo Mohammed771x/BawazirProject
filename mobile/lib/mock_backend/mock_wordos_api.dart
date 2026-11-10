@@ -137,7 +137,8 @@ class MockWordOsApi implements WordOsApi {
 
   @override
   Future<List<WordCandidate>> lookupWord(String query) =>
-      _delay(() => engine.lookup(query), const Duration(milliseconds: 220));
+      _delay(() => engine.lookup(query, user: _user),
+          const Duration(milliseconds: 220));
 
   @override
   Future<WordDefinition> defineWord(String word) =>

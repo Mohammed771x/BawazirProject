@@ -20,6 +20,7 @@ class WordCandidate {
     required this.suggestedLevel,
     required this.isSpellingSuggestion,
     this.senseId,
+    this.alreadyAdded = false,
   });
 
   final String text;
@@ -33,6 +34,11 @@ class WordCandidate {
   /// mapping; the server falls back to `(text, meaning)` in that case.
   final String? senseId;
 
+  /// The learner already owns this sense (ADR-136). Decided by the server
+  /// against their words, so the search shows "added" rather than offering an
+  /// add the server would refuse with `WORD_ALREADY_ADDED`.
+  final bool alreadyAdded;
+
   factory WordCandidate.fromJson(Map<String, dynamic> json) => WordCandidate(
         text: json['text'] as String,
         meaning: json['meaning'] as String? ?? '',
@@ -41,6 +47,7 @@ class WordCandidate {
         suggestedLevel: CefrLevel.fromWire(json['suggestedLevel'] as String?),
         isSpellingSuggestion: json['isSpellingSuggestion'] as bool? ?? false,
         senseId: json['senseId'] as String?,
+        alreadyAdded: json['alreadyAdded'] as bool? ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -51,6 +58,7 @@ class WordCandidate {
         'suggestedLevel': suggestedLevel.wire,
         'isSpellingSuggestion': isSpellingSuggestion,
         'senseId': senseId,
+        'alreadyAdded': alreadyAdded,
       };
 }
 

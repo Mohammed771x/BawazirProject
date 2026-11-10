@@ -23,7 +23,12 @@ public static class WordEndpoints
         string DefinitionEn,
         string PartOfSpeech,
         string? SuggestedLevel,
-        bool IsSpellingSuggestion);
+        bool IsSpellingSuggestion,
+        // True when the asking learner already owns this sense (ADR-136), so
+        // the search shows "added" instead of offering an add that the server
+        // would refuse with WORD_ALREADY_ADDED. Set only by /lookup; every
+        // other place that shapes a candidate leaves it false.
+        bool AlreadyAdded = false);
 
     // `[property: ...]` — see the note in AuthEndpoints: without it the
     // annotations bind to the constructor parameter and never run.
@@ -182,6 +187,7 @@ public static class WordEndpoints
     /// </remarks>
     private static async Task<IResult> LookupAsync(
         string? q,
+        ClaimsPrincipal principal,
         WordOsDbContext db,
         CancellationToken ct)
     {
@@ -194,8 +200,62 @@ public static class WordEndpoints
         if (raw.Length > 64)
             return Problems.BadRequest("QUERY_TOO_LONG", "Search term is too long.");
 
+        var candidates = await SearchLexiconAsync(raw, db, ct);
+
+        return Results.Ok(
+            await MarkOwnedAsync(candidates, principal.UserId(), db, ct));
+    }
+
+    /// <summary>
+    /// Flags the candidates the learner already has (ADR-136).
+    /// </summary>
+    /// <remarks>
+    /// The same identity the add path refuses a duplicate on: the sense, or —
+    /// for a word added with a meaning the learner wrote — the same text with
+    /// the same meaning. One query for the whole page, bounded by the 25 rows
+    /// the search returns. Deleted words are out of it through the query
+    /// filter, so a word the learner removed is offered again (ADR-071).
+    /// </remarks>
+    private static async Task<List<WordCandidateResponse>> MarkOwnedAsync(
+        List<WordCandidateResponse> candidates,
+        Guid? userId,
+        WordOsDbContext db,
+        CancellationToken ct)
+    {
+        if (userId is null || candidates.Count == 0) return candidates;
+
+        var senseIds = candidates.Select(c => c.SenseId).Distinct().ToList();
+        var texts = candidates
+            .Select(c => c.Text.ToLowerInvariant()).Distinct().ToList();
+
+        var owned = await db.Words
+            .Where(w => w.UserId == userId
+                        && (senseIds.Contains(w.SenseId)
+                            || texts.Contains(w.Text.ToLower())))
+            .Select(w => new { w.SenseId, w.Text, w.Meaning })
+            .ToListAsync(ct);
+
+        if (owned.Count == 0) return candidates;
+
+        return candidates
+            .Select(c => owned.Any(o =>
+                    o.SenseId == c.SenseId
+                    || (string.Equals(o.Text, c.Text,
+                            StringComparison.OrdinalIgnoreCase)
+                        && o.Meaning == c.Meaning))
+                ? c with { AlreadyAdded = true }
+                : c)
+            .ToList();
+    }
+
+    /// <summary>The lexicon's answer to a cleaned, length-checked term.</summary>
+    private static async Task<List<WordCandidateResponse>> SearchLexiconAsync(
+        string raw,
+        WordOsDbContext db,
+        CancellationToken ct)
+    {
         if (ArabicText.ContainsArabic(raw))
-            return Results.Ok(await SearchByMeaningAsync(raw, db, ct));
+            return await SearchByMeaningAsync(raw, db, ct);
 
         var query = raw.ToLowerInvariant();
 
@@ -203,15 +263,15 @@ public static class WordEndpoints
         // addable, and matching them as prefixes would return the dictionary.
         if (query.Length == 1)
         {
-            return Results.Ok(await ProjectAsync(
-                db.ActiveLexicon.Where(l => l.TextNormalized == query), 25, ct));
+            return await ProjectAsync(
+                db.ActiveLexicon.Where(l => l.TextNormalized == query), 25, ct);
         }
 
         var matches = await ProjectAsync(
             db.ActiveLexicon.Where(l => l.TextNormalized.StartsWith(query)),
             25, ct, exactly: query);
 
-        if (matches.Count > 0) return Results.Ok(matches);
+        if (matches.Count > 0) return matches;
 
         // Nothing starts with it. The learner may simply have typed the word as
         // they met it — "went", "studies", "running" — so the base forms are
@@ -221,10 +281,10 @@ public static class WordEndpoints
             var resolved = await ProjectAsync(
                 db.ActiveLexicon.Where(l => l.TextNormalized == candidate), 25, ct);
 
-            if (resolved.Count > 0) return Results.Ok(resolved);
+            if (resolved.Count > 0) return resolved;
         }
 
-        return Results.Ok(Array.Empty<WordCandidateResponse>());
+        return [];
     }
 
     /// <summary>

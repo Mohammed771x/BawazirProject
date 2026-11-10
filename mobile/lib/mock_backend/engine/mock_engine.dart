@@ -617,7 +617,29 @@ class MockEngine {
 
 
   // ── Words ─────────────────────────────────────────────────────────────────
-  List<WordCandidate> lookup(String query) => MockDictionary.lookup(query);
+  /// With [user], each sense they already own carries `alreadyAdded`, on the
+  /// same identity the add path refuses a duplicate on (ADR-136).
+  List<WordCandidate> lookup(String query, {MockUser? user}) {
+    final results = MockDictionary.lookup(query);
+    if (user == null) return results;
+    return [
+      for (final c in results)
+        user.words.any((w) =>
+                w.text.toLowerCase() == c.text.toLowerCase() &&
+                w.meaning == c.meaning)
+            ? WordCandidate(
+                text: c.text,
+                meaning: c.meaning,
+                definitionEn: c.definitionEn,
+                partOfSpeech: c.partOfSpeech,
+                suggestedLevel: c.suggestedLevel,
+                isSpellingSuggestion: c.isSpellingSuggestion,
+                senseId: c.senseId,
+                alreadyAdded: true,
+              )
+            : c,
+    ];
+  }
 
   WordDefinition define(String word) => MockDictionary.define(word);
 
