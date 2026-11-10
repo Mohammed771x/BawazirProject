@@ -92,6 +92,11 @@ by the API; hiding a menu item is not access control.
    passages are *about*, never how hard they are.
 3. **Placement test** — eight questions, adaptive, and the only thing that sets the
    starting levels.
+4. **Guided tour** (ADR-128) — the first time each screen is seen, the screen goes
+   dark around one element at a time with a sentence on what it is for. Before the
+   first placement question it says the test is required and its result is not final —
+   a level that feels hard is lowered in Settings. Shown once per installation;
+   Settings → Help → Replay the app tour shows it again.
 
 ### Placement (full detail in [`06-PLACEMENT-ALGORITHM.md`](06-PLACEMENT-ALGORITHM.md))
 

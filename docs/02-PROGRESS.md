@@ -5,7 +5,7 @@
 
 **Last updated:** 2026-11-03 (admin: decisions, changes, dictionary — ADR-132)
 
-> **2026-11-03 — WordOS AI moves to Groq's free tier (ADR-134).** Not committed.
+> **2026-11-03 — WordOS AI moves to Groq's free tier (ADR-134).** Committed and pushed as `90801ba`; production not verified (2026-11-11).
 > At the owner's request the chat no longer spends the paid Gemini key:
 > `openai/gpt-oss-120b`, low reasoning, the existing `GROQ_API_KEY`, nothing
 > trimmed. Per-minute waits are absorbed (≤ 45 s); when Groq's quota is spent or
@@ -14,8 +14,8 @@
 > questions); the model-choice lab used all of 2026-11-03's. Render needs
 > `GROQ_API_KEY` on the service before this ships.
 
-> **2026-11-03 — WordOS AI (ADR-133).** Not committed, not deployed — waiting
-> for the owner's go-ahead after the cost report. The investigator becomes a
+> **2026-11-03 — WordOS AI (ADR-133).** Committed and pushed as `90801ba`; whether
+> `AiConversations` is on Neon and `GROQ_API_KEY` on Render is unverified (2026-11-11). The investigator becomes a
 > conversation at `/admin/ai`: no section to pick, the model names read-only
 > tools the backend runs (13 of them), keeps the thread, reuses fresh results,
 > shows the sources of every answer, saves an answer as an investigation or
@@ -60,7 +60,7 @@
 > **2026-10-08 — APK 1.3.2 (versionCode 2006, arm64-v8a)** built against
 > `https://wordos-api.onrender.com/api` with the guided tour and the microphone fix, and
 > handed over as `~/Desktop/WordOS-1.3.2.apk`. Client only — no API change, nothing to
-> deploy first. Not committed yet.
+> deploy first. Committed 2026-11-11 with the guided tour.
 
 > **2026-10-08 — Guided tour (ADR-128).** Not deployed; client only, no API change.
 > A Masar-style spotlight tutorial without the robot: placement says it is required and

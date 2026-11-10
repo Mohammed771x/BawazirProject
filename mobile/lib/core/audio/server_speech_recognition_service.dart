@@ -57,7 +57,6 @@ class ServerSpeechRecognitionService extends SpeechRecognitionService {
   /// its own header, and sending it would spend a provider call on silence.
   static const minimumBytes = 2000;
 
-  bool _initialised = false;
   bool _available = false;
   bool _recording = false;
   String? _path;
@@ -78,17 +77,29 @@ class ServerSpeechRecognitionService extends SpeechRecognitionService {
 
   @override
   Future<bool> initialise() async {
-    if (_initialised) return _available;
-    _initialised = true;
+    if (_available) return true;
+    // A "no" is not remembered (ADR-128): a learner who refuses and then
+    // allows the microphone in Settings is asked again on the next turn
+    // rather than told the device cannot listen until the app restarts. The
+    // system only shows its prompt once, so asking again costs nothing.
+    _asking ??= _askPermission();
+    _available = await _asking!;
+    _asking = null;
+    return _available;
+  }
+
+  /// Joined by a second caller while the prompt is still up.
+  Future<bool>? _asking;
+
+  Future<bool> _askPermission() async {
     try {
       // Asks on first use, which is when the learner opens a Speaking turn
       // and can see why the microphone is wanted.
-      _available = await _recorder.hasPermission();
+      return await _recorder.hasPermission();
     } catch (e) {
       debugPrint('WordOS recorder permission check failed: $e');
-      _available = false;
+      return false;
     }
-    return _available;
   }
 
   @override

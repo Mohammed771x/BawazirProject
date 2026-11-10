@@ -11,7 +11,10 @@ import '../../core/api/wordos_api.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../core/tour/tour.dart';
+import '../../core/tour/tour_trigger.dart';
 import '../../core/widgets/app_widgets.dart';
+import '../tour/app_tours.dart';
 import 'word_widgets.dart';
 
 /// The words the learner owns, optionally filtered by a search term — loaded a
@@ -135,14 +138,16 @@ class WordListNotifier
       ];
 
       _depth = items.length;
-      state = AsyncData(WordList(
-        items: items,
-        total: next.total,
-        // A step that brought nothing new ends the list. Otherwise a server
-        // that ignored `offset` — one older than ADR-127 — would answer the
-        // first page every time, and the footer would ask again for ever.
-        hasMore: next.hasMore && items.length > current.items.length,
-      ));
+      state = AsyncData(
+        WordList(
+          items: items,
+          total: next.total,
+          // A step that brought nothing new ends the list. Otherwise a server
+          // that ignored `offset` — one older than ADR-127 — would answer the
+          // first page every time, and the footer would ask again for ever.
+          hasMore: next.hasMore && items.length > current.items.length,
+        ),
+      );
     } catch (_) {
       final latest = state.valueOrNull;
       if (latest == null || state.isLoading) return;
@@ -250,15 +255,16 @@ class _VocabularyScreenState extends ConsumerState<VocabularyScreen> {
       if (!mounted) return false;
       ref.read(wordsProvider(_query).notifier).removeLocally(word.id);
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(s.deleteWordDone)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(s.deleteWordDone)));
       return true;
     } catch (rawError) {
       final e = ApiException.from(rawError);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(s.apiError(e.code, e.message))),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(s.apiError(e.code, e.message))));
       }
       return false;
     }
@@ -271,46 +277,59 @@ class _VocabularyScreenState extends ConsumerState<VocabularyScreen> {
 
     return Scaffold(
       appBar: AppBar(title: Text(s.myWords)),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xs),
-            child: TextField(
-              controller: _search,
-              onChanged: _onSearchChanged,
-              textInputAction: TextInputAction.search,
-              decoration: InputDecoration(
-                hintText: s.searchYourWords,
-                prefixIcon: const Icon(Icons.search_rounded),
-                suffixIcon: _search.text.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.close_rounded),
-                        onPressed: () {
-                          _search.clear();
-                          _onSearchChanged('');
-                        },
-                      ),
+      // Waits for the list, so a learner with words is shown how to open one
+      // (ADR-128).
+      body: TourTrigger(
+        enabled: words.hasValue,
+        tours: AppTours.words,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                AppSpacing.sm,
+                AppSpacing.md,
+                AppSpacing.xs,
+              ),
+              child: TourAnchor(
+                id: AppTours.wordsSearch,
+                child: TextField(
+                  controller: _search,
+                  onChanged: _onSearchChanged,
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    hintText: s.searchYourWords,
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    suffixIcon: _search.text.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: () {
+                              _search.clear();
+                              _onSearchChanged('');
+                            },
+                          ),
+                  ),
+                ),
               ),
             ),
-          ),
-          Expanded(
-            child: words.when(
-              // A refetch keeps the list on screen. Every write anywhere
-              // refetches it, and blanking the learner's place in a long list
-              // for each one would undo the scrolling they did.
-              skipLoadingOnReload: true,
-              loading: () => BusyView(message: s.loading),
-              error: (e, _) => ErrorView.from(
-                e,
-                s,
-                onRetry: () => ref.invalidate(wordsProvider(_query)),
+            Expanded(
+              child: words.when(
+                // A refetch keeps the list on screen. Every write anywhere
+                // refetches it, and blanking the learner's place in a long list
+                // for each one would undo the scrolling they did.
+                skipLoadingOnReload: true,
+                loading: () => BusyView(message: s.loading),
+                error: (e, _) => ErrorView.from(
+                  e,
+                  s,
+                  onRetry: () => ref.invalidate(wordsProvider(_query)),
+                ),
+                data: (page) => _list(s, page),
               ),
-              data: (page) => _list(s, page),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -363,20 +382,26 @@ class _VocabularyScreenState extends ConsumerState<VocabularyScreen> {
             // animate away before the server has agreed, or a failed delete
             // leaves the learner looking at a list that lies to them.
             confirmDismiss: (_) => _delete(word),
-            child: WordTile(
-              word: word,
-              // Refreshed on the way back rather than left to whoever changed
-              // something over there to remember to invalidate this. The word's
-              // own screen can delete it, and a list that still shows a word the
-              // learner has just watched themselves delete is the worst of the
-              // available outcomes.
-              onTap: () => context.push(Routes.word(word.id)),
+            child: _firstWordAnchor(
+              index == 1,
+              WordTile(
+                word: word,
+                // Refreshed on the way back rather than left to whoever changed
+                // something over there to remember to invalidate this. The word's
+                // own screen can delete it, and a list that still shows a word the
+                // learner has just watched themselves delete is the worst of the
+                // available outcomes.
+                onTap: () => context.push(Routes.word(word.id)),
+              ),
             ),
           );
         },
       ),
     );
   }
+
+  Widget _firstWordAnchor(bool first, Widget tile) =>
+      first ? TourAnchor(id: AppTours.wordsFirst, child: tile) : tile;
 
   /// The end of what is loaded.
   ///
@@ -408,7 +433,6 @@ class _VocabularyScreenState extends ConsumerState<VocabularyScreen> {
     );
   }
 }
-
 
 /// What shows behind a row being swiped away.
 ///

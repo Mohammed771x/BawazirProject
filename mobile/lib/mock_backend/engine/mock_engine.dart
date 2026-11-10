@@ -18,9 +18,16 @@ import 'placement/placement_item_bank.dart';
 /// `lib/features/**` on purpose: the app's feature layer must keep treating
 /// these decisions as server-owned facts (rule R1).
 class MockEngine {
-  MockEngine() {
+  MockEngine({this.openEverySkillForNewAccounts = false}) {
     _seedData();
   }
+
+  /// A new account starts with a word waiting in every skill, so a demo can
+  /// walk from sign-up straight into all five sessions — and their guided
+  /// tours (ADR-128) — instead of waiting out four two-day gaps. The app's
+  /// mock turns it on; tests leave it off and get an empty account, which is
+  /// what the real server gives.
+  final bool openEverySkillForNewAccounts;
 
   final Random _random = Random();
   final MockContentGenerator _content = MockContentGenerator();
@@ -147,7 +154,31 @@ class MockEngine {
     );
     _usersByEmail[key] = user;
     _usersById[user.id] = user;
+    if (openEverySkillForNewAccounts) _seedEverySkill(user);
     return _authFor(user);
+  }
+
+  /// One word due in each skill, placed exactly as if it had walked the
+  /// pipeline with its two-day gaps.
+  void _seedEverySkill(MockUser user) {
+    _seedWord(user, 'research', addedDaysAgo: 0, passed: const []);
+    _seedWord(user, 'evidence', addedDaysAgo: 0, passed: const []);
+    _seedWord(user, 'hardware', addedDaysAgo: 3, passed: [SkillType.reading]);
+    _seedWord(user, 'interface', addedDaysAgo: 5, passed: [
+      SkillType.reading,
+      SkillType.listening,
+    ]);
+    _seedWord(user, 'software', addedDaysAgo: 7, passed: [
+      SkillType.reading,
+      SkillType.listening,
+      SkillType.speaking,
+    ]);
+    _seedWord(user, 'environment', addedDaysAgo: 9, passed: [
+      SkillType.reading,
+      SkillType.listening,
+      SkillType.speaking,
+      SkillType.spelling,
+    ]);
   }
 
   AuthResponse login(String email, String password) {

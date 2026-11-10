@@ -8,7 +8,10 @@ import '../../core/api/wordos_api.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../core/tour/tour.dart';
+import '../../core/tour/tour_trigger.dart';
 import '../../core/widgets/app_widgets.dart';
+import '../tour/app_tours.dart';
 
 /// Add Word — one word at a time, with the intended meaning chosen explicitly
 /// (Word Life Cycle §16–17). The AI classification and persistence happen on
@@ -177,11 +180,15 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
     return Scaffold(
       appBar: AppBar(title: Text(s.addWord)),
       body: SafeArea(
-        child: Column(
+        child: TourTrigger(
+          tours: AppTours.addWord,
+          child: Column(
           children: [
             Padding(
               padding: AppSpacing.page,
-              child: TextField(
+              child: TourAnchor(
+                id: AppTours.addField,
+                child: TextField(
                 controller: _controller,
                 autofocus: true,
                 textInputAction: TextInputAction.search,
@@ -201,6 +208,7 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
                 ),
                 onChanged: _onChanged,
                 onSubmitted: _search,
+              ),
               ),
             ),
             if (_saving)
@@ -275,6 +283,7 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
                 ),
               ),
           ],
+        ),
         ),
       ),
     );

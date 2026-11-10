@@ -1735,6 +1735,473 @@ class AppStrings {
   String get resetClock => _('Reset clock', 'إعادة ضبط الوقت');
   String clockOffsetLabel(int days) =>
       _('Clock is $days days ahead', 'الوقت متقدّم $days يومًا');
+
+  // Guided tour (ADR-128). Each card says what the learner *does* here, in a
+  // sentence or two — never the name of the widget alone.
+  String get tourSkip => _('Skip', 'تخطي');
+  String get tourDone => _('Got it', 'فهمت');
+  String get helpSection => _('Help', 'المساعدة');
+  String get replayTour => _('Replay the app tour', 'إعادة جولة التعريف');
+  String get replayTourHint => _(
+        'A quick look at what each part of the app does.',
+        'شرح سريع لما يفعله كل قسم في التطبيق.',
+      );
+
+  // Placement — said before the first question.
+  String get tourPlacementIntroTitle =>
+      _('Next: a short placement test', 'الخطوة التالية: تحديد المستوى');
+  String get tourPlacementIntroBody => _(
+        'It is required, and it is only eight questions — so your words and '
+            'passages start at the level that fits you in each skill.',
+        'خطوة ضرورية، وهي ثمانية أسئلة فقط — حتى تبدأ كلماتك ونصوصك من '
+            'المستوى المناسب لك في كل مهارة.',
+      );
+  String get tourPlacementNotFinalTitle =>
+      _('This is not your final level', 'هذا ليس مستواك النهائي');
+  String get tourPlacementNotFinalBody => _(
+        'The result is only a starting point. If it suits you, keep it. If it '
+            'feels hard, lower it — or raise it if it is easy — any time from '
+            'Settings.',
+        'النتيجة مجرد نقطة بداية: إن ناسبك المستوى فابقَ عليه، وإن وجدته صعبًا '
+            'فاخفضه — أو ارفعه إن كان سهلًا — في أي وقت من الإعدادات.',
+      );
+  String get tourPlacementStartTitle => _('Ready?', 'جاهز؟');
+  String get tourPlacementStartBody => _(
+        'Answer naturally — there is nothing to prepare. Press Start when you '
+            'are ready.',
+        'أجب بشكل طبيعي، لا تحتاج أي تحضير. اضغط «ابدأ» عندما تكون جاهزًا.',
+      );
+
+  // Placement — the first question, and the first of each kind.
+  String get tourQuestionSkillTitle =>
+      _('The skill being measured', 'المهارة التي يقيسها السؤال');
+  String get tourQuestionSkillBody => _(
+        'Each question tests one skill — reading, listening, speaking, '
+            'spelling or writing. This tag says which.',
+        'كل سؤال يقيس مهارة واحدة: القراءة أو الاستماع أو التحدث أو التهجئة أو '
+            'الكتابة — وهذا الوسم يخبرك بها.',
+      );
+  String get tourQuestionProgressTitle => _('Where you are', 'أين وصلت');
+  String get tourQuestionProgressBody => _(
+        'Eight questions in total. This bar fills as you go.',
+        'ثمانية أسئلة فقط، ويمتلئ هذا الشريط كلما تقدّمت.',
+      );
+  String get tourQuestionNextTitle => _('Then press Next', 'ثم اضغط «التالي»');
+  String get tourQuestionNextBody => _(
+        'Once you have answered, this takes you to the next question.',
+        'بعد أن تجيب، ينقلك هذا الزر إلى السؤال التالي.',
+      );
+  String get tourChoiceTitle => _('Pick one answer', 'اختر إجابة واحدة');
+  String get tourChoiceBody => _(
+        'Tap the option you think is right. You can change it before you '
+            'press Next.',
+        'اضغط على الخيار الذي تراه صحيحًا، ويمكنك تغييره قبل أن تضغط «التالي».',
+      );
+  String get tourPassageTitle => _('Read first', 'اقرأ أولًا');
+  String get tourPassageBody => _(
+        'Read this short text, then answer the question under it.',
+        'اقرأ هذا النص القصير، ثم أجب عن السؤال الذي تحته.',
+      );
+  String get tourListenTitle => _('Listen first', 'استمع أولًا');
+  String get tourListenBody => _(
+        'Press play to hear the clip, or the slow button to hear it slowly. '
+            'Listen as many times as you like.',
+        'اضغط تشغيل لتسمع المقطع، أو زر السرعة البطيئة لتسمعه ببطء. استمع كما '
+            'تشاء.',
+      );
+  String get tourSpeakTitle => _('Answer out loud', 'أجب بصوتك');
+  String get tourSpeakBody => _(
+        'Press the microphone and speak in English, then press it again when '
+            'you finish. If you cannot speak right now, you can type instead.',
+        'اضغط على الميكروفون وتحدّث بالإنجليزية، ثم اضغطه مرة أخرى عند '
+            'الانتهاء. وإن لم تستطع التحدث الآن يمكنك الكتابة بدلًا من ذلك.',
+      );
+  String get tourWriteTitle => _('Write your answer', 'اكتب إجابتك');
+  String get tourWriteBody => _(
+        'Type your answer in English here — a sentence or two is enough.',
+        'اكتب إجابتك هنا بالإنجليزية — جملة أو جملتان تكفي.',
+      );
+
+  // Placement — the result.
+  String get tourResultLevelsTitle =>
+      _('Your starting levels', 'مستوياتك المبدئية');
+  String get tourResultLevelsBody => _(
+        'Not final. If a level feels too hard, lower it from Settings → Skill '
+            'levels; if it feels too easy, raise it.',
+        'ليست نهائية. إن شعرت أن مستوى ما صعب عليك فاخفضه من «الإعدادات ← '
+            'مستويات المهارات»، وإن كان سهلًا فارفعه.',
+      );
+  String get tourResultStartTitle => _('All set', 'كل شيء جاهز');
+  String get tourResultStartBody =>
+      _('Press here to start learning.', 'اضغط هنا لتبدأ التعلّم.');
+
+  // The hub, and the bar under it.
+  String tourHubWelcomeTitle(String name) => name.isEmpty
+      ? _('Welcome to WordOS', 'أهلًا بك في WordOS')
+      : _('Welcome, $name!', 'أهلًا $name!');
+  String get tourHubWelcomeBody => _(
+        'A quick look around — it takes less than a minute.',
+        'جولة سريعة في التطبيق — لن تستغرق أكثر من دقيقة.',
+      );
+  String get tourHubTodayTitle => _('Today', 'كلمات اليوم');
+  String get tourHubTodayBody => _(
+        'How many new words you have added today.',
+        'عدد الكلمات الجديدة التي أضفتها اليوم.',
+      );
+  String get tourHubReadingTitle =>
+      _('Every word starts here', 'كل كلمة تبدأ من هنا');
+  String get tourHubReadingBody => _(
+        'This is Reading. Tap a skill to start its session — a short text '
+            'written around your own words.',
+        'هذه مهارة القراءة. اضغط على أي مهارة لتبدأ جلستها — نص قصير مكتوب '
+            'حول كلماتك أنت.',
+      );
+  String get tourHubSkillsTitle =>
+      _('Five skills, one journey', 'خمس مهارات، رحلة واحدة');
+  String get tourHubSkillsBody => _(
+        'Each word moves Reading → Listening → Speaking → Spelling → Writing, '
+            'two days apart. The badge beside a skill is your level in it.',
+        'تنتقل كل كلمة: قراءة ← استماع ← تحدّث ← تهجئة ← كتابة، بفاصل يومين '
+            'بين كل مهارة. والشارة بجانب المهارة هي مستواك فيها.',
+      );
+  String get tourHubWeeklyBody => _(
+        'Once a week, a quick check of the words you have met.',
+        'مرة كل أسبوع، مراجعة سريعة للكلمات التي مررت بها.',
+      );
+  String get tourHubCountsTitle =>
+      _('Your vocabulary at a glance', 'حصيلتك في لمحة');
+  String get tourHubCountsBody => _(
+        'Learning: still on its journey. Active: mastered and in use. '
+            'Archived: kept for good.',
+        'قيد التعلّم: ما زالت في رحلتها. نشطة: أتقنتها وتُستخدم. مؤرشفة: '
+            'محفوظة دائمًا.',
+      );
+  String get tourHubAddBody => _(
+        'Met a new word? Add it here and pick the meaning you intend — it '
+            'joins Reading straight away.',
+        'صادفت كلمة جديدة؟ أضفها من هنا واختر المعنى الذي تقصده — وتدخل مهارة '
+            'القراءة فورًا.',
+      );
+  String get tourHubWordsBody => _(
+        'Here you will find all your words, and how far each one has got.',
+        'هنا ستجد كل كلماتك، وأين وصلت كل كلمة في رحلتها.',
+      );
+  String get tourHubSettingsBody => _(
+        'Change your levels, daily words, language and look — and replay this '
+            'tour any time.',
+        'غيّر مستوياتك وعدد كلماتك اليومية واللغة والمظهر — ومن هنا تعيد هذه '
+            'الجولة متى شئت.',
+      );
+  String get tourHubDoneTitle => _('You are ready!', 'أنت جاهز!');
+  String get tourHubDoneBody => _(
+        'Start by adding a word, or open Reading.',
+        'ابدأ بإضافة كلمة، أو افتح مهارة القراءة.',
+      );
+
+  // My Words.
+  String get tourWordsTitle => _('Your words', 'كلماتك');
+  String get tourWordsBody => _(
+        'Every word you add is kept here — nothing is ever lost.',
+        'كل كلمة تضيفها تُحفظ هنا — ولا يضيع منها شيء.',
+      );
+  String get tourWordsSearchTitle => _('Find a word', 'ابحث عن كلمة');
+  String get tourWordsSearchBody => _(
+        'Type part of a word to find it quickly.',
+        'اكتب جزءًا من الكلمة لتجدها بسرعة.',
+      );
+  String get tourWordsTileTitle => _('Open a word', 'افتح الكلمة');
+  String get tourWordsTileBody => _(
+        'Tap a word to see its journey through the five skills. Swipe it '
+            'sideways to delete it.',
+        'اضغط على الكلمة لترى رحلتها في المهارات الخمس، واسحبها جانبًا لحذفها.',
+      );
+
+  // A word's own page.
+  String get tourWordListenTitle => _('Hear it', 'استمع إليها');
+  String get tourWordListenBody => _(
+        'Hear the word spoken — at normal speed or slowly.',
+        'استمع إلى نطق الكلمة — بالسرعة العادية أو ببطء.',
+      );
+  String get tourWordMeaningTitle =>
+      _('The meaning you chose', 'المعنى الذي اخترته');
+  String get tourWordMeaningBody => _(
+        'Not the meaning you intended? Change it here.',
+        'ليس هذا المعنى الذي قصدته؟ غيّره من هنا.',
+      );
+  String get tourWordSkillsTitle => _('Its journey', 'رحلتها');
+  String get tourWordSkillsBody => _(
+        'Each skill shows whether it is passed, open now, or when it opens.',
+        'تُظهر كل مهارة هل اجتزتها، أو أنها متاحة الآن، أو متى تُفتح.',
+      );
+  String get tourWordDeleteBody => _(
+        'Do not need this word any more? Delete it from here.',
+        'لم تعد تحتاج هذه الكلمة؟ احذفها من هنا.',
+      );
+
+  // Adding a word.
+  String get tourAddFieldTitle => _('Type the word', 'اكتب الكلمة');
+  String get tourAddFieldBody => _(
+        'Type the English word you met. Matching words and their meanings '
+            'appear as you type.',
+        'اكتب الكلمة الإنجليزية التي صادفتها، وستظهر الكلمات المطابقة ومعانيها '
+            'أثناء الكتابة.',
+      );
+  String get tourAddMeaningTitle => _('Choose your meaning', 'اختر المعنى');
+  String get tourAddMeaningBody => _(
+        'Pick the meaning you intend — it is the one every skill will teach '
+            'you. Not listed? You can write your own.',
+        'اختر المعنى الذي تقصده — فهو المعنى الذي ستعلّمك إياه كل المهارات. '
+            'وإن لم تجده يمكنك كتابة معناك بنفسك.',
+      );
+
+  // Settings.
+  String get tourSettingsLevelsTitle => _('Your levels', 'مستوياتك');
+  String get tourSettingsLevelsBody => _(
+        'The level you learn at in each skill. Too hard? Lower it. Too easy? '
+            'Raise it. Your next session follows the change.',
+        'المستوى الذي تتعلّم به في كل مهارة. صعب عليك؟ اخفضه. سهل؟ ارفعه. '
+            'وجلستك التالية تتبع التغيير.',
+      );
+  String get tourSettingsTargetsBody => _(
+        'How many words each skill brings you a day.',
+        'كم كلمة تتدرّب عليها يوميًا في كل مهارة.',
+      );
+  String get tourSettingsLookTitle => _('Language and look', 'اللغة والمظهر');
+  String get tourSettingsLookBody => _(
+        'Switch between Arabic and English, and between light and dark.',
+        'بدّل بين العربية والإنجليزية، وبين الوضع الفاتح والداكن.',
+      );
+  String get tourSettingsReplayTitle =>
+      _('Need a reminder?', 'تحتاج تذكيرًا؟');
+  String get tourSettingsReplayBody => _(
+        'Replay this tour from here whenever you like.',
+        'أعد هذه الجولة من هنا متى شئت.',
+      );
+
+  // The first session of each skill.
+  String tourSessionTitle(SkillType skill) => switch (skill) {
+        SkillType.reading => _('How Reading works', 'كيف تعمل القراءة'),
+        SkillType.listening => _('How Listening works', 'كيف يعمل الاستماع'),
+        SkillType.speaking => _('How Speaking works', 'كيف يعمل التحدث'),
+        SkillType.spelling => _('How Spelling works', 'كيف تعمل التهجئة'),
+        SkillType.writing => _('How Writing works', 'كيف تعمل الكتابة'),
+      };
+  String tourSessionBody(SkillType skill) => switch (skill) {
+        SkillType.reading => _(
+            'Read the passage — your words are in it. Tap any word to see '
+                'its meaning, then answer the questions.',
+            'اقرأ النص — كلماتك موجودة فيه. اضغط على أي كلمة لترى معناها، ثم '
+                'أجب عن الأسئلة.',
+          ),
+        SkillType.listening => _(
+            'Press play when you are ready and listen to the clip, then '
+                'answer the questions. You can pause and carry on.',
+            'اضغط تشغيل عندما تكون جاهزًا واستمع إلى المقطع، ثم أجب عن '
+                'الأسئلة. ويمكنك الإيقاف والمتابعة.',
+          ),
+        SkillType.speaking => _(
+            'A quick warm-up, then a short conversation. Press the microphone, '
+                'speak, and press it again when you finish — and try to use '
+                'your words.',
+            'تمرين إحماء سريع، ثم محادثة قصيرة. اضغط على الميكروفون وتحدّث، ثم '
+                'اضغطه مرة أخرى عند الانتهاء — وحاول أن تستخدم كلماتك.',
+          ),
+        SkillType.spelling => _(
+            'Build the word from the letter tiles using the clue. Stuck? Ask '
+                'for a hint and the clue gets easier.',
+            'كوّن الكلمة من مربعات الحروف بالاستعانة بالتلميح. احترت؟ اطلب '
+                'تلميحًا ويصبح التلميح أسهل.',
+          ),
+        SkillType.writing => _(
+            'Write one sentence with each word. Then you will see your sentence '
+                'the way a writer at your level would put it.',
+            'اكتب جملة واحدة بكل كلمة، ثم سترى جملتك كما يكتبها كاتب في مستواك.',
+          ),
+      };
+  // Inside each skill — every part of a session, the first time it appears.
+  String get tourPassageCardTitle => _('Your passage', 'نصّك');
+  String get tourPassageCardBody => _(
+        'Written around your own words. Tap any word to see what it means in '
+            'this sentence — and add it to your words if it is new.',
+        'مكتوب حول كلماتك أنت. اضغط على أي كلمة لترى معناها في هذه الجملة — '
+            'وأضفها لكلماتك إن كانت جديدة.',
+      );
+  String get tourTargetsTitle => _('This session’s words', 'كلمات هذه الجلسة');
+  String get tourTargetsBody => _(
+        'These are the words you are practising. Look out for them in the '
+            'text — the questions will ask about them.',
+        'هذه الكلمات التي تتدرّب عليها الآن. ابحث عنها في النص — فالأسئلة '
+            'ستسألك عنها.',
+      );
+  String get tourDoneReadingTitle =>
+      _('Then to the questions', 'ثم إلى الأسئلة');
+  String get tourDoneReadingBody => _(
+        'When you have finished reading, press here. You can still come back '
+            'to the text during the questions.',
+        'عندما تنتهي من القراءة اضغط هنا. وتستطيع الرجوع إلى النص أثناء الأسئلة '
+            'أيضًا.',
+      );
+  String get tourQuestionCountTitle => _('Question by question', 'سؤال بسؤال');
+  String get tourQuestionCountBody => _(
+        'Which question you are on, and how many are left.',
+        'هنا ترى رقم السؤال الحالي، وكم بقي.',
+      );
+  String get tourReadOptionsBody => _(
+        'Tap the answer you think is right — nothing is sent yet, so you can '
+            'change your mind.',
+        'اضغط على الإجابة التي تراها صحيحة — لن تُرسَل بعد، فيمكنك تغيير رأيك.',
+      );
+  String get tourBackToPassageTitle =>
+      _('Back to the text, any time', 'ارجع للنص متى شئت');
+  String get tourBackToPassageBody => _(
+        'Forgot a detail? This brings the passage back, and returns you to the '
+            'same question.',
+        'نسيت تفصيلة؟ هذا الزر يعيد لك النص، ثم يرجعك إلى نفس السؤال.',
+      );
+  String get tourCheckTitle => _('Check, then next', 'تحقّق، ثم التالي');
+  String get tourCheckBody => _(
+        'Press Check to see if you were right and why. The same button then '
+            'takes you to the next question.',
+        'اضغط «تحقق» لترى هل أصبت ولماذا، ثم يصبح نفس الزر «التالي».',
+      );
+  String get tourWordQuestionTitle =>
+      _('A question about one of your words', 'سؤال عن إحدى كلماتك');
+  String get tourWordQuestionBody => _(
+        'Here is the word in its sentences from the text. Work out what it '
+            'means here — and listen to it, normally or slowly.',
+        'هذه الكلمة في جملها من النص. استنتج معناها هنا — واستمع إليها بالسرعة '
+            'العادية أو ببطء.',
+      );
+
+  String get tourPlayTitle => _('Start the clip', 'شغّل المقطع');
+  String get tourPlayBody => _(
+        'Press play when you are ready. Pause and carry on whenever you like.',
+        'اضغط تشغيل عندما تكون جاهزًا، وأوقف وتابع متى شئت.',
+      );
+  String get tourPlayerTitle => _('Where you are', 'أين وصلت');
+  String get tourPlayerBody => _(
+        'The bar shows how far the clip has played. These buttons jump to the '
+            'start or the end.',
+        'الشريط يبيّن أين وصل المقطع، وهذان الزران يرجعانك للبداية أو ينقلانك '
+            'للنهاية.',
+      );
+  String get tourDoneListeningBody => _(
+        'Listened enough? Press here for the questions. You can play the clip '
+            'again during them.',
+        'استمعت بما يكفي؟ اضغط هنا للأسئلة. وتستطيع تشغيل المقطع مرة أخرى '
+            'أثناءها.',
+      );
+  String get tourBackToClipTitle =>
+      _('Back to the clip, any time', 'ارجع للمقطع متى شئت');
+  String get tourBackToClipBody => _(
+        'Missed something? This brings the recording back, and returns you to '
+            'the same question.',
+        'فاتك شيء؟ هذا الزر يعيد لك التسجيل، ثم يرجعك إلى نفس السؤال.',
+      );
+  String get tourSentenceTitle =>
+      _('Listen to the sentence', 'استمع إلى الجملة');
+  String get tourSentenceBody => _(
+        'The question is about a word in this sentence. It is never written — '
+            'this skill is about hearing it.',
+        'السؤال عن كلمة في هذه الجملة. لن تُكتب لك — فهذه المهارة عن سماعها.',
+      );
+  String get tourWordAloneTitle => _('Just the word', 'الكلمة وحدها');
+  String get tourWordAloneBody => _(
+        'Hear only the word, at normal speed or slowly.',
+        'استمع إلى الكلمة وحدها، بالسرعة العادية أو ببطء.',
+      );
+
+  String get tourWarmupTitle => _('A quick warm-up', 'إحماء سريع');
+  String get tourWarmupBody => _(
+        'Before the conversation, recall what each word means. It does not '
+            'count — it just makes sure you are ready.',
+        'قبل المحادثة، تذكّر معنى كل كلمة. هذا لا يُحتسب — هو فقط ليتأكد أنك '
+            'جاهز.',
+      );
+  String get tourWarmupWordBody => _(
+        'Listen to the word, then pick its meaning. A miss comes back at the '
+            'end until you get it.',
+        'استمع للكلمة ثم اختر معناها. وإن أخطأت تعود إليك في الآخر حتى تعرفها.',
+      );
+  String get tourSpeakTargetsTitle =>
+      _('Words to use', 'الكلمات المطلوبة');
+  String get tourSpeakTargetsBody => _(
+        'Try to use these words in what you say. At the end of each turn the '
+            'tutor tells you which word it wants next.',
+        'حاول أن تستخدم هذه الكلمات في كلامك. وفي نهاية كل رد يخبرك المعلم '
+            'بالكلمة التي يريدها بعد ذلك.',
+      );
+  String get tourChatTitle => _('The conversation', 'المحادثة');
+  String get tourChatBody => _(
+        'The tutor speaks and its words appear here, with yours under them. '
+            'It is a real conversation, not a list of questions.',
+        'المعلم يتكلم وكلامه يظهر هنا، وكلامك تحته. إنها محادثة حقيقية وليست '
+            'قائمة أسئلة.',
+      );
+  String get tourMicTitle => _('Your turn to speak', 'دورك في الكلام');
+  String get tourMicBody => _(
+        'Press, speak for as long as you need, then press again when you '
+            'finish. You will see what was heard and can fix it before sending.',
+        'اضغط وتكلّم كما تحتاج، ثم اضغط مرة أخرى عند الانتهاء. سترى ما سُمع '
+            'وتستطيع تصحيحه قبل الإرسال.',
+      );
+  String get tourTypeInsteadBody => _(
+        'Somewhere you cannot talk? Answer by typing instead.',
+        'في مكان لا تستطيع التكلم فيه؟ أجب بالكتابة بدلًا من ذلك.',
+      );
+  String get tourSpeakEndTitle => _('At the end', 'في النهاية');
+  String get tourSpeakEndBody => _(
+        'You get a short lesson on each word: what you did well, and a '
+            'sentence to copy. Pronunciation is never marked.',
+        'تحصل على درس قصير لكل كلمة: ما أحسنت فيه، وجملة لتقتدي بها. والنطق لا '
+            'يُقيَّم أبدًا.',
+      );
+
+  String get tourClueTitle => _('Your clue', 'التلميح');
+  String get tourClueBody => _(
+        'Work out the word from this — a definition, a synonym or the Arabic '
+            'meaning, depending on your level.',
+        'استنتج الكلمة من هذا — تعريف أو مرادف أو المعنى بالعربية، بحسب '
+            'مستواك.',
+      );
+  String get tourHintBody => _(
+        'Stuck? Each press gives an easier clue, down to the number of letters.',
+        'احترت؟ كل ضغطة تعطيك تلميحًا أسهل، حتى عدد الحروف.',
+      );
+  String get tourTilesTitle => _('Build the word', 'كوّن الكلمة');
+  String get tourTilesBody => _(
+        'Tap the letters in order. Careful — some of them are extra.',
+        'اضغط على الحروف بالترتيب. انتبه — بعضها زائد.',
+      );
+  String get tourSpellActionsBody => _(
+        'Remove the last letter or clear them all, then press Check.',
+        'احذف آخر حرف أو امسحها كلها، ثم اضغط «تحقق».',
+      );
+
+  String get tourTaskTitle => _('Your task', 'المطلوب منك');
+  String get tourTaskBody => _(
+        'One sentence with the word. Sometimes plain, sometimes about your own '
+            'life.',
+        'جملة واحدة بالكلمة. أحيانًا جملة عادية، وأحيانًا عن حياتك أنت.',
+      );
+  String get tourSentenceFieldTitle =>
+      _('Write it here', 'اكتبها هنا');
+  String get tourSentenceFieldBody => _(
+        'In English. A small grammar slip does not fail a word used rightly.',
+        'بالإنجليزية. والخطأ النحوي البسيط لا يُفشل كلمة استخدمتها صحيحًا.',
+      );
+  String get tourWriteCheckBody => _(
+        'Press Check. You will see the tutor’s view, and your sentence the '
+            'way a writer at your level would put it.',
+        'اضغط «تحقق». سترى رأي المعلم، وجملتك كما يكتبها كاتب في مستواك.',
+      );
+
+  String get tourSessionLevelTitle => _('Session level', 'مستوى الجلسة');
+  String get tourSessionLevelBody => _(
+        'Too hard or too easy? Tap here to change the level — your Settings '
+            'change with it.',
+        'صعب أو سهل؟ اضغط هنا لتغيير المستوى — ويتغيّر في الإعدادات أيضًا.',
+      );
 }
 
 /// Selected UI locale.

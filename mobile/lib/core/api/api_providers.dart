@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../mock_backend/engine/mock_engine.dart';
 import '../../mock_backend/mock_wordos_api.dart';
 import '../storage/preferences_providers.dart';
 import '../storage/token_store.dart';
@@ -141,6 +142,8 @@ final wordOsApiProvider = Provider<WordOsApi>((ref) {
     return MockWordOsApi(
       tokenReader: () => tokens.token,
       onChanged: announceChange,
+      // A fresh sign-up can open all five skills at once in a demo.
+      engine: MockEngine(openEverySkillForNewAccounts: true),
     );
   }
   env.assertTransportIsSafe();

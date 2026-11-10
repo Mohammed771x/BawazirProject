@@ -12,8 +12,11 @@ import '../../core/theme/app_tokens.dart';
 import '../../core/widgets/speaker_button.dart';
 import 'spoken_answer_field.dart';
 import '../../core/theme/skill_visuals.dart';
+import '../../core/tour/tour.dart';
+import '../../core/tour/tour_trigger.dart';
 import '../../core/widgets/app_widgets.dart';
 import '../auth/session_controller.dart';
+import '../tour/app_tours.dart';
 
 /// The placement test is **adaptive**: the next question depends on how the
 /// previous one was answered, so this screen asks the server for one item at a
@@ -119,57 +122,60 @@ class _PlacementScreenState extends ConsumerState<PlacementScreen> {
   }
 
   Future<void> _start() => _run(() async {
-        _stopMedia();
-        setState(() {
-          _phase = _Phase.submitting;
-          _errorMessage = null;
-        });
-        final step = await ref.read(wordOsApiProvider).startPlacement();
-        if (!mounted) return;
-        setState(() {
-          _step = step;
-          _answer = '';
-          _freeText.clear();
-          _phase = _Phase.question;
-        });
-      });
+    _stopMedia();
+    setState(() {
+      _phase = _Phase.submitting;
+      _errorMessage = null;
+    });
+    final step = await ref.read(wordOsApiProvider).startPlacement();
+    if (!mounted) return;
+    setState(() {
+      _step = step;
+      _answer = '';
+      _freeText.clear();
+      _phase = _Phase.question;
+    });
+  });
 
   Future<void> _submitAnswer() => _run(() async {
-        final step = _step;
-        final item = step?.item;
-        if (step == null || item == null) return;
+    final step = _step;
+    final item = step?.item;
+    if (step == null || item == null) return;
 
-        // The answer is in; this question is over. Reported from the device:
-        // the listening clip played on over the next question, and the
-        // microphone stayed open into it (ADR-058).
-        _stopMedia();
+    // The answer is in; this question is over. Reported from the device:
+    // the listening clip played on over the next question, and the
+    // microphone stayed open into it (ADR-058).
+    _stopMedia();
 
-        final next = await ref.read(wordOsApiProvider).answerPlacement(
-              sessionId: step.sessionId,
-              itemId: item.id,
-              answer: _answer,
-            );
-        if (!mounted) return;
+    final next = await ref
+        .read(wordOsApiProvider)
+        .answerPlacement(
+          sessionId: step.sessionId,
+          itemId: item.id,
+          answer: _answer,
+        );
+    if (!mounted) return;
 
-        if (next.isComplete) {
-          setState(() => _phase = _Phase.submitting);
-          final result =
-              await ref.read(wordOsApiProvider).completePlacement(step.sessionId);
-          if (!mounted) return;
-          setState(() {
-            _result = result;
-            _phase = _Phase.result;
-          });
-          return;
-        }
-
-        setState(() {
-          _step = next;
-          _answer = '';
-          _freeText.clear();
-          _phase = _Phase.question;
-        });
+    if (next.isComplete) {
+      setState(() => _phase = _Phase.submitting);
+      final result = await ref
+          .read(wordOsApiProvider)
+          .completePlacement(step.sessionId);
+      if (!mounted) return;
+      setState(() {
+        _result = result;
+        _phase = _Phase.result;
       });
+      return;
+    }
+
+    setState(() {
+      _step = next;
+      _answer = '';
+      _freeText.clear();
+      _phase = _Phase.question;
+    });
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -182,26 +188,26 @@ class _PlacementScreenState extends ConsumerState<PlacementScreen> {
           _Phase.submitting => BusyView(message: s.evaluating),
           _Phase.result => _ResultView(result: _result!),
           _Phase.error => ErrorView(
-              message: _errorMessage ?? s.somethingWentWrong,
-              retryLabel: s.retry,
-              // Restarting is the only safe recovery: the server-side run may
-              // have expired, and resuming a half-scored adaptive test from the
-              // client would corrupt the estimate.
-              onRetry: _start,
-            ),
+            message: _errorMessage ?? s.somethingWentWrong,
+            retryLabel: s.retry,
+            // Restarting is the only safe recovery: the server-side run may
+            // have expired, and resuming a half-scored adaptive test from the
+            // client would corrupt the estimate.
+            onRetry: _start,
+          ),
           _Phase.question => _QuestionView(
-              // Keyed by the item, so every question builds its own answer
-              // field. Without this the same State is reused and the last
-              // answer's text — and its open microphone — carry into the next
-              // question (ADR-058).
-              key: ValueKey(_step!.item?.id ?? _step!.sessionId),
-              step: _step!,
-              answer: _answer,
-              freeText: _freeText,
-              busy: _busy,
-              onAnswer: _answerFor(_step!),
-              onNext: _submitAnswer,
-            ),
+            // Keyed by the item, so every question builds its own answer
+            // field. Without this the same State is reused and the last
+            // answer's text — and its open microphone — carry into the next
+            // question (ADR-058).
+            key: ValueKey(_step!.item?.id ?? _step!.sessionId),
+            step: _step!,
+            answer: _answer,
+            freeText: _freeText,
+            busy: _busy,
+            onAnswer: _answerFor(_step!),
+            onNext: _submitAnswer,
+          ),
         },
       ),
     );
@@ -216,42 +222,57 @@ class _IntroView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(stringsProvider);
-    return Padding(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Spacer(),
-          Icon(Icons.explore_outlined, size: 56, color: context.colors.primary),
-          const SizedBox(height: AppSpacing.lg),
-          Text(s.placementTitle, style: context.text.headlineMedium),
-          const SizedBox(height: AppSpacing.xs),
-          Text(
-            s.placementSubtitle,
-            style: context.text.bodyMedium?.copyWith(
-              color: context.colors.onSurface.withValues(alpha: 0.65),
+    // Said before anything is asked (ADR-128): the test is required, and what
+    // it says is a starting point the learner can change.
+    return TourTrigger(
+      tours: AppTours.placementIntro,
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Spacer(),
+            Icon(
+              Icons.explore_outlined,
+              size: 56,
+              color: context.colors.primary,
             ),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          AppCard(
-            color: context.palette.subtleSurface,
-            child: Row(
-              children: [
-                Icon(Icons.tune_rounded,
-                    size: 20, color: context.colors.primary),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: Text(
-                    s.placementAdaptiveNote,
-                    style: context.text.bodySmall,
+            const SizedBox(height: AppSpacing.lg),
+            Text(s.placementTitle, style: context.text.headlineMedium),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              s.placementSubtitle,
+              style: context.text.bodyMedium?.copyWith(
+                color: context.colors.onSurface.withValues(alpha: 0.65),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            AppCard(
+              color: context.palette.subtleSurface,
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.tune_rounded,
+                    size: 20,
+                    color: context.colors.primary,
                   ),
-                ),
-              ],
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: Text(
+                      s.placementAdaptiveNote,
+                      style: context.text.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const Spacer(),
-          FilledButton(onPressed: onStart, child: Text(s.start)),
-        ],
+            const Spacer(),
+            TourAnchor(
+              id: AppTours.placementStart,
+              child: FilledButton(onPressed: onStart, child: Text(s.start)),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -282,104 +303,157 @@ class _QuestionView extends ConsumerWidget {
     final progress = step.progress;
     final answered = answer.trim().isNotEmpty;
 
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  StatusPill(
-                    label: s.skillName(item.skill),
-                    color: SkillVisuals.color(context, item.skill),
-                    icon: SkillVisuals.icon(item.skill),
-                  ),
-                  const Spacer(),
-                  // Eight questions, and the app says which one this is: the
-                  // length stopped varying with ADR-098.
-                  Text(
-                    s.placementApproxProgress(
-                      progress.answered + 1,
-                      progress.estimatedTotal,
-                    ),
-                    style: context.text.labelMedium?.copyWith(
-                      color: context.colors.onSurface.withValues(alpha: 0.6),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.sm),
-              StepProgressBar(value: progress.ratio),
-            ],
-          ),
-        ),
-        Expanded(
-          child: SingleChildScrollView(
-            padding: AppSpacing.page,
+    // The widget is keyed by the item, so each question offers the tour for
+    // its own kind; the kinds already explained are skipped (ADR-128).
+    return TourTrigger(
+      tours: (context, s) => AppTours.placementQuestion(context, s, item),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (item.passage != null) ...[
-                  AppCard(
-                    color: context.palette.subtleSurface,
-                    child: Text(item.passage!, style: context.text.bodyLarge),
-                  ),
-                  const SizedBox(height: AppSpacing.md),
-                ],
-                if (item.audioText != null) ...[
-                  _AudioPlayer(text: item.audioText!),
-                  const SizedBox(height: AppSpacing.md),
-                ],
-                Text(item.prompt, style: context.text.titleMedium),
-                const SizedBox(height: AppSpacing.md),
-                if (item.type == PlacementItemType.multipleChoice)
-                  for (final option in item.options)
-                    OptionTile(
-                      label: option,
-                      selected: answer == option,
-                      enabled: !busy,
-                      onTap: () => onAnswer(option),
-                    )
-                // Speaking is spoken (§17). A text box here would measure
-                // writing and record the result as speech.
-                else if (item.type == PlacementItemType.spoken)
-                  SpokenAnswerField(
-                    transcript: answer,
-                    enabled: !busy,
-                    onTranscript: onAnswer,
-                  )
-                else
-                  TextField(
-                    controller: freeText,
-                    maxLines: 4,
-                    enabled: !busy,
-                    decoration: InputDecoration(hintText: s.writeYourAnswer),
-                    onChanged: onAnswer,
-                  ),
-                const SizedBox(height: AppSpacing.xl),
+                Row(
+                  children: [
+                    TourAnchor(
+                      id: AppTours.placementSkill,
+                      child: StatusPill(
+                        label: s.skillName(item.skill),
+                        color: SkillVisuals.color(context, item.skill),
+                        icon: SkillVisuals.icon(item.skill),
+                      ),
+                    ),
+                    const Spacer(),
+                    // Eight questions, and the app says which one this is: the
+                    // length stopped varying with ADR-098.
+                    Text(
+                      s.placementApproxProgress(
+                        progress.answered + 1,
+                        progress.estimatedTotal,
+                      ),
+                      style: context.text.labelMedium?.copyWith(
+                        color: context.colors.onSurface.withValues(alpha: 0.6),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                TourAnchor(
+                  id: AppTours.placementProgress,
+                  child: StepProgressBar(value: progress.ratio),
+                ),
               ],
             ),
           ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: FilledButton(
-            onPressed: answered && !busy ? onNext : null,
-            child: busy
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.4,
-                      color: Colors.white,
+          Expanded(
+            child: SingleChildScrollView(
+              padding: AppSpacing.page,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (item.passage != null) ...[
+                    TourAnchor(
+                      id: AppTours.placementPassage,
+                      child: AppCard(
+                        color: context.palette.subtleSurface,
+                        // English content, laid out left-to-right: in the
+                        // Arabic interface a plain Text put each line's full
+                        // stop at its front.
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: EnglishText(
+                            item.passage!,
+                            style: context.text.bodyLarge,
+                          ),
+                        ),
+                      ),
                     ),
-                  )
-                : Text(s.next),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
+                  if (item.audioText != null) ...[
+                    TourAnchor(
+                      id: AppTours.placementAudio,
+                      child: _AudioPlayer(text: item.audioText!),
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
+                  // Usually English, so its direction follows the text — the
+                  // question mark stays at the end of the question.
+                  SizedBox(
+                    width: double.infinity,
+                    child: AutoDirectionText(
+                      item.prompt,
+                      style: context.text.titleMedium,
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  if (item.type == PlacementItemType.multipleChoice)
+                    TourAnchor(
+                      id: AppTours.placementOptions,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          for (final option in item.options)
+                            OptionTile(
+                              label: option,
+                              selected: answer == option,
+                              enabled: !busy,
+                              onTap: () => onAnswer(option),
+                            ),
+                        ],
+                      ),
+                    )
+                  // Speaking is spoken (§17). A text box here would measure
+                  // writing and record the result as speech.
+                  else if (item.type == PlacementItemType.spoken)
+                    TourAnchor(
+                      id: AppTours.placementAnswer,
+                      child: SpokenAnswerField(
+                        transcript: answer,
+                        enabled: !busy,
+                        onTranscript: onAnswer,
+                      ),
+                    )
+                  else
+                    TourAnchor(
+                      id: AppTours.placementAnswer,
+                      child: TextField(
+                        controller: freeText,
+                        maxLines: 4,
+                        enabled: !busy,
+                        decoration: InputDecoration(
+                          hintText: s.writeYourAnswer,
+                        ),
+                        onChanged: onAnswer,
+                      ),
+                    ),
+                  const SizedBox(height: AppSpacing.xl),
+                ],
+              ),
+            ),
           ),
-        ),
-      ],
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: TourAnchor(
+              id: AppTours.placementNext,
+              child: FilledButton(
+                onPressed: answered && !busy ? onNext : null,
+                child: busy
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.4,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Text(s.next),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -428,57 +502,78 @@ class _ResultView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(stringsProvider);
-    return Column(
-      children: [
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: AppSpacing.lg),
-                Icon(Icons.explore_outlined,
-                    size: 48, color: context.colors.primary),
-                const SizedBox(height: AppSpacing.md),
-                Text(s.placementResultTitle,
-                    style: context.text.headlineSmall),
-                const SizedBox(height: AppSpacing.xs),
-                // Said before the bands, not after: by the time a learner has
-                // read "A1" they have already decided what it means about them.
-                Text(
-                  s.placementEstimateNote,
-                  style: context.text.bodyMedium?.copyWith(
-                    color: context.colors.onSurface.withValues(alpha: 0.75),
+    return TourTrigger(
+      tours: AppTours.placementResult,
+      child: Column(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: AppSpacing.lg),
+                  Icon(
+                    Icons.explore_outlined,
+                    size: 48,
+                    color: context.colors.primary,
                   ),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                Text(
-                  result.summary,
-                  style: context.text.bodySmall?.copyWith(
-                    color: context.colors.onSurface.withValues(alpha: 0.6),
+                  const SizedBox(height: AppSpacing.md),
+                  Text(
+                    s.placementResultTitle,
+                    style: context.text.headlineSmall,
                   ),
-                ),
-                const SizedBox(height: AppSpacing.lg),
-                for (final level in result.levels)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                    child: _LevelRow(
-                      level: level,
-                      spelling: result.spelling,
+                  const SizedBox(height: AppSpacing.xs),
+                  // Said before the bands, not after: by the time a learner has
+                  // read "A1" they have already decided what it means about them.
+                  Text(
+                    s.placementEstimateNote,
+                    style: context.text.bodyMedium?.copyWith(
+                      color: context.colors.onSurface.withValues(alpha: 0.75),
                     ),
                   ),
-              ],
+                  const SizedBox(height: AppSpacing.sm),
+                  Text(
+                    result.summary,
+                    style: context.text.bodySmall?.copyWith(
+                      color: context.colors.onSurface.withValues(alpha: 0.6),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  TourAnchor(
+                    id: AppTours.placementLevels,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (final level in result.levels)
+                          Padding(
+                            padding: const EdgeInsets.only(
+                              bottom: AppSpacing.xs,
+                            ),
+                            child: _LevelRow(
+                              level: level,
+                              spelling: result.spelling,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: FilledButton(
-            onPressed: () => ref.read(sessionProvider.notifier).refresh(),
-            child: Text(s.startLearning),
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: TourAnchor(
+              id: AppTours.placementFinish,
+              child: FilledButton(
+                onPressed: () => ref.read(sessionProvider.notifier).refresh(),
+                child: Text(s.startLearning),
+              ),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -517,8 +612,9 @@ class _LevelRow extends ConsumerWidget {
                   const SizedBox(height: 2),
                   Text(
                     s.placementProvisional,
-                    style: context.text.labelSmall
-                        ?.copyWith(color: context.palette.warning),
+                    style: context.text.labelSmall?.copyWith(
+                      color: context.palette.warning,
+                    ),
                   ),
                 ],
                 // Spelling reports what it actually measured instead of

@@ -10,7 +10,10 @@ import '../../core/theme/app_tokens.dart';
 import '../../core/widgets/speaker_button.dart';
 import '../../core/theme/skill_visuals.dart';
 import '../../core/api/wordos_api.dart';
+import '../../core/tour/tour.dart';
+import '../../core/tour/tour_trigger.dart';
 import '../../core/widgets/app_widgets.dart';
+import '../tour/app_tours.dart';
 
 final wordDetailProvider = FutureProvider.autoDispose
     .family<WordDetail, String>((ref, id) {
@@ -328,15 +331,22 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
           // Only once the word has loaded: there is nothing to confirm the
           // deletion of, and nothing to name in the question, until then.
           if (detail.valueOrNull case final data?)
-            IconButton(
-              tooltip: s.deleteWord,
-              icon: const Icon(Icons.delete_outline_rounded),
-              color: context.palette.danger,
-              onPressed: _deleting ? null : () => _confirmDelete(data.word),
+            TourAnchor(
+              id: AppTours.wordDelete,
+              child: IconButton(
+                tooltip: s.deleteWord,
+                icon: const Icon(Icons.delete_outline_rounded),
+                color: context.palette.danger,
+                onPressed: _deleting ? null : () => _confirmDelete(data.word),
+              ),
             ),
         ],
       ),
-      body: detail.when(
+      // The first word a learner opens is explained (ADR-128).
+      body: TourTrigger(
+        enabled: detail.hasValue,
+        tours: AppTours.word,
+        child: detail.when(
         loading: () => BusyView(message: s.loading),
         error: (e, _) => ErrorView.from(
           e,
@@ -361,10 +371,13 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
                             style: context.text.headlineSmall,
                           ),
                         ),
-                        WordSpeakerButtons(
-                          id: 'word-detail:${word.id}',
-                          text: word.text,
-                          size: 24,
+                        TourAnchor(
+                          id: AppTours.wordSpeak,
+                          child: WordSpeakerButtons(
+                            id: 'word-detail:${word.id}',
+                            text: word.text,
+                            size: 24,
+                          ),
                         ),
                         LevelBadge(label: word.cefrLevel.label),
                       ],
@@ -420,12 +433,15 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
                             ),
                           )
                         else
-                          IconButton(
-                            tooltip: s.editMeaning,
-                            icon: const Icon(Icons.edit_outlined, size: 20),
-                            onPressed: _deleting
-                                ? null
-                                : () => _editMeaning(word),
+                          TourAnchor(
+                            id: AppTours.wordMeaning,
+                            child: IconButton(
+                              tooltip: s.editMeaning,
+                              icon: const Icon(Icons.edit_outlined, size: 20),
+                              onPressed: _deleting
+                                  ? null
+                                  : () => _editMeaning(word),
+                            ),
                           ),
                       ],
                     ),
@@ -475,10 +491,19 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
               ),
               const SizedBox(height: AppSpacing.lg),
               SectionHeader(title: s.skillsHub),
-              for (final state in word.skills) ...[
-                _SkillRow(state: state, dateFormat: dateFormat),
-                const SizedBox(height: AppSpacing.xs),
-              ],
+              TourAnchor(
+                id: AppTours.wordSkills,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final (i, state) in word.skills.indexed) ...[
+                      if (i > 0) const SizedBox(height: AppSpacing.xs),
+                      _SkillRow(state: state, dateFormat: dateFormat),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppSpacing.xs),
               if (data.events.isNotEmpty) ...[
                 const SizedBox(height: AppSpacing.lg),
                 SectionHeader(title: s.wordJourney),
@@ -494,6 +519,7 @@ class _WordDetailScreenState extends ConsumerState<WordDetailScreen> {
             ],
           );
         },
+      ),
       ),
     );
   }

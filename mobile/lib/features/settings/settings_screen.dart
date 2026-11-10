@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -14,10 +15,13 @@ import '../../core/storage/preferences_providers.dart';
 import '../../core/support/support_contact.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/theme/skill_visuals.dart';
+import '../../core/tour/tour.dart';
+import '../../core/tour/tour_trigger.dart';
 import '../../core/widgets/app_widgets.dart';
 import '../auth/session_controller.dart';
 import '../onboarding/interests_editor.dart';
 import '../onboarding/interests_screen.dart';
+import '../tour/app_tours.dart';
 
 final configProvider = FutureProvider<PublicConfig>(
   (ref) => ref.watch(wordOsApiProvider).config(),
@@ -50,7 +54,14 @@ class SettingsScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: ListView(
+      // Where a level is lowered when it is too hard — which placement told
+      // the learner they could do — so it is pointed at (ADR-128).
+      body: TourTrigger(
+        tours: AppTours.settings,
+        child: ListView(
+        // Builds the whole page, so the tour can reach the sections below
+        // the fold.
+        scrollCacheExtent: const ScrollCacheExtent.pixels(4000),
         padding: const EdgeInsets.fromLTRB(
           AppSpacing.md,
           AppSpacing.md,
@@ -60,19 +71,38 @@ class SettingsScreen extends ConsumerWidget {
         children: [
           _ProfileCard(user: user),
           const SizedBox(height: AppSpacing.lg),
-          SectionHeader(title: s.skillLevels, subtitle: s.levelExplainer),
-          // Keyed by skill (ADR-114): these cards hold state — the slider's
-          // value, the level being changed — and Flutter matches state to
-          // widgets by position unless told otherwise. When the order moved,
-          // one skill's slider value appeared on another skill's card.
-          for (final level in user.skillLevels) ...[
-            _SkillLevelCard(key: ValueKey('level-${level.skill.name}'), level: level),
-            const SizedBox(height: AppSpacing.xs),
-          ],
+          TourAnchor(
+            id: AppTours.settingsLevels,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SectionHeader(
+                  title: s.skillLevels,
+                  subtitle: s.levelExplainer,
+                ),
+                // Keyed by skill (ADR-114): these cards hold state — the
+                // slider's value, the level being changed — and Flutter
+                // matches state to widgets by position unless told
+                // otherwise. When the order moved, one skill's slider value
+                // appeared on another skill's card.
+                for (final (i, level) in user.skillLevels.indexed) ...[
+                  if (i > 0) const SizedBox(height: AppSpacing.xs),
+                  _SkillLevelCard(
+                    key: ValueKey('level-${level.skill.name}'),
+                    level: level,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xs),
           const SizedBox(height: AppSpacing.lg),
-          SectionHeader(
-            title: s.dailyTargets,
-            subtitle: s.dailyTargetsExplainer,
+          TourAnchor(
+            id: AppTours.settingsTargets,
+            child: SectionHeader(
+              title: s.dailyTargets,
+              subtitle: s.dailyTargetsExplainer,
+            ),
           ),
           for (final level in user.skillLevels) ...[
             _DailyTargetCard(
@@ -92,8 +122,16 @@ class SettingsScreen extends ConsumerWidget {
           SectionHeader(title: s.interests),
           _InterestsCard(user: user),
           const SizedBox(height: AppSpacing.lg),
-          SectionHeader(title: s.appearance),
-          const _AppearanceCard(),
+          TourAnchor(
+            id: AppTours.settingsLook,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SectionHeader(title: s.appearance),
+                const _AppearanceCard(),
+              ],
+            ),
+          ),
           const SizedBox(height: AppSpacing.lg),
           // The only thing the app does when it is not open (ADR-076), so the
           // switch for it belongs where a learner looks to stop it.
@@ -111,6 +149,12 @@ class SettingsScreen extends ConsumerWidget {
           // be read later, the other for a learner who is stuck right now.
           const _SupportCard(),
           const SizedBox(height: AppSpacing.lg),
+          SectionHeader(title: s.helpSection),
+          const TourAnchor(
+            id: AppTours.settingsReplay,
+            child: _ReplayTourCard(),
+          ),
+          const SizedBox(height: AppSpacing.lg),
           // Owner-only doorway. A normal account never renders this, and the
           // route guard plus the API's role check both refuse it anyway
           // (demo review §13).
@@ -122,6 +166,59 @@ class SettingsScreen extends ConsumerWidget {
             onPressed: () => _confirmSignOut(context, ref, s),
             icon: const Icon(Icons.logout_rounded),
             label: Text(s.signOut),
+          ),
+        ],
+      ),
+      ),
+    );
+  }
+}
+
+/// Shows every guided tour again, starting from the hub (ADR-128).
+///
+/// The hub first: it is where the tour begins, and starting it here would
+/// explain Settings to someone who asked to see the whole app. Each other
+/// screen offers its own tour again the next time it is opened.
+class _ReplayTourCard extends ConsumerWidget {
+  const _ReplayTourCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+    return AppCard(
+      onTap: () {
+        final prefs = ref.read(appPreferencesProvider);
+        final epoch = ref.read(tourEpochProvider.notifier);
+        context.go(Routes.hub);
+        // After the switch, so this tab is already behind the hub and does
+        // not take the first turn.
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          await prefs.resetTours();
+          epoch.state++;
+        });
+      },
+      child: Row(
+        children: [
+          Icon(Icons.help_outline_rounded, color: context.colors.primary),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(s.replayTour, style: context.text.titleSmall),
+                const SizedBox(height: 2),
+                Text(
+                  s.replayTourHint,
+                  style: context.text.bodySmall?.copyWith(
+                    color: context.colors.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(
+            Icons.chevron_right_rounded,
+            color: context.colors.onSurface.withValues(alpha: 0.65),
           ),
         ],
       ),

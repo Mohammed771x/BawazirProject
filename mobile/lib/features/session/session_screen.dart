@@ -12,9 +12,12 @@ import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/theme/skill_visuals.dart';
+import '../../core/tour/tour.dart';
+import '../../core/tour/tour_trigger.dart';
 import '../../core/widgets/app_widgets.dart';
 import '../../core/widgets/speaker_button.dart';
 import '../auth/session_controller.dart';
+import '../tour/app_tours.dart';
 import 'clip_playback.dart';
 import 'session_widgets.dart';
 import 'word_lookup_sheet.dart';
@@ -583,6 +586,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   /// hears is silence or the tutor's own voice.
   Future<void> _speakThenListen(String text) async {
     if (!mounted) return;
+    // The tutor does not start talking over a tour, and the microphone is not
+    // asked for on top of one: answered too late, the permission prompt wrote
+    // the microphone off for the whole session (ADR-128).
+    await AppTour.whenIdle();
+    if (!mounted || _speakingFinished) return;
     setState(() => _voice = _VoicePhase.speaking);
 
     await _speech.speakToCompletion(_tutorId(text), text);
@@ -596,6 +604,21 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     setState(
       () => _voice = canListen ? _VoicePhase.idle : _VoicePhase.unavailable,
     );
+  }
+
+  Future<void> _retryMicrophone() async {
+    final canListen = await _mic.initialise();
+    if (!mounted) return;
+    if (!canListen) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(ref.read(stringsProvider).microphoneUnavailable)),
+      );
+      return;
+    }
+    setState(() {
+      _voiceMode = true;
+      _voice = _VoicePhase.idle;
+    });
   }
 
   /// Opens the microphone and leaves it open until the learner says they are
@@ -860,23 +883,31 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         ),
         actions: [
           if (_canRevisitPassage)
-            IconButton(
-              onPressed: _busy
-                  ? null
-                  : () => setState(() => _passageRevisit = true),
-              icon: Icon(
-                widget.skill == SkillType.listening
-                    ? Icons.headphones_rounded
-                    : Icons.menu_book_rounded,
+            TourAnchor(
+              id: AppTours.sessionRevisit,
+              child: IconButton(
+                onPressed: _busy
+                    ? null
+                    : () => setState(() => _passageRevisit = true),
+                icon: Icon(
+                  widget.skill == SkillType.listening
+                      ? Icons.headphones_rounded
+                      : Icons.menu_book_rounded,
+                ),
+                tooltip: widget.skill == SkillType.listening
+                    ? s.showRecording
+                    : s.showPassage,
               ),
-              tooltip: widget.skill == SkillType.listening
-                  ? s.showRecording
-                  : s.showPassage,
             ),
           if (_session != null && _result == null)
             Padding(
               padding: const EdgeInsetsDirectional.only(end: AppSpacing.md),
-              child: Center(child: _levelControl(s, color)),
+              child: Center(
+                child: TourAnchor(
+                  id: AppTours.sessionLevel,
+                  child: _levelControl(s, color),
+                ),
+              ),
             ),
         ],
       ),
@@ -891,6 +922,47 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
   /// session. Tapping re-tells *this* passage at another level (§4); once the
   /// questions begin it is a plain badge again, because re-telling would throw
   /// away the answers they have already given.
+  bool get _levelChangeable {
+    final session = _session;
+    if (session == null) return false;
+    return switch (widget.skill) {
+      SkillType.speaking => !_speakingFinished,
+      SkillType.writing => _result == null,
+      SkillType.reading || SkillType.listening =>
+        !_contentDone && (session.content?.canChangeLevel ?? false),
+      _ => false,
+    };
+  }
+
+  /// A phase of the session, with its guided tour (ADR-128).
+  ///
+  /// Each phase — the passage, the questions, the warm-up, the conversation —
+  /// explains itself the first time it appears, and carries the skill's own
+  /// introduction in front, so whichever phase the learner meets first (a
+  /// resumed session can open on its questions) introduces the skill.
+  ///
+  /// Keyed by the phase's [name]: the passage and the questions sit at the
+  /// same place in the tree, and without a key the questions inherited the
+  /// passage's trigger — already spent — and never explained themselves.
+  Widget _toured(
+    String name,
+    List<Tour> Function(BuildContext context, AppStrings s) phase,
+    Widget child,
+  ) =>
+      TourTrigger(
+        key: ValueKey('tour:$name'),
+        tours: (context, s) => [
+          ...AppTours.session(
+            context,
+            s,
+            widget.skill,
+            levelChangeable: _levelChangeable,
+          ),
+          ...phase(context, s),
+        ],
+        child: child,
+      );
+
   Widget _levelControl(AppStrings s, Color color) {
     final session = _session!;
     // A conversation has no passage to replace: the level is an input to the
@@ -903,13 +975,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     // Reading and Listening put a text in front of the learner, so their level
     // locks once the questions begin. Spelling has no level of its own
     // (ADR-008).
-    final canChange = switch (widget.skill) {
-      SkillType.speaking => !_speakingFinished,
-      SkillType.writing => _result == null,
-      SkillType.reading || SkillType.listening =>
-        !_contentDone && (session.content?.canChangeLevel ?? false),
-      _ => false,
-    };
+    final canChange = _levelChangeable;
 
     final badge = LevelBadge(
       label: session.levelUsed.label,
@@ -1141,7 +1207,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     }
     final isListening = widget.skill == SkillType.listening;
 
-    return Column(
+    return _toured(
+        'content',
+        isListening ? AppTours.listeningClip : AppTours.readingPassage,
+        Column(
       children: [
         Expanded(
           child: SingleChildScrollView(
@@ -1173,13 +1242,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 ],
                 const SizedBox(height: AppSpacing.md),
                 if (isListening)
-                  _ListeningPlayer(
-                    text: content.text,
-                    color: color,
-                    onAudio: (event) => _track(event),
+                  TourAnchor(
+                    id: AppTours.sessionPlayer,
+                    child: _ListeningPlayer(
+                      text: content.text,
+                      color: color,
+                      onAudio: (event) => _track(event),
+                    ),
                   )
                 else
-                  AppCard(
+                  TourAnchor(
+                    id: AppTours.sessionPassage,
+                    child: AppCard(
                     child: HighlightedPassage(
                       content: content,
                       color: color,
@@ -1202,6 +1276,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                       },
                     ),
                   ),
+                  ),
                 if (!isListening) ...[
                   const SizedBox(height: AppSpacing.sm),
                   Text(
@@ -1212,18 +1287,21 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                   ),
                 ],
                 const SizedBox(height: AppSpacing.md),
-                if (!isListening)
-                  Wrap(
-                    spacing: AppSpacing.xs,
-                    runSpacing: AppSpacing.xs,
-                    children: [
-                      for (final word in session.targetWords)
-                        StatusPill(
-                          label: word.text,
-                          color: color,
-                          icon: Icons.bookmark_border_rounded,
-                        ),
-                    ],
+                if (!isListening && session.targetWords.isNotEmpty)
+                  TourAnchor(
+                    id: AppTours.sessionTargets,
+                    child: Wrap(
+                      spacing: AppSpacing.xs,
+                      runSpacing: AppSpacing.xs,
+                      children: [
+                        for (final word in session.targetWords)
+                          StatusPill(
+                            label: word.text,
+                            color: color,
+                            icon: Icons.bookmark_border_rounded,
+                          ),
+                      ],
+                    ),
                   ),
               ],
             ),
@@ -1231,7 +1309,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         ),
         Padding(
           padding: const EdgeInsets.all(AppSpacing.md),
-          child: FilledButton(
+          child: TourAnchor(
+            id: AppTours.sessionFinishContent,
+            child: FilledButton(
             onPressed: () {
               // The passage is finished with. Its audio must not follow the
               // learner into the questions — where, for Listening, it would
@@ -1258,9 +1338,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                   : s.iFinishedReading,
             ),
           ),
+          ),
         ),
       ],
-    );
+    ));
   }
 
   // ── Questions / tasks ─────────────────────────────────────────────────────
@@ -1285,11 +1366,20 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
 
     final progress = _progress;
 
-    return Column(
+    return _toured(
+        'questions',
+        switch (widget.skill) {
+          SkillType.spelling => AppTours.spelling,
+          SkillType.writing => AppTours.writing,
+          final skill => (context, s) => AppTours.questions(context, s, skill),
+        },
+        Column(
       children: [
         Padding(
           padding: const EdgeInsets.all(AppSpacing.md),
-          child: Column(
+          child: TourAnchor(
+            id: AppTours.sessionProgress,
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
@@ -1323,6 +1413,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               StepProgressBar(value: progress?.ratio ?? 0),
             ],
           ),
+          ),
         ),
         Expanded(
           child: SingleChildScrollView(
@@ -1349,7 +1440,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           // Rebuilt as the learner types, because for a written answer the
           // question of whether there is anything to check is the text field's
           // to answer.
-          child: ValueListenableBuilder(
+          child: TourAnchor(
+            id: AppTours.sessionCheck,
+            child: ValueListenableBuilder(
             valueListenable: _freeText,
             builder: (context, _, _) => _hasCheckStep(item) && !_answered
                 ? FilledButton(
@@ -1363,9 +1456,10 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                     ),
                   ),
           ),
+          ),
         ),
       ],
-    );
+    ));
   }
 
   /// Whether a question offers its word to be heard, at both speeds.
@@ -1389,16 +1483,29 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         // Reading: the word inside its neighbouring sentences, so the meaning
         // can be inferred from context (demo review §26–27).
         if (item.context != null) ...[
-          ContextPassage(
-            context: item.context!,
-            highlight: _targetTextFor(item),
-            color: color,
+          // The first question about one of the learner's own words says so.
+          TourTrigger(
+            tours: AppTours.readingWord,
+            child: TourAnchor(
+              id: AppTours.sessionWordContext,
+              child: ContextPassage(
+                context: item.context!,
+                highlight: _targetTextFor(item),
+                color: color,
+              ),
+            ),
           ),
           const SizedBox(height: AppSpacing.md),
         ],
         // Listening: the same three sentences, spoken and never shown.
         if (item.audioText != null) ...[
-          SentencePlayer(text: item.audioText!, color: color),
+          TourTrigger(
+            tours: AppTours.listeningWord,
+            child: TourAnchor(
+              id: AppTours.sessionSentence,
+              child: SentencePlayer(text: item.audioText!, color: color),
+            ),
+          ),
           const SizedBox(height: AppSpacing.md),
         ],
         // The question carries the same reading comfort as the passage
@@ -1438,9 +1545,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             pronounce != null &&
             pronounce.trim().isNotEmpty) ...[
           const SizedBox(height: AppSpacing.sm),
-          WordPronunciation(word: pronounce, color: color),
+          TourAnchor(
+            id: AppTours.sessionWordAudio,
+            child: WordPronunciation(word: pronounce, color: color),
+          ),
         ],
         const SizedBox(height: AppSpacing.md),
+        TourAnchor(
+          id: AppTours.sessionOptions,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
         for (final option in item.options)
           OptionTile(
             label: option,
@@ -1464,6 +1579,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               _answer(item, option);
             },
           ),
+            ],
+          ),
+        ),
         if (result != null) ...[
           const SizedBox(height: AppSpacing.sm),
           _FeedbackBanner(
@@ -1493,16 +1611,25 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         // Direction follows the instruction's own language, not the
         // interface's: an English task set in the Arabic app would otherwise
         // be laid out right-to-left and lose its full stop to the front.
-        AutoDirectionText(
-          _instruction(s, item),
-          style: context.text.titleMedium,
+        TourAnchor(
+          id: AppTours.writeTask,
+          child: SizedBox(
+            width: double.infinity,
+            child: AutoDirectionText(
+              _instruction(s, item),
+              style: context.text.titleMedium,
+            ),
+          ),
         ),
         const SizedBox(height: AppSpacing.md),
-        TextField(
-          controller: _freeText,
-          maxLines: 4,
-          enabled: evaluation == null,
-          decoration: InputDecoration(hintText: s.writeSentence),
+        TourAnchor(
+          id: AppTours.writeField,
+          child: TextField(
+            controller: _freeText,
+            maxLines: 4,
+            enabled: evaluation == null,
+            decoration: InputDecoration(hintText: s.writeSentence),
+          ),
         ),
         // No button here: the one at the foot of the screen marks this answer
         // and then moves on (ADR-095).
@@ -1569,7 +1696,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        AppCard(
+        TourAnchor(
+          id: AppTours.spellClue,
+          child: AppCard(
           color: color.withValues(alpha: 0.07),
           borderColor: color.withValues(alpha: 0.28),
           child: Column(
@@ -1589,6 +1718,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               ),
             ],
           ),
+        ),
         ),
         // The ladder below the clue: each press reveals the next rung, which
         // is always easier than the one before, down to the letter count.
@@ -1635,14 +1765,17 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           ],
           if (_hintStep < item.hints.length - 1) ...[
             const SizedBox(height: AppSpacing.xs),
-            TextButton.icon(
-              onPressed: () {
-                _track(ClientEvents.hintUsed,
-                    wordId: item.wordId, props: {'step': _hintStep + 1});
-                setState(() => _hintStep++);
-              },
-              icon: const Icon(Icons.lightbulb_outline_rounded, size: 18),
-              label: Text(_hintStep == 0 ? s.showHint : s.easierHint),
+            TourAnchor(
+              id: AppTours.spellHint,
+              child: TextButton.icon(
+                onPressed: () {
+                  _track(ClientEvents.hintUsed,
+                      wordId: item.wordId, props: {'step': _hintStep + 1});
+                  setState(() => _hintStep++);
+                },
+                icon: const Icon(Icons.lightbulb_outline_rounded, size: 18),
+                label: Text(_hintStep == 0 ? s.showHint : s.easierHint),
+              ),
             ),
           ],
         ],
@@ -1666,7 +1799,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         const SizedBox(height: AppSpacing.md),
         Text(s.tapLetters, style: context.text.bodySmall),
         const SizedBox(height: AppSpacing.xs),
-        Wrap(
+        TourAnchor(
+          id: AppTours.spellTiles,
+          child: Wrap(
           spacing: AppSpacing.xs,
           runSpacing: AppSpacing.xs,
           children: [
@@ -1683,8 +1818,11 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               ),
           ],
         ),
+        ),
         const SizedBox(height: AppSpacing.sm),
-        Row(
+        TourAnchor(
+          id: AppTours.spellActions,
+          child: Row(
           children: [
             // Undo one letter. With decoy tiles in the pool (§36) a mis-tap
             // is ordinary, and making the learner retype the whole word for
@@ -1721,6 +1859,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               ),
             ),
           ],
+        ),
         ),
         if (result != null) ...[
           const SizedBox(height: AppSpacing.md),
@@ -1765,11 +1904,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     final word = _warmupQueue.first;
     final result = _warmupResult;
 
-    return Column(
+    return _toured(
+        'warmup',
+        AppTours.speakingWarmup,
+        Column(
       children: [
         Padding(
           padding: const EdgeInsets.all(AppSpacing.md),
-          child: Column(
+          child: TourAnchor(
+            id: AppTours.warmupHeader,
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(s.beforeYouSpeak, style: context.text.titleMedium),
@@ -1787,6 +1931,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               ),
             ],
           ),
+          ),
         ),
         Expanded(
           child: SingleChildScrollView(
@@ -1794,7 +1939,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                AppCard(
+                TourAnchor(
+                  id: AppTours.warmupWord,
+                  child: AppCard(
                   color: color.withValues(alpha: 0.07),
                   borderColor: color.withValues(alpha: 0.28),
                   child: Row(
@@ -1815,6 +1962,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                       ),
                     ],
                   ),
+                ),
                 ),
                 const SizedBox(height: AppSpacing.md),
                 for (final option in word.options)
@@ -1848,7 +1996,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           ),
         ),
       ],
-    );
+    ));
   }
 
   Future<void> _answerWarmup(WarmupWord word, String answer) async {
@@ -1903,11 +2051,16 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
     if (!_speakingBriefed && _warmupQueue.isNotEmpty) {
       return _speakingWarmup(s, color);
     }
-    return Column(
+    return _toured(
+        'chat',
+        AppTours.speakingChat,
+        Column(
       children: [
         Padding(
           padding: AppSpacing.page,
-          child: AppCard(
+          child: TourAnchor(
+            id: AppTours.speakTargets,
+            child: AppCard(
             color: color.withValues(alpha: 0.07),
             borderColor: color.withValues(alpha: 0.28),
             child: Row(
@@ -1923,9 +2076,12 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               ],
             ),
           ),
+          ),
         ),
         Expanded(
-          child: ListView.builder(
+          child: TourAnchor(
+            id: AppTours.speakChat,
+            child: ListView.builder(
             controller: _chatScroll,
             padding: const EdgeInsets.all(AppSpacing.md),
             // One more while the tutor is preparing a line: the dots a
@@ -1936,14 +2092,18 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 ? _ChatBubble(message: _chat[index], color: color)
                 : const _TypingBubble(),
           ),
+          ),
         ),
         if (!_speakingFinished)
           Padding(
             padding: const EdgeInsets.all(AppSpacing.md),
-            child: _voiceControls(s, color),
+            child: TourAnchor(
+              id: AppTours.speakControls,
+              child: _voiceControls(s, color),
+            ),
           ),
       ],
-    );
+    ));
   }
 
   /// The tutor is writing, or fetching the voice for, its next line — and
@@ -1999,17 +2159,19 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
               ),
             ],
           ),
-          // Only offered when the device can actually listen — a button that
-          // cannot work is worse than no button.
-          if (phase != _VoicePhase.unavailable)
-            TextButton.icon(
-              onPressed: () => setState(() {
-                _voiceMode = true;
-                _voice = _VoicePhase.idle;
-              }),
-              icon: const Icon(Icons.mic_rounded, size: 18),
-              label: Text(s.useVoice),
-            ),
+          // When the microphone was unavailable it asks again: a refused or
+          // unanswered permission is not a final answer (ADR-128), and the
+          // panel only changes back if the answer is now yes.
+          TextButton.icon(
+            onPressed: phase == _VoicePhase.unavailable
+                ? _retryMicrophone
+                : () => setState(() {
+                    _voiceMode = true;
+                    _voice = _VoicePhase.idle;
+                  }),
+            icon: const Icon(Icons.mic_rounded, size: 18),
+            label: Text(s.useVoice),
+          ),
         ],
       );
     }
@@ -2089,7 +2251,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
           ),
         Row(
           children: [
-            _VoiceIndicator(
+            TourAnchor(
+              id: AppTours.speakMic,
+              child: _VoiceIndicator(
               icon: icon,
               color: color,
               active: active,
@@ -2102,6 +2266,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
                 _VoicePhase.reviewing => () => unawaited(_recordAgain()),
                 _ => null,
               },
+            ),
             ),
             const SizedBox(width: AppSpacing.md),
             Expanded(child: Text(label, style: context.text.titleSmall)),
@@ -2120,7 +2285,9 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
         const SizedBox(height: AppSpacing.xs),
         Align(
           alignment: AlignmentDirectional.centerStart,
-          child: TextButton.icon(
+          child: TourAnchor(
+            id: AppTours.speakType,
+            child: TextButton.icon(
             onPressed: () async {
               await _mic.cancel();
               await _speech.stop();
@@ -2133,6 +2300,7 @@ class _SessionScreenState extends ConsumerState<SessionScreen> {
             },
             icon: const Icon(Icons.keyboard_rounded, size: 18),
             label: Text(s.typeInstead),
+          ),
           ),
         ),
       ],

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -10,8 +11,11 @@ import '../../core/l10n/app_strings.dart';
 import '../../core/models/models.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/theme/skill_visuals.dart';
+import '../../core/tour/tour.dart';
+import '../../core/tour/tour_trigger.dart';
 import '../../core/widgets/app_widgets.dart';
 import '../auth/session_controller.dart';
+import '../tour/app_tours.dart';
 
 final hubProvider = FutureProvider.autoDispose<HubState>((ref) {
   refetchWhenServerChanges(ref);
@@ -42,38 +46,71 @@ class HubScreen extends ConsumerWidget {
               s,
               onRetry: () => ref.invalidate(hubProvider),
             ),
-            data: (data) => ListView(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md,
-                AppSpacing.md,
-                AppSpacing.md,
-                // Clear the floating "Add word" button and the nav bar.
-                AppSpacing.xxl * 2,
-              ),
-              children: [
-                _Greeting(name: user?.displayName ?? ''),
-                const SizedBox(height: AppSpacing.md),
-                _DailyProgressCard(progress: data.dailyProgress),
-                const SizedBox(height: AppSpacing.lg),
-                SectionHeader(title: s.skillsHub),
-                for (final card in data.skills) ...[
-                  _SkillCardTile(card: card),
-                  const SizedBox(height: AppSpacing.xs),
-                ],
-                // Shown while it is still *coming*, not only once it is
-                // open. A learner's first week has no challenge in it
-                // (ADR-089), and a card that simply is not there teaches them
-                // the feature does not exist — so it waits in plain sight with
-                // the date on it.
-                if (data.weeklyReview.available ||
-                    data.weeklyReview.practiceAvailable ||
-                    data.weeklyReview.nextAvailableAt != null) ...[
+            // The first time the hub has something to show, it is explained
+            // (ADR-128) — the learner's first screen after placement.
+            data: (data) => TourTrigger(
+              tours: (context, s) =>
+                  AppTours.hub(context, s, user?.displayName ?? ''),
+              child: ListView(
+                // Builds every card, not only the visible ones, so the tour can
+                // find and scroll to the ones below the fold.
+                scrollCacheExtent: const ScrollCacheExtent.pixels(2000),
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.md,
+                  AppSpacing.md,
+                  AppSpacing.md,
+                  // Clear the floating "Add word" button and the nav bar.
+                  AppSpacing.xxl * 2,
+                ),
+                children: [
+                  _Greeting(name: user?.displayName ?? ''),
                   const SizedBox(height: AppSpacing.md),
-                  _WeeklyReviewCard(status: data.weeklyReview),
+                  TourAnchor(
+                    id: AppTours.hubToday,
+                    child: _DailyProgressCard(progress: data.dailyProgress),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  SectionHeader(title: s.skillsHub),
+                  TourAnchor(
+                    id: AppTours.hubSkills,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (final (i, card) in data.skills.indexed) ...[
+                          if (i > 0) const SizedBox(height: AppSpacing.xs),
+                          if (card.skill == SkillType.reading)
+                            TourAnchor(
+                              id: AppTours.hubReading,
+                              child: _SkillCardTile(card: card),
+                            )
+                          else
+                            _SkillCardTile(card: card),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.xs),
+                  // Shown while it is still *coming*, not only once it is
+                  // open. A learner's first week has no challenge in it
+                  // (ADR-089), and a card that simply is not there teaches them
+                  // the feature does not exist — so it waits in plain sight with
+                  // the date on it.
+                  if (data.weeklyReview.available ||
+                      data.weeklyReview.practiceAvailable ||
+                      data.weeklyReview.nextAvailableAt != null) ...[
+                    const SizedBox(height: AppSpacing.md),
+                    TourAnchor(
+                      id: AppTours.hubWeekly,
+                      child: _WeeklyReviewCard(status: data.weeklyReview),
+                    ),
+                  ],
+                  const SizedBox(height: AppSpacing.lg),
+                  TourAnchor(
+                    id: AppTours.hubCounts,
+                    child: _VocabularySummary(counts: data.vocabulary),
+                  ),
                 ],
-                const SizedBox(height: AppSpacing.lg),
-                _VocabularySummary(counts: data.vocabulary),
-              ],
+              ),
             ),
           ),
         ),
@@ -251,8 +288,9 @@ class _WeeklyReviewCard extends ConsumerWidget {
 
     // Waiting, not broken. A muted card that names the day is the difference
     // between "this is coming" and "this does not work".
-    final accent =
-        tappable ? color : context.colors.onSurface.withValues(alpha: 0.45);
+    final accent = tappable
+        ? color
+        : context.colors.onSurface.withValues(alpha: 0.45);
 
     return AppCard(
       borderColor: accent.withValues(alpha: tappable ? 0.35 : 0.2),

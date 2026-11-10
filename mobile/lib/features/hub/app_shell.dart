@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../../app/router.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../core/tour/tour.dart';
+import '../tour/app_tours.dart';
 
 /// Bottom-navigation shell: Skills Hub · Vocabulary · Settings, with Add Word
 /// always one tap away.
@@ -21,10 +23,13 @@ class AppShell extends ConsumerWidget {
       body: shell,
       floatingActionButton: shell.currentIndex == 2
           ? null
-          : FloatingActionButton.extended(
-              onPressed: () => context.push(Routes.addWord),
-              icon: const Icon(Icons.add_rounded),
-              label: Text(s.addWord),
+          : TourAnchor(
+              id: AppTours.hubAdd,
+              child: FloatingActionButton.extended(
+                onPressed: () => context.push(Routes.addWord),
+                icon: const Icon(Icons.add_rounded),
+                label: Text(s.addWord),
+              ),
             ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
@@ -42,14 +47,28 @@ class AppShell extends ConsumerWidget {
               selectedIcon: const Icon(Icons.grid_view_rounded),
               label: s.skillsHub,
             ),
+            // The icons carry the tour's anchors (ADR-128): the bar gives
+            // no handle on a destination as a whole.
             NavigationDestination(
-              icon: const Icon(Icons.style_outlined),
-              selectedIcon: const Icon(Icons.style_rounded),
+              icon: const TourAnchor(
+                id: AppTours.navWords,
+                child: Icon(Icons.style_outlined),
+              ),
+              selectedIcon: const TourAnchor(
+                id: AppTours.navWords,
+                child: Icon(Icons.style_rounded),
+              ),
               label: s.myWords,
             ),
             NavigationDestination(
-              icon: const Icon(Icons.settings_outlined),
-              selectedIcon: const Icon(Icons.settings_rounded),
+              icon: const TourAnchor(
+                id: AppTours.navSettings,
+                child: Icon(Icons.settings_outlined),
+              ),
+              selectedIcon: const TourAnchor(
+                id: AppTours.navSettings,
+                child: Icon(Icons.settings_rounded),
+              ),
               label: s.settings,
             ),
           ],

@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/audio/speech_recognition_service.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../core/tour/tour.dart';
 import '../../core/widgets/app_widgets.dart';
+import '../tour/app_tours.dart';
 
 /// A spoken answer, for the Speaking part of the placement test.
 ///
@@ -40,7 +42,8 @@ class SpokenAnswerField extends ConsumerStatefulWidget {
   ConsumerState<SpokenAnswerField> createState() => _SpokenAnswerFieldState();
 }
 
-class _SpokenAnswerFieldState extends ConsumerState<SpokenAnswerField> {
+class _SpokenAnswerFieldState extends ConsumerState<SpokenAnswerField>
+    with WidgetsBindingObserver {
   final _typed = TextEditingController();
 
   bool _listening = false;
@@ -67,8 +70,19 @@ class _SpokenAnswerFieldState extends ConsumerState<SpokenAnswerField> {
   void initState() {
     super.initState();
     // Asked here rather than at app start, so the permission prompt appears
-    // with the microphone visible on screen and its purpose obvious.
-    unawaited(_checkMicrophone());
+    // with the microphone visible on screen and its purpose obvious — but
+    // after this question's tour, never on top of it (ADR-128).
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_checkMicrophone(afterTour: true));
+  }
+
+  /// Back from the permission dialog, or from Settings: a microphone that was
+  /// unavailable a moment ago may not be any more.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _micAvailable == false) {
+      unawaited(_checkMicrophone());
+    }
   }
 
   @override
@@ -79,14 +93,25 @@ class _SpokenAnswerFieldState extends ConsumerState<SpokenAnswerField> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _recognition?.cancel().ignore();
     _typed.dispose();
     super.dispose();
   }
 
-  Future<void> _checkMicrophone() async {
-    final available = await ref.read(speechRecognitionProvider).initialise();
-    if (mounted) setState(() => _micAvailable = available);
+  bool _checking = false;
+
+  Future<void> _checkMicrophone({bool afterTour = false}) async {
+    if (_checking) return;
+    _checking = true;
+    try {
+      if (afterTour) await AppTour.whenIdle();
+      if (!mounted) return;
+      final available = await _recognition!.initialise();
+      if (mounted) setState(() => _micAvailable = available);
+    } finally {
+      _checking = false;
+    }
   }
 
   /// Opens the microphone and leaves it open (§17).
@@ -150,12 +175,17 @@ class _SpokenAnswerFieldState extends ConsumerState<SpokenAnswerField> {
               borderColor: context.palette.warning.withValues(alpha: 0.35),
               child: Row(
                 children: [
-                  Icon(Icons.mic_off_rounded,
-                      size: 18, color: context.palette.warning),
+                  Icon(
+                    Icons.mic_off_rounded,
+                    size: 18,
+                    color: context.palette.warning,
+                  ),
                   const SizedBox(width: AppSpacing.xs),
                   Expanded(
-                    child: Text(s.micUnavailableType,
-                        style: context.text.bodySmall),
+                    child: Text(
+                      s.micUnavailableType,
+                      style: context.text.bodySmall,
+                    ),
                   ),
                 ],
               ),
@@ -169,12 +199,17 @@ class _SpokenAnswerFieldState extends ConsumerState<SpokenAnswerField> {
             decoration: InputDecoration(hintText: s.writeYourAnswer),
             onChanged: widget.onTranscript,
           ),
-          if (_micAvailable == true) ...[
+          // Offered after a refusal too: the answer may have changed — or
+          // never been given, if the prompt was still up when the check
+          // gave up.
+          if (_micAvailable != null) ...[
             const SizedBox(height: AppSpacing.xs),
             Align(
               alignment: AlignmentDirectional.centerStart,
               child: TextButton.icon(
-                onPressed: () => setState(() => _typing = false),
+                onPressed: _micAvailable == true
+                    ? () => setState(() => _typing = false)
+                    : () => _checkMicrophone(),
                 icon: const Icon(Icons.mic_rounded, size: 18),
                 label: Text(s.useVoice),
               ),
@@ -190,11 +225,14 @@ class _SpokenAnswerFieldState extends ConsumerState<SpokenAnswerField> {
         Center(
           child: Column(
             children: [
-              _MicButton(
-                listening: _listening && !_transcribing,
-                enabled:
-                    widget.enabled && _micAvailable != null && !_transcribing,
-                onTap: _listening ? _stopListening : _startListening,
+              TourAnchor(
+                id: AppTours.placementMic,
+                child: _MicButton(
+                  listening: _listening && !_transcribing,
+                  enabled:
+                      widget.enabled && _micAvailable != null && !_transcribing,
+                  onTap: _listening ? _stopListening : _startListening,
+                ),
               ),
               const SizedBox(height: AppSpacing.sm),
               Text(
@@ -203,8 +241,8 @@ class _SpokenAnswerFieldState extends ConsumerState<SpokenAnswerField> {
                     : _listening
                     ? s.tapWhenDone
                     : widget.transcript.isEmpty
-                        ? s.tapThenSpeak
-                        : s.speakAgain,
+                    ? s.tapThenSpeak
+                    : s.speakAgain,
                 style: context.text.bodyMedium?.copyWith(
                   color: context.colors.onSurface.withValues(alpha: 0.7),
                 ),

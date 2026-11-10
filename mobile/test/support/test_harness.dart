@@ -95,13 +95,21 @@ List<Override> testOverrides({
   ThemeMode themeMode = ThemeMode.system,
   NotificationScheduler? scheduler,
   double latencyScale = 0,
+  // Every guided tour already seen (ADR-128) — a dark layer that swallows
+  // taps would fail every test not written about it. `guided_tour_test`
+  // turns them back on.
+  bool toursSeen = true,
 }) =>
     [
       appEnvironmentProvider.overrideWithValue(
         const AppEnvironment(useMockBackend: true, baseUrl: ''),
       ),
       appPreferencesProvider.overrideWithValue(
-          InMemoryAppPreferences(locale: locale, themeMode: themeMode)),
+          InMemoryAppPreferences(
+            locale: locale,
+            themeMode: themeMode,
+            toursSeen: toursSeen,
+          )),
       tokenStoreProvider.overrideWith((ref) => FakeTokenStore()),
       // Pinned for every test, not only the ones about notifications: the app
       // schedules reminders on sign-in, so without this every signed-in test
@@ -143,6 +151,7 @@ Future<void> bootApp(
   /// to do — a fake voice engine, say.
   List<Override> overrides = const [],
   NotificationScheduler? scheduler,
+  bool toursSeen = true,
 }) async {
   if (surfaceSize != null) {
     tester.view.physicalSize = surfaceSize;
@@ -158,6 +167,7 @@ Future<void> bootApp(
           themeMode: themeMode,
           scheduler: scheduler,
           latencyScale: latencyScale,
+          toursSeen: toursSeen,
         ),
         ...overrides,
       ],
@@ -172,12 +182,20 @@ Future<void> bootAndSignIn(
   Size surfaceSize = const Size(1200, 2600),
   NotificationScheduler? scheduler,
   double latencyScale = 0,
+  bool toursSeen = true,
 }) async {
   await bootApp(tester,
       surfaceSize: surfaceSize,
       scheduler: scheduler,
-      latencyScale: latencyScale);
+      latencyScale: latencyScale,
+      toursSeen: toursSeen);
   await tester.pumpAndSettle();
   await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
-  await tester.pumpAndSettle();
+  // A tour's ring pulses until it is closed, so with tours on this cannot
+  // wait for the screen to go still.
+  if (toursSeen) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump(const Duration(milliseconds: 500));
+  }
 }

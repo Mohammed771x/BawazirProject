@@ -27,7 +27,6 @@ class SpeechRecognitionService {
 
   final SpeechToText _speech;
 
-  bool _initialised = false;
   bool _available = false;
   bool _listening = false;
 
@@ -86,13 +85,34 @@ class SpeechRecognitionService {
   /// Called before the first listen rather than at construction, so the
   /// permission prompt appears when the learner opens a Speaking session
   /// and can see why it is being asked.
+  ///
+  /// A "no" is not remembered (ADR-128). The platform call asks for two
+  /// permissions, and a learner who took longer than the timeout to answer
+  /// both — or who said no and then changed their mind in Settings — used to
+  /// be told "this device cannot listen" until the app was restarted. Now the
+  /// next call asks again, and one still waiting on the learner is joined
+  /// rather than started twice.
   Future<bool> initialise() async {
-    if (_initialised) return _available;
+    if (_available) return true;
 
-    _initialised = true;
-
+    final pending = _platformInit ??= _initialisePlatform();
     try {
-      _available = await _speech
+      _available = await pending.timeout(const Duration(seconds: 10));
+    } on TimeoutException {
+      debugPrint('WordOS SpeechToText initialize timed out');
+      // Still waiting on the learner: the next call joins the same request.
+      return false;
+    }
+    if (!_available) _platformInit = null;
+    return _available;
+  }
+
+  /// Joined by every [initialise] until it answers.
+  Future<bool>? _platformInit;
+
+  Future<bool> _initialisePlatform() async {
+    try {
+      return await _speech
           .initialize(
             onError: (error) {
               _listening = false;
@@ -117,21 +137,7 @@ class SpeechRecognitionService {
                 unawaited(_resume());
               }
             },
-          )
-          .timeout(
-            const Duration(seconds: 10),
-            onTimeout: () {
-              debugPrint(
-                'WordOS SpeechToText initialize timed out',
-              );
-
-              return false;
-            },
           );
-
-      debugPrint(
-        'WordOS SpeechToText available: $_available',
-      );
     } catch (e, stackTrace) {
       debugPrint(
         'WordOS SpeechToText initialize exception: $e',
@@ -141,10 +147,8 @@ class SpeechRecognitionService {
         '$stackTrace',
       );
 
-      _available = false;
+      return false;
     }
-
-    return _available;
   }
 
     /// Opens the microphone and leaves it open until [stopAndRead] is called.
