@@ -26,7 +26,10 @@ void main() {
     // Immediately — the learner must not have to wait out the sentence.
     await speech.toggle('word:1', 'research');
     expect(speech.isSpeakingId('word:1'), isFalse);
-    expect(provider.stops, 1);
+    // Twice: once to clear the way before speaking, once for the second tap.
+    // The voice is told to stop whether or not anything is believed to be
+    // speaking (ADR-135).
+    expect(provider.stops, 2);
   });
 
   test('only one utterance plays at a time', () async {
@@ -133,11 +136,32 @@ void main() {
         reason: 'being replaced is being cut short');
   });
 
-  test('stopping nothing counts nothing', () async {
+  // ADR-135. These two used to be one rule — "stopping nothing counts
+  // nothing" — and that rule is what let a voice the service had lost track of
+  // talk on over the next question: every stop was only as good as the
+  // service's belief about what was playing.
+
+  test('a stop reaches the voice even when nothing is believed to be speaking',
+      () async {
     final before = speech.interruptions;
+    final stops = provider.stops;
+
     await speech.stop();
+
+    expect(provider.stops, stops + 1,
+        reason: 'the belief can be wrong, and then nothing else can silence '
+            'what is playing');
+    expect(speech.interruptions, before + 1,
+        reason: 'a sequence between two sentences has no utterance to its '
+            'name, and a stop that lands there must still end it');
+  });
+
+  test('speaking into silence is not an interruption', () async {
+    final before = speech.interruptions;
+    await speech.speak('word:1', 'research');
     expect(speech.interruptions, before,
-        reason: 'a no-op stop must not look like somebody cutting a clip off');
+        reason: 'a clip starting its second sentence has not been cut short '
+            'by starting it');
   });
 
   // ── Teardown (ADR-080) ──────────────────────────────────────────────────

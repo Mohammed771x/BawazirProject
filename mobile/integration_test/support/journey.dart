@@ -209,7 +209,8 @@ Future<String> addWord(WidgetTester tester, String word) async {
 }
 
 /// Opens a skill from the Hub and waits out the AI call.
-Future<void> openSkill(WidgetTester tester, String skill) async {
+Future<void> openSkill(WidgetTester tester, String skill,
+    {String? meaning}) async {
   expect(isOnHub(tester), isTrue,
       reason: 'expected the Hub before opening $skill. '
           'Visible: ${visibleText(tester)}');
@@ -218,7 +219,7 @@ Future<void> openSkill(WidgetTester tester, String skill) async {
 
   // Speaking opens on a warm-up: each word, four meanings, answered until they
   // are all right. Only then does the tutor speak.
-  await clearSpeakingWarmup(tester);
+  await clearSpeakingWarmup(tester, meaning: meaning);
 }
 
 /// Answers the Speaking warm-up until it is done.
@@ -248,6 +249,10 @@ Future<void> clearSpeakingWarmup(WidgetTester tester, {String? meaning}) async {
     await tester.ensureVisible(target);
     await tester.tap(target);
     await settle(tester, total: const Duration(seconds: 20));
+    // The answer is held on screen before the next word appears — 550 ms when
+    // right, 1.8 s when wrong — and a tap during the hold is ignored. Tapping
+    // into it anyway used up this loop's attempts on taps that did nothing.
+    await tester.pump(const Duration(milliseconds: 2000));
   }
 }
 

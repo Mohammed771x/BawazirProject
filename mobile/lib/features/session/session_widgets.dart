@@ -13,6 +13,7 @@ import '../../core/theme/app_tokens.dart';
 import '../../core/theme/skill_visuals.dart';
 import '../../core/widgets/app_widgets.dart';
 import 'clip_playback.dart';
+import 'listening_player.dart';
 
 /// Renders generated content with the target words underlined/highlighted,
 /// exactly as the documents require — visible, but never explained inline.
@@ -228,7 +229,7 @@ class SessionResultView extends ConsumerWidget {
                 const SizedBox(height: AppSpacing.lg),
                 if (result.skill == SkillType.listening) ...[
                   SectionHeader(title: s.listenAgain),
-                  ReplayPlayer(text: transcript!.text, color: color),
+                  ListeningPlayer(text: transcript!.text, color: color),
                   const SizedBox(height: AppSpacing.lg),
                 ],
                 SectionHeader(title: s.showTranscript),
@@ -513,88 +514,6 @@ class _Sentence extends StatelessWidget {
             ),
           ),
           TextSpan(text: text.substring(index + target.length)),
-        ],
-      ),
-    );
-  }
-}
-
-/// Plays one sentence for a Listening vocabulary item. No transcript is shown:
-/// the whole point of the skill is understanding from audio (demo review §33).
-/// Play, stop and slow — the recording, handed back after the test.
-///
-/// Deliberately not autoplaying, unlike the player during the session: nothing
-/// should start talking while the learner is reading their result. They press
-/// it when they want it.
-class ReplayPlayer extends ConsumerStatefulWidget {
-  const ReplayPlayer({super.key, required this.text, required this.color});
-
-  final String text;
-  final Color color;
-
-  @override
-  ConsumerState<ReplayPlayer> createState() => _ReplayPlayerState();
-}
-
-class _ReplayPlayerState extends ConsumerState<ReplayPlayer> {
-  bool _slow = false;
-
-  String get _id => 'replay:${widget.text.hashCode}';
-
-  Future<void> _toggle() async {
-    final speech = ref.read(speechServiceProvider);
-    if (speech.isSpeakingId(_id)) {
-      await speech.stop();
-      return;
-    }
-    await speech.speak(_id, widget.text,
-        rate: _slow ? SpeechRate.slow : SpeechRate.normal);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final s = ref.watch(stringsProvider);
-    // Read from the service, so the icon cannot claim something is playing
-    // when it is not.
-    final playing = ref.watch(speechServiceProvider).isSpeakingId(_id);
-
-    return AppCard(
-      color: widget.color.withValues(alpha: 0.06),
-      borderColor: widget.color.withValues(alpha: 0.28),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              IconButton.filledTonal(
-                onPressed: _toggle,
-                iconSize: 28,
-                icon: Icon(playing
-                    ? Icons.stop_rounded
-                    : Icons.play_arrow_rounded),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: Text(
-                  playing ? s.stopAudio : s.listenAgain,
-                  style: context.text.titleSmall,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          SegmentedButton<bool>(
-            segments: [
-              ButtonSegment(value: false, label: Text(s.normalSpeed)),
-              ButtonSegment(value: true, label: Text(s.slowSpeed)),
-            ],
-            selected: {_slow},
-            onSelectionChanged: (value) {
-              setState(() => _slow = value.first);
-              // Applied at once: a speed control that waits for the next press
-              // is a setting, not a control.
-              unawaited(_toggle());
-            },
-          ),
         ],
       ),
     );

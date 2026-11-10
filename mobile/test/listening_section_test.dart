@@ -7,6 +7,7 @@ import 'package:wordos/core/audio/speech_provider.dart';
 import 'package:wordos/core/audio/speech_service.dart';
 import 'package:wordos/core/widgets/app_widgets.dart';
 import 'package:wordos/core/widgets/speaker_button.dart';
+import 'package:wordos/features/session/listening_player.dart';
 import 'package:wordos/features/session/session_widgets.dart';
 
 import 'support/test_harness.dart';
@@ -216,7 +217,7 @@ void main() {
 
     // During the session the audio was the test; afterwards it is study
     // material, and this is the moment the learner most wants it back.
-    expect(find.byType(ReplayPlayer), findsOneWidget,
+    expect(find.byType(ListeningPlayer), findsOneWidget,
         reason: 'the recording should be replayable from the result');
 
     // Nothing plays by itself here — they are reading their score.
@@ -226,7 +227,7 @@ void main() {
         reason: 'the result screen must not start talking on its own');
 
     // Order: answers, then audio, then text (§7).
-    final replayY = tester.getTopLeft(find.byType(ReplayPlayer)).dy;
+    final replayY = tester.getTopLeft(find.byType(ListeningPlayer)).dy;
     final textY = tester.getTopLeft(find.text('Show transcript')).dy;
     expect(replayY, lessThan(textY),
         reason: 'hearing it again comes before reading it');

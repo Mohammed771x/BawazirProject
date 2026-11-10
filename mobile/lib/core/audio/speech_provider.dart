@@ -178,8 +178,8 @@ class DeviceSpeechProvider implements SpeechProvider {
       await _tts.setPitch(1.0);
       await _selectBestVoice();
 
-      _tts.setCompletionHandler(_finished);
-      _tts.setCancelHandler(_finished);
+      _tts.setCompletionHandler(_completed);
+      _tts.setCancelHandler(_cancelled);
       // iOS reports this from `willSpeakRangeOfSpeechString`, Android from
       // `onRangeStart`. Neither is guaranteed, so nothing may depend on it
       // arriving — it refines a position that is already usable without it.
@@ -188,6 +188,8 @@ class DeviceSpeechProvider implements SpeechProvider {
       });
       _tts.setErrorHandler((dynamic _) {
         _available = false;
+        _outstanding = 0;
+        _stale = 0;
         _finished();
       });
     });
@@ -231,15 +233,93 @@ class DeviceSpeechProvider implements SpeechProvider {
 
   void _finished() => _onComplete?.call();
 
+  /// Utterances handed to the engine that it has not yet reported the end of.
+  int _outstanding = 0;
+
+  /// Of those, the ones [stop] cut short: their end is still to be reported,
+  /// and is not news when it is.
+  int _stale = 0;
+  DateTime? _stoppedAt;
+
+  /// How long after a [stop] an ending is still taken to be the stopped
+  /// utterance's. They arrive within a frame or two; this only bounds the
+  /// damage on a platform that never sends one.
+  static const _staleWindow = Duration(seconds: 1);
+
+  /// The platform reports the end of an utterance we stopped — and reports it
+  /// **late**, as a message of its own after `stop()` has returned. iOS sends
+  /// it as an ordinary completion, Android as a cancellation.
+  ///
+  /// Every caller stops the old utterance and starts the new one in the same
+  /// breath, so by the time the old one's ending arrived the new one was
+  /// speaking, and "that utterance is over" was applied to it instead: the
+  /// service forgot a voice that was still talking. Nothing could silence it
+  /// after that, because every stop meant "stop what you know to be playing"
+  /// — so a sentence started over a word's pronunciation followed the learner
+  /// into the next question, which is how this was reported. Measured on the
+  /// simulator: the second utterance was "finished" within 250 ms of starting
+  /// and went on for seven seconds (ADR-135).
+  ///
+  /// So endings are counted. One that belongs to an utterance [stop] already
+  /// accounted for is swallowed; whoever stopped it knows.
+  bool _isStaleEnding() {
+    final at = _stoppedAt;
+    if (_stale > 0 &&
+        at != null &&
+        DateTime.now().difference(at) < _staleWindow) {
+      _stale--;
+      return true;
+    }
+    _stale = 0;
+    return false;
+  }
+
+  void _completed() {
+    if (_isStaleEnding()) return;
+    if (_outstanding > 0) _outstanding--;
+    _finished();
+  }
+
+  /// A cancellation is never the natural end of the utterance now speaking,
+  /// so one that answers our own [stop] is dropped whatever the clock says.
+  /// One that arrives unasked — a phone call, the system taking the audio —
+  /// is still the end of what was playing.
+  void _cancelled() {
+    if (_stale > 0) {
+      _stale--;
+      return;
+    }
+    if (_outstanding > 0) _outstanding--;
+    _finished();
+  }
+
+  /// Whether the engine has been handed anything since it was last stopped.
+  ///
+  /// A fact about what this class asked for, not a belief about what the
+  /// engine is doing: sound can only exist if a `speak` went out after the
+  /// last `stop`. It is what lets [stop] be called unconditionally (ADR-135)
+  /// without a platform call — and, under test, a five-second timer — every
+  /// time a screen that never spoke goes away.
+  bool _handedOver = false;
+
+  /// Bumped by every [speak] and [stop], so a `speak` that was overtaken while
+  /// it was still setting the rate does not start talking after the stop that
+  /// was meant to prevent it.
+  int _ticket = 0;
+
   @override
   Future<bool> speak(String text, {SpeechRate rate = SpeechRate.normal}) async {
     if (text.trim().isEmpty) return false;
     await initialise();
 
+    final ticket = ++_ticket;
     final ok = await _guard(() async {
       await _tts.setSpeechRate(
           rate == SpeechRate.slow ? _slowRate : _normalRate);
+      if (ticket != _ticket) return;
+      _handedOver = true;
       await _tts.speak(text);
+      _outstanding++;
     });
 
     if (!ok) _available = false;
@@ -248,6 +328,13 @@ class DeviceSpeechProvider implements SpeechProvider {
 
   @override
   Future<void> stop() async {
+    _ticket++;
+    if (!_handedOver) return;
+    _handedOver = false;
+    // Whatever the engine still owes an ending for is being ended here.
+    _stale += _outstanding;
+    _outstanding = 0;
+    _stoppedAt = DateTime.now();
     await _guard(() => _tts.stop());
   }
 

@@ -183,6 +183,22 @@ class HybridSpeechProvider implements RoutedSpeechProvider {
   @override
   Duration get startupAllowance => fetchTimeout + const Duration(seconds: 5);
 
+  /// Whether sound is actually coming out, asked of the player rather than of
+  /// this class's own bookkeeping.
+  ///
+  /// The two are supposed to agree, and the bug this exists to catch is the
+  /// one where they do not: every flag says "stopped" while the recording
+  /// plays on over the next question. A journey test reads this after each
+  /// step that should have silenced the voice.
+  @visibleForTesting
+  bool get audible {
+    if (_voice == _Voice.device) return true;
+    final player = _playerInstance;
+    if (player == null || !player.playing) return false;
+    final state = player.processingState;
+    return state != ProcessingState.completed && state != ProcessingState.idle;
+  }
+
   @override
   bool get isAvailable => _device.isAvailable || !_cloudPaused;
 
@@ -410,7 +426,13 @@ class HybridSpeechProvider implements RoutedSpeechProvider {
   @override
   Future<void> stop() async {
     _generation++;
+    final was = _voice;
     await _silence();
+    // The phone's voice is stopped even when this class does not think it is
+    // the one speaking: a stop from outside is the last line of defence
+    // against a voice the bookkeeping has lost (ADR-135). `_silence` has
+    // already done it when the phone was known to be speaking.
+    if (was != _Voice.device) await _device.stop();
   }
 
   Future<void> _silence() async {

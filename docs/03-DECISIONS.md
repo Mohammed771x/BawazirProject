@@ -6640,3 +6640,52 @@ with care: the lab saw the model name an internal metric or attach a ratio to
 the wrong denominator once each. Past the free tier the chat keeps answering on
 the paid Gemini key, a few tenths of a cent a question, and says so on each
 answer; Groq's paid tier would be the same code with a different key.
+
+## ADR-135 — A stop always reaches the voice; the end of a stopped utterance is not its replacement's
+
+**Date:** 2026-11-11 · **Status:** Accepted · client only
+
+**Reported:** in Listening, a sentence that was playing when the learner
+answered followed them into the next question.
+
+**Found on the simulator** (`integration_test/voice_takeover_probe_test.dart`):
+the platform reports the end of an utterance we stopped *late* — a message of
+its own, after `stop()` has returned. iOS sends it as a completion, Android as
+a cancellation. Every caller stops the old utterance and starts the new one in
+the same breath, so the old one's ending arrived once the new one was speaking
+and was applied to it: `SpeechService` forgot a voice that was still talking.
+Measured: the second utterance was "finished" within 250 ms and went on for
+seven seconds. After that nothing could silence it, because every stop began
+with "if nothing is speaking, return" — leaving the question, leaving the
+session, all no-ops. It needs the phone's own voice for the second utterance:
+the mock, or the real backend whenever the server voice is slow (a word of
+40 characters or fewer falls back after six seconds), which is why it showed
+on a learner's phone and not in a run against a warm local server.
+
+**Decided:**
+
+1. `DeviceSpeechProvider` counts endings. A `stop` marks every utterance the
+   engine still owes an ending for as stale; that ending is swallowed when it
+   comes. A cancellation nobody asked for (a phone call) is still an ending.
+2. `SpeechService.stop` tells the voice to stop whether or not it believes
+   anything is speaking, and counts as an interruption either way, so a stop
+   landing between two sentences of a clip ends the clip. `speak` taking a free
+   voice is not an interruption.
+3. `HybridSpeechProvider.stop` stops the phone's voice too, whichever voice it
+   thinks is speaking. `DeviceSpeechProvider.stop` asks the platform nothing
+   when no utterance was handed over since the last stop, so this is free.
+
+**Also:** the recording handed back with a Listening result used the first
+player ever written — play and stop — while the clip before the questions had
+since learnt to pause on a word, seek and jump. They are now one widget,
+`ListeningPlayer` (`lib/features/session/listening_player.dart`);
+`ReplayPlayer` is gone.
+
+**Sections "opening by themselves"** — not reproduced against the real backend
+(`integration_test/gap_holds_test.dart`: a new learner has Reading only; after
+passing it Listening reads "Next on" two days out and the other three do not
+open). Two things do open every section at once and neither is the pipeline:
+the app's mock seeds a word at every skill for a new sign-up
+(`MockEngine(openEverySkillForNewAccounts: true)`, ADR-128's demo aid), and
+the seeded tester account. Which one the report was is still to be confirmed
+with the learner's account and build.

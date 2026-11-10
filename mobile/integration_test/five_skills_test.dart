@@ -9,7 +9,7 @@ import 'support/journey.dart';
 /// Flutter → ASP.NET Core → Python → Gemini → PostgreSQL and back.
 ///
 /// One word is carried the whole way — Reading → Listening → Speaking →
-/// Writing → Spelling → Active — so each screen is exercised on a word that
+/// Spelling → Writing → Active — so each screen is exercised on a word that
 /// genuinely arrived there through the pipeline, not one placed by a fixture.
 ///
 /// The two-day gaps are collapsed for this run (`WordOs__SkillIntervalDays=0`
@@ -72,7 +72,7 @@ void main() {
 
     // ── Speaking ─────────────────────────────────────────────────────────
     await backToHub(tester);
-    await openSkill(tester, 'Speaking');
+    await openSkill(tester, 'Speaking', meaning: meaning);
 
     // Speaking opens on a warm-up — each word, four meanings — so that nobody
     // walks into a conversation about words they cannot recall. `openSkill`
@@ -109,45 +109,9 @@ void main() {
 
     await expectPass(tester, 'Speaking');
 
-    // ── Writing ──────────────────────────────────────────────────────────
-    await backToHub(tester);
-    await openSkill(tester, 'Writing');
-
-    final prompt = visibleText(tester)
-        .firstWhere((t) => t.contains('research'), orElse: () => '');
-    expect(prompt, isNotEmpty,
-        reason: 'Writing asks the learner to use *this* word, never a generic '
-            'topic (§41–43). Visible: ${visibleText(tester).take(6)}');
-    debugPrint('✓ WRITING · prompt: $prompt');
-
-    // Deliberately contains a grammar slip — "a research" is uncountable — but
-    // uses the word correctly. §32 says that must still pass, and the decision
-    // is the backend's, not the model's (ADR-015).
-    await typeInto(tester, TextField,
-        'Yesterday I did a research about sleep and it change my daily habits.');
-    await tapAny(tester, ['Check']);
-
-    // While Gemini is evaluating, the button reads "Evaluating" — there is no
-    // spinner to wait on, so waiting on the verdict itself is the only honest
-    // way to know the round trip finished.
-    await waitFor(
-        tester,
-        () => visibleText(tester)
-            .any((t) => t.contains('Correct') || t.contains('Not quite')),
-        total: const Duration(seconds: 120));
-
-    final feedback = visibleText(tester);
-    expect(feedback.any((t) => t.contains('Correct')), isTrue,
-        reason: 'a grammar slip alone must not fail correct usage. '
-            'Visible: ${feedback.take(8)}');
-    expect(feedback.any((t) => t.length > 30), isTrue,
-        reason: 'Gemini should return real feedback, not an empty banner');
-    debugPrint('✓ WRITING · passed with feedback despite the grammar slip');
-
-    await tapAny(tester, ['Next', 'Finish', 'Continue']);
-    await settle(tester, total: const Duration(seconds: 60));
-    await expectPass(tester, 'Writing');
-
+    // Spelling comes before Writing (ADR-087). This journey used to ask for
+    // Writing straight after Speaking, and the Hub — correctly — would not
+    // open it: a skill opens when a word arrives at it, never before.
     // ── Spelling ─────────────────────────────────────────────────────────
     await backToHub(tester);
     await openSkill(tester, 'Spelling');
@@ -209,13 +173,51 @@ void main() {
 
     await tapAny(tester, ['Next', 'Finish', 'Continue']);
     await settle(tester, total: const Duration(seconds: 60));
+    await expectPass(tester, 'Spelling');
 
+    // ── Writing ──────────────────────────────────────────────────────────
+    await backToHub(tester);
+    await openSkill(tester, 'Writing');
+
+    final prompt = visibleText(tester)
+        .firstWhere((t) => t.contains('research'), orElse: () => '');
+    expect(prompt, isNotEmpty,
+        reason: 'Writing asks the learner to use *this* word, never a generic '
+            'topic (§41–43). Visible: ${visibleText(tester).take(6)}');
+    debugPrint('✓ WRITING · prompt: $prompt');
+
+    // Deliberately contains a grammar slip — "a research" is uncountable — but
+    // uses the word correctly. §32 says that must still pass, and the decision
+    // is the backend's, not the model's (ADR-015).
+    await typeInto(tester, TextField,
+        'Yesterday I did a research about sleep and it change my daily habits.');
+    await tapAny(tester, ['Check']);
+
+    // While Gemini is evaluating, the button reads "Evaluating" — there is no
+    // spinner to wait on, so waiting on the verdict itself is the only honest
+    // way to know the round trip finished.
+    await waitFor(
+        tester,
+        () => visibleText(tester)
+            .any((t) => t.contains('Correct') || t.contains('Not quite')),
+        total: const Duration(seconds: 120));
+
+    final feedback = visibleText(tester);
+    expect(feedback.any((t) => t.contains('Correct')), isTrue,
+        reason: 'a grammar slip alone must not fail correct usage. '
+            'Visible: ${feedback.take(8)}');
+    expect(feedback.any((t) => t.length > 30), isTrue,
+        reason: 'Gemini should return real feedback, not an empty banner');
+    debugPrint('✓ WRITING · passed with feedback despite the grammar slip');
+
+    await tapAny(tester, ['Next', 'Finish', 'Continue']);
+    await settle(tester, total: const Duration(seconds: 60));
     // Five skills passed → Mature → Active vocabulary.
     final result = visibleText(tester).join(' | ');
     expect(result.toLowerCase(), contains('active'),
         reason: 'passing the last skill should activate the word. '
             'Visible: $result');
-    debugPrint('✓ SPELLING · word reached Active vocabulary');
+    debugPrint('✓ WRITING · word reached Active vocabulary');
 
     // Spelling carries no CEFR band anywhere in the UI (ADR-008).
     await backToHub(tester);

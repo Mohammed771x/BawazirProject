@@ -74,6 +74,15 @@ class SpeechService extends ChangeNotifier {
 
   bool get isSpeaking => _utteranceId != null;
 
+  /// Whether anything can be *heard*, as far as the voice itself knows —
+  /// see [HybridSpeechProvider.audible]. For journey tests only.
+  @visibleForTesting
+  bool get audible {
+    final provider = _provider;
+    // ignore: invalid_use_of_visible_for_testing_member
+    return provider is HybridSpeechProvider ? provider.audible : isSpeaking;
+  }
+
   /// Every call here is asynchronous and every caller is a widget, so a screen
   /// that silences the voice as it goes away lands *after* the scope holding
   /// this service has been torn down. `ChangeNotifier` asserts on a notify
@@ -133,7 +142,10 @@ class SpeechService extends ChangeNotifier {
     SpeechRate rate = SpeechRate.normal,
   }) async {
     if (_disposed) return false;
-    await stop();
+    // Taking the voice interrupts whoever had it — and nobody, when it was
+    // free: a sequence speaking its second sentence has not been interrupted
+    // by starting it.
+    await stop(interrupting: _utteranceId != null);
     if (_disposed) return false;
 
     _utteranceId = id;
@@ -233,8 +245,20 @@ class SpeechService extends ChangeNotifier {
   /// rather than something cutting it short — see the completion timeout
   /// above. Everywhere else the default holds, including the [stop] [speak]
   /// performs before taking the voice: replacing an utterance interrupts it.
+  ///
+  /// The voice is told to stop **whether or not this service believes it is
+  /// speaking** (ADR-135). It used to return early when it believed nothing
+  /// was, which made every stop only as good as that belief — and the one time
+  /// the belief was wrong, a sentence the service had lost track of could not
+  /// be silenced by leaving the question, by leaving the session, or by
+  /// anything short of it running out. Asking a silent voice to stop costs
+  /// nothing; not asking a speaking one is the bug.
+  ///
+  /// It counts as an interruption either way, for the same reason: a sequence
+  /// caught between two sentences has no utterance to its name for a moment,
+  /// and a stop that lands there must end it like any other.
   Future<void> stop({bool interrupting = true}) async {
-    if (_disposed || _utteranceId == null) return;
+    if (_disposed) return;
 
     if (interrupting) _interruptions++;
     await _provider.stop();

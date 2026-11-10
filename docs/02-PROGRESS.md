@@ -3,7 +3,22 @@
 > **The live state of the project.** Update this at the end of every working session.
 > A new session should read `CLAUDE.md` → this file → then start at "Next up".
 
-**Last updated:** 2026-11-03 (admin: decisions, changes, dictionary — ADR-132)
+**Last updated:** 2026-11-11 (voice that outlived its question — ADR-135)
+
+> **2026-11-11 — A sentence followed the learner to the next question (ADR-135).**
+> Not committed, not released — client only, no API change, no migration.
+> The phone's voice reports a stopped utterance's ending late, and it was applied
+> to the utterance that replaced it; the service then lost a voice it could no
+> longer stop. Endings are counted now and a stop always reaches the voice. The
+> Listening result uses the same player as the clip (`ListeningPlayer`; pause on a
+> word, seek, jump). `analyze` clean, **572** tests green. On the simulator against
+> the local stack: `listening_audio_stops_test`, `voice_takeover_probe_test`,
+> `five_skills_test` (order corrected to Spelling → Writing, warm-up helper fixed)
+> and `gap_holds_test` (normal two-day gap) all pass. **Not checked on an Android
+> phone**, which is where it was reported. Sections "opening by themselves" was not
+> reproduced on the real backend — see the ADR; needs the learner's account.
+> **Next:** the owner's OK to commit, then APK 1.3.3 and a check on Android.
+> Tour work committed the same day as `aa2ce72` (1.3.2), not pushed.
 
 > **2026-11-03 — WordOS AI moves to Groq's free tier (ADR-134).** Committed and pushed as `90801ba`; production not verified (2026-11-11).
 > At the owner's request the chat no longer spends the paid Gemini key:
