@@ -1,0 +1,8 @@
+feedback_messages|0|
+refresh_tokens|2508|938402470f9f4c5f88a4eced1eeb77bd
+skill_sessions|4|b3fd85ce5df73374bd9f5d19cfe1e732
+users|508|91d40902f402ccb95dcc2c93ef3cf399
+weekly_reviews|0|
+word_events|38048|5f38d75c7d29b1d9f9c0612e825ea884
+word_skill_states|8035|30c384c3aa9174e80ff8cfd24f39b8b7
+words|1607|6b5eacd383022f9f86c709214e268ff3

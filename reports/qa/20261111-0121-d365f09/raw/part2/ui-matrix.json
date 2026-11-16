@@ -1,0 +1,1074 @@
+[
+ {
+  "matrix": "en/light/320x568@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/320x568@1.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {
+   "My words": [
+    "A RenderFlex overflowed by 6.5 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 6.5 pixels on the right. @ features/words/word_widgets.dart:120"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "en/light/320x568@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/320x568@1.5x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {
+   "My words": [
+    "A RenderFlex overflowed by 45 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 45 pixels on the right. @ features/words/word_widgets.dart:120"
+   ],
+   "add-word": [
+    "A RenderFlex overflowed by 37 pixels on the bottom. @ core/widgets/app_widgets.dart:160"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "en/light/320x568@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {
+   "sign-in": [
+    "A RenderFlex overflowed by 49 pixels on the right. @ core/widgets/brand.dart:39"
+   ],
+   "create-account": [
+    "A RenderFlex overflowed by 49 pixels on the right. @ core/widgets/brand.dart:39"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "en/light/320x568@2.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {
+   "My words": [
+    "A RenderFlex overflowed by 84 pixels on the right. @ features/words/word_widgets.dart:120"
+   ],
+   "add-word": [
+    "A RenderFlex overflowed by 296 pixels on the bottom. @ core/widgets/app_widgets.dart:160"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "en/light/375x667@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/375x667@1.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/375x667@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/375x667@1.5x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/375x667@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/375x667@2.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {
+   "My words": [
+    "A RenderFlex overflowed by 29 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 29 pixels on the right. @ features/words/word_widgets.dart:120"
+   ],
+   "add-word": [
+    "A RenderFlex overflowed by 101 pixels on the bottom. @ core/widgets/app_widgets.dart:160"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "en/light/430x932@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/430x932@1.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/430x932@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/430x932@1.5x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/430x932@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/light/430x932@2.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/320x568@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/320x568@1.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {
+   "My words": [
+    "A RenderFlex overflowed by 6.5 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 6.5 pixels on the right. @ features/words/word_widgets.dart:120"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/320x568@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/320x568@1.5x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {
+   "My words": [
+    "A RenderFlex overflowed by 45 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 45 pixels on the right. @ features/words/word_widgets.dart:120"
+   ],
+   "add-word": [
+    "A RenderFlex overflowed by 37 pixels on the bottom. @ core/widgets/app_widgets.dart:160"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/320x568@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {
+   "sign-in": [
+    "A RenderFlex overflowed by 49 pixels on the right. @ core/widgets/brand.dart:39"
+   ],
+   "create-account": [
+    "A RenderFlex overflowed by 49 pixels on the right. @ core/widgets/brand.dart:39"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/320x568@2.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {
+   "My words": [
+    "A RenderFlex overflowed by 84 pixels on the right. @ features/words/word_widgets.dart:120"
+   ],
+   "add-word": [
+    "A RenderFlex overflowed by 296 pixels on the bottom. @ core/widgets/app_widgets.dart:160"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/375x667@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/375x667@1.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/375x667@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/375x667@1.5x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/375x667@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/375x667@2.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {
+   "My words": [
+    "A RenderFlex overflowed by 29 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 29 pixels on the right. @ features/words/word_widgets.dart:120"
+   ],
+   "add-word": [
+    "A RenderFlex overflowed by 101 pixels on the bottom. @ core/widgets/app_widgets.dart:160"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/430x932@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/430x932@1.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/430x932@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/430x932@1.5x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/430x932@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "en/dark/430x932@2.0x",
+  "screens": [
+   "Skills Hub",
+   "My words",
+   "add-word",
+   "Settings"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/320x568@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/320x568@1.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {
+   "كلماتي": [
+    "A RenderFlex overflowed by 3.0 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 3.0 pixels on the right. @ features/words/word_widgets.dart:120"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/320x568@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/320x568@1.5x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {
+   "كلماتي": [
+    "A RenderFlex overflowed by 42 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 42 pixels on the right. @ features/words/word_widgets.dart:120"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/320x568@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {
+   "sign-in": [
+    "A RenderFlex overflowed by 49 pixels on the right. @ core/widgets/brand.dart:39"
+   ],
+   "create-account": [
+    "A RenderFlex overflowed by 49 pixels on the right. @ core/widgets/brand.dart:39"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/320x568@2.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {
+   "كلماتي": [
+    "A RenderFlex overflowed by 80 pixels on the right. @ features/words/word_widgets.dart:120"
+   ],
+   "add-word": [
+    "A RenderFlex overflowed by 206 pixels on the bottom. @ core/widgets/app_widgets.dart:160"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/375x667@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/375x667@1.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/375x667@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/375x667@1.5x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/375x667@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/375x667@2.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {
+   "كلماتي": [
+    "A RenderFlex overflowed by 25 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 25 pixels on the right. @ features/words/word_widgets.dart:120"
+   ],
+   "add-word": [
+    "A RenderFlex overflowed by 17 pixels on the bottom. @ core/widgets/app_widgets.dart:160"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/430x932@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/430x932@1.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/430x932@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/430x932@1.5x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/430x932@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/light/430x932@2.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/320x568@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/320x568@1.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {
+   "كلماتي": [
+    "A RenderFlex overflowed by 3.0 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 3.0 pixels on the right. @ features/words/word_widgets.dart:120"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/320x568@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/320x568@1.5x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {
+   "كلماتي": [
+    "A RenderFlex overflowed by 42 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 42 pixels on the right. @ features/words/word_widgets.dart:120"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/320x568@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {
+   "sign-in": [
+    "A RenderFlex overflowed by 49 pixels on the right. @ core/widgets/brand.dart:39"
+   ],
+   "create-account": [
+    "A RenderFlex overflowed by 49 pixels on the right. @ core/widgets/brand.dart:39"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/320x568@2.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {
+   "كلماتي": [
+    "A RenderFlex overflowed by 80 pixels on the right. @ features/words/word_widgets.dart:120"
+   ],
+   "add-word": [
+    "A RenderFlex overflowed by 206 pixels on the bottom. @ core/widgets/app_widgets.dart:160"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/375x667@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/375x667@1.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/375x667@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/375x667@1.5x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/375x667@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/375x667@2.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {
+   "كلماتي": [
+    "A RenderFlex overflowed by 25 pixels on the right. @ features/words/word_widgets.dart:120",
+    "A RenderFlex overflowed by 25 pixels on the right. @ features/words/word_widgets.dart:120"
+   ],
+   "add-word": [
+    "A RenderFlex overflowed by 17 pixels on the bottom. @ core/widgets/app_widgets.dart:160"
+   ]
+  },
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/430x932@1.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/430x932@1.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/430x932@1.5x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/430x932@1.5x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/430x932@2.0x",
+  "screens": [
+   "sign-in",
+   "create-account"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "matrix": "ar/dark/430x932@2.0x",
+  "screens": [
+   "مركز المهارات",
+   "كلماتي",
+   "add-word",
+   "الإعدادات"
+  ],
+  "overflows": {},
+  "other": {}
+ },
+ {
+  "a11y": "en/light",
+  "results": [
+   {
+    "screen": "sign-in",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": "pass"
+   },
+   {
+    "screen": "Skills Hub",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": "pass"
+   },
+   {
+    "screen": "My words",
+    "androidTapTarget48": [
+     "SemanticsNode#54(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en",
+     "SemanticsNode#55(Rect.fromLTRB(186.2, 17.0, 226.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable], traversalParentIdentifier: _OverlayPortalState#c18a2, tooltip: \"Slow\", textDirection: ltr): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en",
+     "SemanticsNode#57(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en"
+    ],
+    "iOSTapTarget44": [
+     "SemanticsNode#54(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/",
+     "SemanticsNode#55(Rect.fromLTRB(186.2, 17.0, 226.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable], traversalParentIdentifier: _OverlayPortalState#c18a2, tooltip: \"Slow\", textDirection: ltr): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/",
+     "SemanticsNode#57(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/"
+    ],
+    "labeledTapTarget": [
+     "SemanticsNode#54(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found.",
+     "SemanticsNode#57(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found.",
+     "SemanticsNode#60(Rect.fromLTRB(194.6, 17.0, 234.6, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found."
+    ],
+    "textContrast": "pass"
+   },
+   {
+    "screen": "Settings",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": "pass"
+   }
+  ]
+ },
+ {
+  "a11y": "en/dark",
+  "results": [
+   {
+    "screen": "sign-in",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": [
+     "SemanticsNode#6(Rect.fromLTRB(34.9, 37.0, 59.1, 73.0), label: \"W\", textDirection: ltr):",
+     "Expected contrast ratio of at least 3.0 but found 2.62 for a font size of 23.92.",
+     "The computed colors was:",
+     "light - Color(alpha: 1.0000, red: 1.0000, green: 1.0000, blue: 1.0000, colorSpace: ColorSpace.sRGB), dark - Color(alpha: 1.0000, red: 0.4667, green: 0.6157, blue: 0.9843, colorSpace: ColorSpace.sRGB)",
+     "See also: https://www.w3.org/TR/UNDERSTANDING-WCAG20/visual-audio-contrast-contrast.html",
+     "SemanticsNode#13(Rect.fromLTRB(24.0, 467.4, 351.0, 521.4), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable], label: \"Sign in\", textDirection: ltr):"
+    ]
+   },
+   {
+    "screen": "Skills Hub",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": "pass"
+   },
+   {
+    "screen": "My words",
+    "androidTapTarget48": [
+     "SemanticsNode#54(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en",
+     "SemanticsNode#55(Rect.fromLTRB(186.2, 17.0, 226.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable], traversalParentIdentifier: _OverlayPortalState#b26c4, tooltip: \"Slow\", textDirection: ltr): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en",
+     "SemanticsNode#57(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en"
+    ],
+    "iOSTapTarget44": [
+     "SemanticsNode#54(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/",
+     "SemanticsNode#55(Rect.fromLTRB(186.2, 17.0, 226.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable], traversalParentIdentifier: _OverlayPortalState#b26c4, tooltip: \"Slow\", textDirection: ltr): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/",
+     "SemanticsNode#57(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/"
+    ],
+    "labeledTapTarget": [
+     "SemanticsNode#54(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found.",
+     "SemanticsNode#57(Rect.fromLTRB(146.2, 17.0, 186.2, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found.",
+     "SemanticsNode#60(Rect.fromLTRB(194.6, 17.0, 234.6, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found."
+    ],
+    "textContrast": "pass"
+   },
+   {
+    "screen": "Settings",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": "pass"
+   }
+  ]
+ },
+ {
+  "a11y": "ar/light",
+  "results": [
+   {
+    "screen": "sign-in",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": "pass"
+   },
+   {
+    "screen": "مركز المهارات",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": "pass"
+   },
+   {
+    "screen": "كلماتي",
+    "androidTapTarget48": [
+     "SemanticsNode#54(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en",
+     "SemanticsNode#55(Rect.fromLTRB(116.8, 17.0, 156.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable], traversalParentIdentifier: _OverlayPortalState#5abdc, tooltip: \"بطيء\", textDirection: rtl): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en",
+     "SemanticsNode#57(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en"
+    ],
+    "iOSTapTarget44": [
+     "SemanticsNode#54(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/",
+     "SemanticsNode#55(Rect.fromLTRB(116.8, 17.0, 156.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable], traversalParentIdentifier: _OverlayPortalState#5abdc, tooltip: \"بطيء\", textDirection: rtl): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/",
+     "SemanticsNode#57(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/"
+    ],
+    "labeledTapTarget": [
+     "SemanticsNode#54(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found.",
+     "SemanticsNode#57(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found.",
+     "SemanticsNode#60(Rect.fromLTRB(108.4, 17.0, 148.4, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found."
+    ],
+    "textContrast": "pass"
+   },
+   {
+    "screen": "الإعدادات",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": "pass"
+   }
+  ]
+ },
+ {
+  "a11y": "ar/dark",
+  "results": [
+   {
+    "screen": "sign-in",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": [
+     "SemanticsNode#6(Rect.fromLTRB(34.9, 37.0, 59.1, 73.0), label: \"W\", textDirection: ltr):",
+     "Expected contrast ratio of at least 3.0 but found 2.62 for a font size of 23.92.",
+     "The computed colors was:",
+     "light - Color(alpha: 1.0000, red: 1.0000, green: 1.0000, blue: 1.0000, colorSpace: ColorSpace.sRGB), dark - Color(alpha: 1.0000, red: 0.4667, green: 0.6157, blue: 0.9843, colorSpace: ColorSpace.sRGB)",
+     "See also: https://www.w3.org/TR/UNDERSTANDING-WCAG20/visual-audio-contrast-contrast.html",
+     "SemanticsNode#13(Rect.fromLTRB(24.0, 431.4, 351.0, 485.4), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable], label: \"تسجيل الدخول\", textDirection: rtl):"
+    ]
+   },
+   {
+    "screen": "مركز المهارات",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": "pass"
+   },
+   {
+    "screen": "كلماتي",
+    "androidTapTarget48": [
+     "SemanticsNode#54(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en",
+     "SemanticsNode#55(Rect.fromLTRB(116.8, 17.0, 156.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable], traversalParentIdentifier: _OverlayPortalState#fac35, tooltip: \"بطيء\", textDirection: rtl): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en",
+     "SemanticsNode#57(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(48.0, 48.0), but found Size(40.0, 40.0)",
+     "See also: https://support.google.com/accessibility/android/answer/7101858?hl=en"
+    ],
+    "iOSTapTarget44": [
+     "SemanticsNode#54(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/",
+     "SemanticsNode#55(Rect.fromLTRB(116.8, 17.0, 156.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable], traversalParentIdentifier: _OverlayPortalState#fac35, tooltip: \"بطيء\", textDirection: rtl): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/",
+     "SemanticsNode#57(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tap target size of at least Size(44.0, 44.0), but found Size(40.0, 40.0)",
+     "See also: https://developer.apple.com/design/human-interface-guidelines/ios/visual-design/adaptivity-and-layout/"
+    ],
+    "labeledTapTarget": [
+     "SemanticsNode#54(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found.",
+     "SemanticsNode#57(Rect.fromLTRB(156.8, 17.0, 196.8, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found.",
+     "SemanticsNode#60(Rect.fromLTRB(108.4, 17.0, 148.4, 57.0), actions: [focus, tap], flags: [isButton, hasEnabledState, isEnabled, isFocusable]): expected tappable node to have semantic label, but none was found."
+    ],
+    "textContrast": "pass"
+   },
+   {
+    "screen": "الإعدادات",
+    "androidTapTarget48": "pass",
+    "iOSTapTarget44": "pass",
+    "labeledTapTarget": "pass",
+    "textContrast": "pass"
+   }
+  ]
+ }
+]

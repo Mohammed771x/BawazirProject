@@ -1,0 +1,4 @@
+Flutter 3.44.9 • channel stable • https://github.com/flutter/flutter.git
+Analyzing mobile...                                             
+No issues found! (ran in 2.4s)
+exit=0

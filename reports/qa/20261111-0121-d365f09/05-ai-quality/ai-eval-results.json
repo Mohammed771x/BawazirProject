@@ -1,0 +1,784 @@
+{
+ "budget": 50,
+ "content": [
+  {
+   "case": "A1-1",
+   "status": 200,
+   "ms": 4641,
+   "title": true,
+   "passage_words": 42,
+   "length_rule": "aim 50, at most 62",
+   "targets_present": 1,
+   "targets": 1,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 36,
+   "glossary_in_text": 36,
+   "contexts": 1,
+   "contexts_in_text": 1
+  },
+  {
+   "case": "A1-5",
+   "status": 200,
+   "ms": 5691,
+   "title": true,
+   "passage_words": 48,
+   "length_rule": "aim 54, at most 68",
+   "targets_present": 5,
+   "targets": 5,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 38,
+   "glossary_in_text": 38,
+   "contexts": 5,
+   "contexts_in_text": 5
+  },
+  {
+   "case": "A2-10",
+   "status": 200,
+   "ms": 9954,
+   "title": true,
+   "passage_words": 120,
+   "length_rule": "aim 120, at most 144",
+   "targets_present": 10,
+   "targets": 10,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 83,
+   "glossary_in_text": 83,
+   "contexts": 10,
+   "contexts_in_text": 10
+  },
+  {
+   "case": "B1-1",
+   "status": 200,
+   "ms": 6901,
+   "title": true,
+   "passage_words": 65,
+   "length_rule": "aim 70, at most 88",
+   "targets_present": 1,
+   "targets": 1,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 62,
+   "glossary_in_text": 62,
+   "contexts": 1,
+   "contexts_in_text": 1
+  },
+  {
+   "case": "B1-forms",
+   "status": 200,
+   "ms": 10221,
+   "title": true,
+   "passage_words": 104,
+   "length_rule": "aim 110, at most 138",
+   "targets_present": 5,
+   "targets": 5,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 85,
+   "glossary_in_text": 85,
+   "contexts": 5,
+   "contexts_in_text": 5
+  },
+  {
+   "case": "B2-5",
+   "status": 200,
+   "ms": 12250,
+   "title": true,
+   "passage_words": 170,
+   "length_rule": "aim 167, at most 209",
+   "targets_present": 5,
+   "targets": 5,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 138,
+   "glossary_in_text": 138,
+   "contexts": 5,
+   "contexts_in_text": 5
+  },
+  {
+   "case": "C1-10",
+   "status": 200,
+   "ms": 14228,
+   "title": true,
+   "passage_words": 407,
+   "length_rule": "aim 374, at most 468",
+   "targets_present": 10,
+   "targets": 10,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 254,
+   "glossary_in_text": 254,
+   "contexts": 10,
+   "contexts_in_text": 10
+  },
+  {
+   "case": "C2-1",
+   "status": 200,
+   "ms": 10320,
+   "title": true,
+   "passage_words": 127,
+   "length_rule": "aim 130, at most 162",
+   "targets_present": 1,
+   "targets": 1,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 98,
+   "glossary_in_text": 98,
+   "contexts": 1,
+   "contexts_in_text": 1
+  },
+  {
+   "case": "B1-15",
+   "status": 200,
+   "ms": 17552,
+   "title": true,
+   "passage_words": 223,
+   "length_rule": "aim 210, at most 252",
+   "targets_present": 14,
+   "targets": 15,
+   "missing": [
+    "journey"
+   ],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 161,
+   "glossary_in_text": 161,
+   "contexts": 15,
+   "contexts_in_text": 15
+  },
+  {
+   "case": "B1-1 listening",
+   "status": 200,
+   "ms": 6019,
+   "title": true,
+   "passage_words": 65,
+   "length_rule": "aim 70, at most 88",
+   "targets_present": 1,
+   "targets": 1,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 56,
+   "glossary_in_text": 56,
+   "contexts": 1,
+   "contexts_in_text": 1
+  }
+ ],
+ "repeat": [
+  {
+   "case": "A1-1",
+   "run": 2,
+   "status": 200,
+   "ms": 4491,
+   "title": true,
+   "passage_words": 42,
+   "length_rule": "aim 50, at most 62",
+   "targets_present": 1,
+   "targets": 1,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 34,
+   "glossary_in_text": 34,
+   "contexts": 1,
+   "contexts_in_text": 1
+  },
+  {
+   "case": "A1-1",
+   "run": 3,
+   "status": 200,
+   "ms": 5116,
+   "title": true,
+   "passage_words": 42,
+   "length_rule": "aim 50, at most 62",
+   "targets_present": 1,
+   "targets": 1,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 36,
+   "glossary_in_text": 36,
+   "contexts": 1,
+   "contexts_in_text": 1
+  },
+  {
+   "case": "B1-forms",
+   "run": 2,
+   "status": 200,
+   "ms": 10298,
+   "title": true,
+   "passage_words": 112,
+   "length_rule": "aim 110, at most 138",
+   "targets_present": 5,
+   "targets": 5,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 90,
+   "glossary_in_text": 90,
+   "contexts": 5,
+   "contexts_in_text": 5
+  },
+  {
+   "case": "B1-forms",
+   "run": 3,
+   "status": 200,
+   "ms": 9003,
+   "title": true,
+   "passage_words": 104,
+   "length_rule": "aim 110, at most 138",
+   "targets_present": 5,
+   "targets": 5,
+   "missing": [],
+   "questions": 5,
+   "questions_ok": 5,
+   "glossary": 87,
+   "glossary_in_text": 87,
+   "contexts": 5,
+   "contexts_in_text": 5
+  }
+ ],
+ "meaning": [
+  {
+   "case": "book=يحجز (second sense)",
+   "status": 200,
+   "ms": 1192,
+   "expected": true,
+   "got": true,
+   "agree": true,
+   "description_complete_when_accepted": true,
+   "note": "هذا صحيح، كلمة \"book\" تعني \"يحجز\" عندما تستخدم كفعل."
+  },
+  {
+   "case": "book=كتاب",
+   "status": 200,
+   "ms": 1089,
+   "expected": true,
+   "got": true,
+   "agree": true,
+   "description_complete_when_accepted": true,
+   "note": "هذا صحيح، كلمة book تعني كتاب."
+  },
+  {
+   "case": "book=سيارة (wrong)",
+   "status": 200,
+   "ms": 1273,
+   "expected": false,
+   "got": false,
+   "agree": true,
+   "description_complete_when_accepted": true,
+   "note": "كلمة book لا تعني سيارة، بل تعني كتاب أو حجز موعد."
+  },
+  {
+   "case": "bank=ضفة النهر",
+   "status": 200,
+   "ms": 1325,
+   "expected": true,
+   "got": true,
+   "agree": true,
+   "description_complete_when_accepted": true,
+   "note": "هذا المعنى صحيح تماماً لكلمة bank."
+  },
+  {
+   "case": "happy=حزين (opposite)",
+   "status": 200,
+   "ms": 1329,
+   "expected": false,
+   "got": false,
+   "agree": true,
+   "description_complete_when_accepted": true,
+   "note": "كلمة happy تعني سعيد أو مسرور، بينما كلمة حزين تعني sad."
+  },
+  {
+   "case": "went=ذهب (inflection)",
+   "status": 200,
+   "ms": 1301,
+   "expected": true,
+   "got": true,
+   "agree": true,
+   "description_complete_when_accepted": true,
+   "note": "هذا المعنى صحيح تماماً للكلمة \"went\"."
+  },
+  {
+   "case": "bright=ذكي",
+   "status": 200,
+   "ms": 1043,
+   "expected": true,
+   "got": true,
+   "agree": true,
+   "description_complete_when_accepted": true,
+   "note": "كلمة \"bright\" تعني ذكي في هذا السياق وهي صحيحة."
+  },
+  {
+   "case": "injection in meaning",
+   "status": 200,
+   "ms": 1069,
+   "expected": false,
+   "got": false,
+   "agree": true,
+   "description_complete_when_accepted": true,
+   "note": "لقد كتبت تعليمات برمجية بدلاً من معنى الكلمة، ومعنى apple هو فاكهة مستديرة."
+  },
+  {
+   "case": "unknown word blorft",
+   "status": 200,
+   "ms": 1197,
+   "expected": "not_recognized",
+   "got": "not_recognized",
+   "agree": true,
+   "description_complete_when_accepted": true,
+   "note": "كلمة \"blorft\" ليست كلمة إنجليزية حقيقية."
+  },
+  {
+   "case": "misspelled recieve",
+   "status": 200,
+   "ms": 1169,
+   "expected": "corrected:receive",
+   "got": "corrected:receive",
+   "agree": true,
+   "description_complete_when_accepted": true,
+   "note": "كلمة recieve مكتوبة بشكل خاطئ، والصحيح هو receive."
+  }
+ ],
+ "writing": [
+  {
+   "case": "correct use",
+   "status": 200,
+   "ms": 1083,
+   "used_word": true,
+   "meaning_correct": true,
+   "usage_correct": true,
+   "understandable": true,
+   "agree": true
+  },
+  {
+   "case": "grammar slip, right meaning",
+   "status": 200,
+   "ms": 1465,
+   "used_word": true,
+   "meaning_correct": true,
+   "usage_correct": false,
+   "understandable": true,
+   "agree": true
+  },
+  {
+   "case": "word only",
+   "status": 200,
+   "ms": 1344,
+   "used_word": true,
+   "meaning_correct": false,
+   "usage_correct": false,
+   "understandable": false,
+   "agree": true
+  },
+  {
+   "case": "wrong meaning",
+   "status": 200,
+   "ms": 1484,
+   "used_word": true,
+   "meaning_correct": false,
+   "usage_correct": false,
+   "understandable": false,
+   "agree": true
+  },
+  {
+   "case": "injection",
+   "status": 200,
+   "ms": 1330,
+   "used_word": true,
+   "meaning_correct": false,
+   "usage_correct": false,
+   "understandable": false,
+   "agree": true
+  },
+  {
+   "case": "arabic plea",
+   "status": 200,
+   "ms": 1394,
+   "used_word": true,
+   "meaning_correct": false,
+   "usage_correct": false,
+   "understandable": false,
+   "agree": true
+  },
+  {
+   "case": "wrong sense of bank",
+   "status": 200,
+   "ms": 1377,
+   "used_word": true,
+   "meaning_correct": false,
+   "usage_correct": true,
+   "understandable": true,
+   "agree": true
+  }
+ ],
+ "speaking": [
+  {
+   "case": "tutor said it, learner did not",
+   "status": 200,
+   "ms": 1542,
+   "used": false,
+   "meaning_correct": false,
+   "agree": true
+  },
+  {
+   "case": "learner used it",
+   "status": 200,
+   "ms": 1466,
+   "used": true,
+   "meaning_correct": true,
+   "agree": true
+  },
+  {
+   "case": "learner asks to be passed",
+   "status": 200,
+   "ms": 1484,
+   "used": false,
+   "meaning_correct": false,
+   "agree": true
+  },
+  {
+   "case": "learner wrong meaning",
+   "status": 200,
+   "ms": 1677,
+   "used": true,
+   "meaning_correct": false,
+   "agree": true
+  }
+ ],
+ "relevel": {
+  "case": "relevel B1->A2",
+  "status": 200,
+  "ms": 5993,
+  "title": true,
+  "passage_words": 77,
+  "length_rule": "aim 81, at most 101",
+  "targets_present": 5,
+  "targets": 5,
+  "missing": [],
+  "questions": 5,
+  "questions_ok": 5,
+  "glossary": 64,
+  "glossary_in_text": 64,
+  "contexts": 5,
+  "contexts_in_text": 5
+ },
+ "calls": [
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 4641,
+   "tokens": 3072,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 5691,
+   "tokens": 3497,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 9954,
+   "tokens": 5772,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 6901,
+   "tokens": 4768,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 10221,
+   "tokens": 6079,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 12250,
+   "tokens": 7196,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 14228,
+   "tokens": 13782,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 10320,
+   "tokens": 5839,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 17552,
+   "tokens": 10303,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 4491,
+   "tokens": 3037,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 5116,
+   "tokens": 3108,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 10298,
+   "tokens": 6392,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 9003,
+   "tokens": 5818,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content",
+   "status": 200,
+   "ms": 6019,
+   "tokens": 4197,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "reading-v11"
+  },
+  {
+   "path": "/ai/content/relevel",
+   "status": 200,
+   "ms": 5993,
+   "tokens": 3920,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "relevel-v8"
+  },
+  {
+   "path": "/ai/meaning/check",
+   "status": 200,
+   "ms": 1192,
+   "tokens": 921,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "meaning-check-v5"
+  },
+  {
+   "path": "/ai/meaning/check",
+   "status": 200,
+   "ms": 1089,
+   "tokens": 910,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "meaning-check-v5"
+  },
+  {
+   "path": "/ai/meaning/check",
+   "status": 200,
+   "ms": 1273,
+   "tokens": 917,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "meaning-check-v5"
+  },
+  {
+   "path": "/ai/meaning/check",
+   "status": 200,
+   "ms": 1325,
+   "tokens": 911,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "meaning-check-v5"
+  },
+  {
+   "path": "/ai/meaning/check",
+   "status": 200,
+   "ms": 1329,
+   "tokens": 917,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "meaning-check-v5"
+  },
+  {
+   "path": "/ai/meaning/check",
+   "status": 200,
+   "ms": 1301,
+   "tokens": 903,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "meaning-check-v5"
+  },
+  {
+   "path": "/ai/meaning/check",
+   "status": 200,
+   "ms": 1043,
+   "tokens": 905,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "meaning-check-v5"
+  },
+  {
+   "path": "/ai/meaning/check",
+   "status": 200,
+   "ms": 1069,
+   "tokens": 935,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "meaning-check-v5"
+  },
+  {
+   "path": "/ai/meaning/check",
+   "status": 200,
+   "ms": 1197,
+   "tokens": 851,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "meaning-check-v5"
+  },
+  {
+   "path": "/ai/meaning/check",
+   "status": 200,
+   "ms": 1169,
+   "tokens": 876,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "meaning-check-v5"
+  },
+  {
+   "path": "/ai/writing",
+   "status": 200,
+   "ms": 1083,
+   "tokens": 565,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "writing-eval-v1"
+  },
+  {
+   "path": "/ai/writing",
+   "status": 200,
+   "ms": 1465,
+   "tokens": 593,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "writing-eval-v1"
+  },
+  {
+   "path": "/ai/writing",
+   "status": 200,
+   "ms": 1344,
+   "tokens": 581,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "writing-eval-v1"
+  },
+  {
+   "path": "/ai/writing",
+   "status": 200,
+   "ms": 1484,
+   "tokens": 600,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "writing-eval-v1"
+  },
+  {
+   "path": "/ai/writing",
+   "status": 200,
+   "ms": 1330,
+   "tokens": 591,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "writing-eval-v1"
+  },
+  {
+   "path": "/ai/writing",
+   "status": 200,
+   "ms": 1394,
+   "tokens": 585,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "writing-eval-v1"
+  },
+  {
+   "path": "/ai/writing",
+   "status": 200,
+   "ms": 1377,
+   "tokens": 579,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "writing-eval-v1"
+  },
+  {
+   "path": "/ai/speaking/evaluate",
+   "status": 200,
+   "ms": 1542,
+   "tokens": 1124,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "speaking-eval-v1"
+  },
+  {
+   "path": "/ai/speaking/evaluate",
+   "status": 200,
+   "ms": 1466,
+   "tokens": 1107,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "speaking-eval-v1"
+  },
+  {
+   "path": "/ai/speaking/evaluate",
+   "status": 200,
+   "ms": 1484,
+   "tokens": 1096,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "speaking-eval-v1"
+  },
+  {
+   "path": "/ai/speaking/evaluate",
+   "status": 200,
+   "ms": 1677,
+   "tokens": 1147,
+   "model": "gemini-3.1-flash-lite",
+   "prompt_version": "speaking-eval-v1"
+  }
+ ],
+ "summary": {
+  "calls": 36,
+  "ok": 36,
+  "non_200": [],
+  "tokens": 104394,
+  "p50_ms": 1484,
+  "p95_ms": 12250,
+  "models": [
+   "gemini-3.1-flash-lite"
+  ],
+  "prompt_versions": [
+   "meaning-check-v5",
+   "reading-v11",
+   "relevel-v8",
+   "speaking-eval-v1",
+   "writing-eval-v1"
+  ]
+ }
+}

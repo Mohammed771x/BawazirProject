@@ -5,6 +5,7 @@ Read in this order:
 
 | File | Read it when |
 |------|--------------|
+| [`qa-prompts/README.md`](qa-prompts/README.md) | **You want the Arabic QA handoff prompts**, including neutral assessment, full learner journeys, security, capacity and Render/Neon Free usage. These are test instructions, not executed test results. |
 | [`08-FINAL-SPECIFICATION.md`](08-FINAL-SPECIFICATION.md) | **You want to know what the application does.** The finished behaviour, section by section. |
 | [`00-PROJECT-PLAN.md`](00-PROJECT-PLAN.md) | You need the product, the architecture and the nine non-negotiable rules. |
 | [`01-PHASES.md`](01-PHASES.md) | You need the build order and what "done" means for each phase. |

@@ -1,0 +1,9 @@
+Complete requests:      20000
+Failed requests:        1987
+Requests per second:    4531.93 [#/sec] (mean)
+Time per request:       110.328 [ms] (mean)
+Time per request:       0.221 [ms] (mean, across all concurrent requests)
+  50%    105
+  95%    134
+  99%    145
+ 100%    198 (longest request)

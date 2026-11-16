@@ -1,0 +1,8 @@
+resource,plan_scope,counter,unit,limit,used,remaining,reset,source,date,confidence
+Render,Free / workspace,Free instance hours,instance-hour,750,UNKNOWN,UNKNOWN,calendar month,https://render.com/docs/free,2026-11-11,documented limit; account usage not accessible
+Render,Free / workspace,Outbound bandwidth,GB,UNKNOWN (dashboard only),UNKNOWN,UNKNOWN,calendar month,https://render.com/docs/free,2026-11-11,limit not published on the page
+Render,Free / workspace,Build pipeline minutes,minute,UNKNOWN (dashboard only),UNKNOWN,UNKNOWN,calendar month,https://render.com/docs/free,2026-11-11,limit not published on the page
+Neon,Free / project,Compute,CU-hour,100,UNKNOWN,UNKNOWN,billing period,https://neon.com/docs/introduction/plans,2026-11-11,documented limit; account usage not accessible
+Neon,Free / project,Network transfer,GB,5,UNKNOWN,UNKNOWN,billing period,https://neon.com/docs/introduction/plans,2026-11-11,documented limit; account usage not accessible
+Neon,Free / project,Storage,GB,1 (20 across Free projects),UNKNOWN (docs/09 says 187 MB at deploy),UNKNOWN,n/a,https://neon.com/docs/introduction/plans,2026-11-11,documented limit
+Neon,Free / project,Branches,count,10,UNKNOWN,UNKNOWN,n/a,https://neon.com/docs/introduction/plans,2026-11-11,documented limit

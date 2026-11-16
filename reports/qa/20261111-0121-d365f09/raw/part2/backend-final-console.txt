@@ -1,0 +1,33 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  WordOs.Domain -> /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Domain/bin/Debug/net10.0/WordOs.Domain.dll
+  WordOs.Application -> /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Application/bin/Debug/net10.0/WordOs.Application.dll
+  WordOs.Infrastructure -> /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Infrastructure/bin/Debug/net10.0/WordOs.Infrastructure.dll
+  WordOs.Domain.Tests -> /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Domain.Tests/bin/Debug/net10.0/WordOs.Domain.Tests.dll
+Test run for /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Domain.Tests/bin/Debug/net10.0/WordOs.Domain.Tests.dll (.NETCoreApp,Version=v10.0)
+  WordOs.LexiconImporter -> /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tools/lexicon/importer/bin/Debug/net10.0/WordOs.LexiconImporter.dll
+A total of 1 test files matched the specified pattern.
+  WordOs.Api -> /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Api/bin/Debug/net10.0/WordOs.Api.dll
+  WordOs.Api.Tests -> /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/bin/Debug/net10.0/WordOs.Api.Tests.dll
+Test run for /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/bin/Debug/net10.0/WordOs.Api.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+Results File: /Users/m.f.d/Documents/cuadeai/bawazirapp/reports/qa/20261111-0121-d365f09/raw/part2/final-trx/final_net10.0_20261111041133.trx
+
+Passed!  - Failed:     0, Passed:   234, Skipped:     0, Total:   234, Duration: 180 ms - WordOs.Domain.Tests.dll (net10.0)
+[xUnit.net 00:01:09.69]     WordOs.Api.Tests.Qa.FunctionalQaTests.F06_the_server_refuses_what_search_marked_as_added [FAIL]
+  Failed WordOs.Api.Tests.Qa.FunctionalQaTests.F06_the_server_refuses_what_search_marked_as_added [232 ms]
+  Error Message:
+   Assert.Equal() Failure: Values differ
+Expected: Conflict
+Actual:   OK
+  Stack Trace:
+     at WordOs.Api.Tests.Qa.FunctionalQaTests.F06_the_server_refuses_what_search_marked_as_added() in /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/Qa/FunctionalQaTests.cs:line 175
+--- End of stack trace from previous location ---
+  Standard Output Messages:
+ direct add of the marked sense: 200; live rows for the word: 2
+
+
+Results File: /Users/m.f.d/Documents/cuadeai/bawazirapp/reports/qa/20261111-0121-d365f09/raw/part2/final-trx/final_net10.0_20261111041456.trx
+
+Failed!  - Failed:     1, Passed:   586, Skipped:     0, Total:   587, Duration: 3 m 23 s - WordOs.Api.Tests.dll (net10.0)
+exit=1

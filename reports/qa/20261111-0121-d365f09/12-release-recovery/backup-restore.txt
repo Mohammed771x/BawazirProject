@@ -1,0 +1,7 @@
+last write before backup (word_events.CreatedAt max): 2026-11-11 04:06:29.919286+05:30
+backup+encrypt seconds: 2; size:  25M
+plaintext readable without key? 0
+decrypt+restore seconds: 6
+core checksums identical
+wordos_qa: 434561 lexicon, 31 migrations, 171 constraints, 4 ai_messages
+wordos_qa_restore: 434561 lexicon, 31 migrations, 171 constraints, 4 ai_messages

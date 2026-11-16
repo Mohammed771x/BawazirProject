@@ -1,0 +1,6 @@
+real 17.34
+user 0.00
+sys 0.00
+real 29.42
+user 0.00
+sys 0.00

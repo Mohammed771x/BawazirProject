@@ -1,0 +1,6 @@
+stored_sessions,mb_per_admin_call,admin_calls_that_fill_5gb
+65,1.6,3282
+500,5.9,873
+1000,11.7,436
+3000,35.2,145
+10000,117.2,43

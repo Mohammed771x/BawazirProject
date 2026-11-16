@@ -1,0 +1,236 @@
+{
+ "campaign": "20261111-0121-d365f09",
+ "revision": {
+  "head": "d365f09",
+  "part1": "d365f09 (no local code changes)",
+  "part2": "d365f09 + local ADR-137 diff (code diff sha256/16 291c936adcb764be), uncommitted",
+  "deployed": null
+ },
+ "environment": {
+  "type": "local",
+  "machine": "MacBook Air M4, 10 cores, 24 GB",
+  "db": "PostgreSQL 17 local (wordos_qa, synthetic)",
+  "ai": "local ai-service with real Gemini (gemini-3.1-flash-lite) for 01/05; cut for 07/09",
+  "device": "iPhone 17 Pro simulator, iOS 26.5",
+  "renderLike": false,
+  "realAndroidDevice": false
+ },
+ "status": "ready_with_non_blocking_fixes_and_stated_risks",
+ "releaseScope": "internal APK pilot (Android arm64), Render Free + Neon Free",
+ "counts": {
+  "backendDomain": {
+   "total": 234,
+   "passed": 234,
+   "failed": 0,
+   "skipped": 0
+  },
+  "backendApi": {
+   "total": 587,
+   "passed": 586,
+   "failed": 1,
+   "skipped": 0,
+   "failedAre": "F06 proving D01-1. F10 is absent from the archived final TRX."
+  },
+  "aiService": {
+   "total": 243,
+   "passed": 243,
+   "failed": 0,
+   "skipped": 0
+  },
+  "mobile": {
+   "total": 574,
+   "passed": 574,
+   "failed": 0,
+   "skipped": 0,
+   "plusUiMatrix": 76
+  },
+  "realE2E": {
+   "run": 6,
+   "passed": 4,
+   "blockedEnvironment": 2
+  },
+  "aiEval": {
+   "calls": 36,
+   "budget": 50,
+   "tokens": 104394,
+   "judgementsAgreeingWithHumanLabel": "31/31",
+   "targetWordsPresent": "74/75"
+  }
+ },
+ "findings": [
+  {
+   "id": "D01-1",
+   "title": "server accepts a duplicate word (same text+meaning) that search marks as added",
+   "severity": "Low-Medium",
+   "decision": "non-blocking fix",
+   "status": "open",
+   "report": "01-functional"
+  },
+  {
+   "id": "D05-1",
+   "title": "Writing passes a word used with the wrong meaning (passed = used && understandable)",
+   "severity": "Medium",
+   "decision": "non-blocking fix + owner decision (ADR-015 vs spec 08/MVP Core 32)",
+   "status": "open",
+   "report": "05-ai-quality"
+  },
+  {
+   "id": "D06-1",
+   "title": "word card status row overflows at 320dp",
+   "severity": "Low",
+   "decision": "non-blocking fix",
+   "status": "open",
+   "report": "06-ui-accessibility"
+  },
+  {
+   "id": "D06-2",
+   "title": "normal-speed speaker button has no accessible name, 40dp",
+   "severity": "Low-Medium",
+   "decision": "non-blocking fix",
+   "status": "open",
+   "report": "06-ui-accessibility"
+  },
+  {
+   "id": "D06-3",
+   "title": "add-word empty state overflows at 150-200% text",
+   "severity": "Low",
+   "decision": "non-blocking fix",
+   "status": "open",
+   "report": "06-ui-accessibility"
+  },
+  {
+   "id": "D06-4",
+   "title": "admin mobile: closed sidebar links take keyboard focus off-screen",
+   "severity": "Low",
+   "decision": "non-blocking fix",
+   "status": "open",
+   "report": "06-ui-accessibility"
+  },
+  {
+   "id": "D08-1",
+   "severity": "Medium",
+   "status": "fixed locally (ADR-137), not deployed",
+   "report": "08-rate-limiting"
+  },
+  {
+   "id": "D03-1",
+   "severity": "Medium",
+   "status": "fixed locally (ADR-137), not deployed",
+   "report": "03-api-data-concurrency"
+  },
+  {
+   "id": "D04-1",
+   "severity": "Medium",
+   "status": "fixed locally (ADR-137), not deployed",
+   "report": "04-security"
+  },
+  {
+   "id": "D03-2",
+   "severity": "Low-Medium",
+   "status": "fixed locally (ADR-137), not deployed",
+   "report": "03-api-data-concurrency"
+  },
+  {
+   "id": "D08-2",
+   "severity": "Low-Medium",
+   "status": "fixed locally (ADR-137), not deployed",
+   "report": "08-rate-limiting"
+  },
+  {
+   "id": "D03-3",
+   "severity": "Low",
+   "status": "fixed locally (ADR-137), not deployed",
+   "report": "03-api-data-concurrency"
+  },
+  {
+   "id": "D04-2",
+   "severity": "Low",
+   "status": "fixed locally (ADR-137), not deployed",
+   "report": "04-security"
+  },
+  {
+   "id": "R12-1",
+   "title": "app version still 1.3.2+6",
+   "decision": "required before distribution",
+   "report": "12-release-recovery"
+  }
+ ],
+ "observations": [
+  "O01-1",
+  "O05-1",
+  "O05-2",
+  "O07-1",
+  "O09-1",
+  "O09-2",
+  "O09-3",
+  "O09-4",
+  "O12-1",
+  "O12-2",
+  "O12-3",
+  "Q02-1"
+ ],
+ "evidenceGaps": [
+  "real Android device: audio/microphone (ADR-135), upgrade 1.3.2->1.3.3, TalkBack, performance",
+  "Render-Free-like environment and remote Neon",
+  "Listening..Writing end-to-end with real components",
+  "larger AI sample and second human rater",
+  "actual Render/Neon usage readings",
+  "Neon migration/grant/restore-window state"
+ ],
+ "capacity": {
+  "proven": {
+   "activeUsers": 300,
+   "scenario": "returning-user journeys, think 1-3 s, AI replaced by built-in fallback, local",
+   "durationSeconds": 180,
+   "journeySuccess": 1.0,
+   "lightP95Ms": 28,
+   "worstLightP99Ms": 3861,
+   "errors5xx": 0,
+   "rejected": 0
+  },
+  "notMeasured": {
+   "activeUsers500": "generator-limited; independent probe hub p95 4 ms",
+   "renderFree": null,
+   "realAiUnderLoad": null,
+   "soak": null
+  },
+  "loginBurst1s": {
+   "100": {
+    "p95Ms": 168,
+    "rejected": 0
+   },
+   "300": {
+    "p95Ms": 4846,
+    "rejected": 0
+   },
+   "500": {
+    "p95Ms": 8587,
+    "rejected": 0
+   }
+  },
+  "refreshBurst1s": {
+   "500": {
+    "p95Ms": 3.2
+   }
+  }
+ },
+ "recovery": {
+  "backupRestoreLocal": {
+   "rtoSeconds": 8,
+   "rpo": "time of last dump",
+   "checksumsMatch": true
+  },
+  "neonFreeRestoreWindowHours": 6,
+  "scheduledOffsiteBackup": false
+ },
+ "quotaForecast": {
+  "renderHoursShareBaseline": "96-99% of 750 h by design",
+  "neonComputeLimitDau": {
+   "light": 100,
+   "base": 50,
+   "heavy": 20
+  },
+  "neonEgress": null,
+  "measuredUsage": null
+ }
+}

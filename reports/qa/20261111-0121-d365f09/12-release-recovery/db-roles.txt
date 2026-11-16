@@ -1,0 +1,6 @@
+--- wordos_app on wordos_qa
+ERROR:  permission denied for schema public
+ERROR:  must be owner of table users
+ERROR:  must be owner of table feedback_messages
+super=false createdb=false createrole=false
+tables with full DML grant: 28/28; sequences with USAGE: 3/3

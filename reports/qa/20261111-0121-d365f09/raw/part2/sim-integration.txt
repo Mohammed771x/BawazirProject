@@ -1,0 +1,19 @@
+== listening_audio_stops_test
+exit=1
+✓ PLACEMENT · a spoken item was offered
+00:46 +0 -1: a playing sentence stops when the question is left [E]
+00:46 +0 -1: Some tests failed.
+== session_resume_test
+exit=1
+✓ PLACEMENT · a spoken item was offered
+✓ READING resumed on a question
+02:59 +0 -1: every skill resumes where the learner left it [E]
+02:59 +0 -1: Some tests failed.
+== voice_takeover_probe_test
+exit=0
+00:17 +1: All tests passed!
+== sign_out_test
+exit=0
+✓ PLACEMENT · a spoken item was offered
+✓ signed out against the real API
+00:23 +1: All tests passed!

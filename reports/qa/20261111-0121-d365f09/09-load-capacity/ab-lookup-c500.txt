@@ -1,0 +1,6 @@
+Complete requests:      20000
+Failed requests:        0
+Requests per second:    4353.25 [#/sec] (mean)
+  50%    106
+  95%    163
+  99%    321

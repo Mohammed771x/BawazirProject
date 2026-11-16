@@ -1,0 +1,238 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="921017ed-3b7d-47d5-b264-a0c5a3b57f53" name="@MFDs-MacBook-Air 2026-11-11 03:13:10" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-11-11T03:13:10.7108270+05:30" queuing="2026-11-11T03:13:10.7108270+05:30" start="2026-11-11T03:13:07.4989380+05:30" finish="2026-11-11T03:13:12.9801520+05:30" />
+  <TestSettings name="default" id="32d26b03-e4c8-4067-a595-a308ab24c1da">
+    <Deployment runDeploymentRoot="_MFDs-MacBook-Air_2026-11-11_03_13_10" />
+  </TestSettings>
+  <Results>
+    <UnitTestResult executionId="3ae0b629-d2fb-4693-b544-0e1cd2f685c0" testId="66537eb8-1252-0bb4-d9af-ce229574dc1b" testName="WordOs.Api.Tests.Qa.FunctionalQaTests.F04_after_a_free_wording_edit_the_old_sense_stays_marked" computerName="MFDs-MacBook-Air" duration="00:00:00.2704473" startTime="2026-11-11T03:13:12.4160040+05:30" endTime="2026-11-11T03:13:12.6871140+05:30" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="3ae0b629-d2fb-4693-b544-0e1cd2f685c0">
+      <Output>
+        <StdOut>edit: 503</StdOut>
+        <ErrorInfo>
+          <Message>System.Net.Http.HttpRequestException : Response status code does not indicate success: 503 (Service Unavailable).</Message>
+          <StackTrace>   at System.Net.Http.HttpResponseMessage.EnsureSuccessStatusCode()
+   at WordOs.Api.Tests.Qa.FunctionalQaTests.F04_after_a_free_wording_edit_the_old_sense_stays_marked() in /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/Qa/FunctionalQaTests.cs:line 121
+--- End of stack trace from previous location ---</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="f8188a73-eed5-40ec-929d-a1849e91c76f" testId="0126a66b-5f1a-508e-4be2-79404c548900" testName="WordOs.Api.Tests.Qa.FunctionalQaTests.F03_an_archived_word_is_still_marked" computerName="MFDs-MacBook-Air" duration="00:00:00.2196047" startTime="2026-11-11T03:13:10.7619100+05:30" endTime="2026-11-11T03:13:10.9792470+05:30" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="f8188a73-eed5-40ec-929d-a1849e91c76f" />
+    <UnitTestResult executionId="1cb62bc9-4ce6-4a43-9f8b-ccfd243d3c87" testId="ff92f38a-bb80-309d-07e3-e8792ca73193" testName="WordOs.Api.Tests.Qa.FunctionalQaTests.F07_my_words_pages_cover_every_row_exactly_once_at_each_size" computerName="MFDs-MacBook-Air" duration="00:00:00.8314389" startTime="2026-11-11T03:13:11.3805380+05:30" endTime="2026-11-11T03:13:12.2120730+05:30" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="1cb62bc9-4ce6-4a43-9f8b-ccfd243d3c87">
+      <Output>
+        <StdOut>0 words -&gt; walked 0, distinct 0
+1 words -&gt; walked 1, distinct 1
+20 words -&gt; walked 20, distinct 20
+21 words -&gt; walked 21, distinct 21
+50 words -&gt; walked 50, distinct 50
+155 words -&gt; walked 155, distinct 155</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="31afe822-6c9c-4cf4-8ccf-892dc556e05a" testId="f7de16b8-dfd9-e296-c4cd-0775c0015bb9" testName="WordOs.Api.Tests.Qa.FunctionalQaTests.F01_the_mark_belongs_to_the_learner_who_owns_the_sense" computerName="MFDs-MacBook-Air" duration="00:00:00.2034096" startTime="2026-11-11T03:13:12.2122100+05:30" endTime="2026-11-11T03:13:12.4158440+05:30" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="31afe822-6c9c-4cf4-8ccf-892dc556e05a" />
+    <UnitTestResult executionId="babae4ae-772e-4079-8f4a-dcd7026f64ff" testId="bf197597-571e-e554-2376-1f4587bb7be7" testName="WordOs.Api.Tests.Qa.FunctionalQaTests.F06_the_server_refuses_what_search_marked_as_added" computerName="MFDs-MacBook-Air" duration="00:00:00.2265603" startTime="2026-11-11T03:13:10.5289370+05:30" endTime="2026-11-11T03:13:10.7594850+05:30" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Failed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="babae4ae-772e-4079-8f4a-dcd7026f64ff">
+      <Output>
+        <StdOut>direct add of the marked sense: 200; live rows for the word: 2</StdOut>
+        <ErrorInfo>
+          <Message>Assert.Equal() Failure: Values differ
+Expected: Conflict
+Actual:   OK</Message>
+          <StackTrace>   at WordOs.Api.Tests.Qa.FunctionalQaTests.F06_the_server_refuses_what_search_marked_as_added() in /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/Qa/FunctionalQaTests.cs:line 171
+--- End of stack trace from previous location ---</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="9f58b8c1-ed7b-4d27-88f7-fb17a8167d09" testId="28b1d187-1a91-987f-b1eb-aec5c92af960" testName="WordOs.Api.Tests.Qa.FunctionalQaTests.F05_a_written_meaning_marks_the_dictionary_sense_with_the_same_wording" computerName="MFDs-MacBook-Air" duration="00:00:00.3316509" startTime="2026-11-11T03:13:10.1999570+05:30" endTime="2026-11-11T03:13:10.5285690+05:30" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="9f58b8c1-ed7b-4d27-88f7-fb17a8167d09">
+      <Output>
+        <StdOut>custom add: 200
+dictionary sense marked=True</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="7bb3b83b-aa0c-4cc2-9ead-b002e706096d" testId="3772f1bd-ad4b-0421-3944-69a9c3de135a" testName="WordOs.Api.Tests.Qa.FunctionalQaTests.F09_my_words_search_finds_by_english_and_by_arabic" computerName="MFDs-MacBook-Air" duration="00:00:00.2012035" startTime="2026-11-11T03:13:11.1788310+05:30" endTime="2026-11-11T03:13:11.3802910+05:30" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="7bb3b83b-aa0c-4cc2-9ead-b002e706096d" />
+    <UnitTestResult executionId="0d177c33-4aea-45d1-9462-314298bd8e06" testId="0661d103-3c58-23c8-0c91-40740e565015" testName="WordOs.Api.Tests.Qa.FunctionalQaTests.F02_a_flagged_sense_sent_directly_is_refused_by_the_server" computerName="MFDs-MacBook-Air" duration="00:00:00.1990288" startTime="2026-11-11T03:13:10.9793650+05:30" endTime="2026-11-11T03:13:11.1786890+05:30" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="0d177c33-4aea-45d1-9462-314298bd8e06">
+      <Output>
+        <StdOut>direct re-add: 409 {"error":{"code":"WORD_ALREADY_ADDED","message":"You have already added this word with this meaning."}}</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="a85ac6cf-79cd-41f9-aa8a-c36039e05073" testId="19ff76f4-ee97-c181-5ed3-6c05b9126889" testName="WordOs.Api.Tests.Qa.FunctionalQaTests.F08_deleting_deep_in_the_list_then_continuing_loses_and_repeats_nothing" computerName="MFDs-MacBook-Air" duration="00:00:01.3099475" startTime="2026-11-11T03:13:08.8796660+05:30" endTime="2026-11-11T03:13:10.1955800+05:30" testType="13cdc9d9-ddb5-4fa4-a97d-d965ccfc6d4b" outcome="Passed" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" relativeResultsDirectory="a85ac6cf-79cd-41f9-aa8a-c36039e05073">
+      <Output>
+        <StdOut>rows seen 58, distinct 58, expected 58</StdOut>
+      </Output>
+    </UnitTestResult>
+  </Results>
+  <TestDefinitions>
+    <UnitTest name="WordOs.Api.Tests.Qa.FunctionalQaTests.F05_a_written_meaning_marks_the_dictionary_sense_with_the_same_wording" storage="/users/m.f.d/documents/cuadeai/bawazirapp/backend/tests/wordos.api.tests/bin/debug/net10.0/wordos.api.tests.dll" id="28b1d187-1a91-987f-b1eb-aec5c92af960">
+      <Execution id="9f58b8c1-ed7b-4d27-88f7-fb17a8167d09" />
+      <TestMethod codeBase="/Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/bin/Debug/net10.0/WordOs.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="WordOs.Api.Tests.Qa.FunctionalQaTests" name="F05_a_written_meaning_marks_the_dictionary_sense_with_the_same_wording" />
+    </UnitTest>
+    <UnitTest name="WordOs.Api.Tests.Qa.FunctionalQaTests.F09_my_words_search_finds_by_english_and_by_arabic" storage="/users/m.f.d/documents/cuadeai/bawazirapp/backend/tests/wordos.api.tests/bin/debug/net10.0/wordos.api.tests.dll" id="3772f1bd-ad4b-0421-3944-69a9c3de135a">
+      <Execution id="7bb3b83b-aa0c-4cc2-9ead-b002e706096d" />
+      <TestMethod codeBase="/Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/bin/Debug/net10.0/WordOs.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="WordOs.Api.Tests.Qa.FunctionalQaTests" name="F09_my_words_search_finds_by_english_and_by_arabic" />
+    </UnitTest>
+    <UnitTest name="WordOs.Api.Tests.Qa.FunctionalQaTests.F02_a_flagged_sense_sent_directly_is_refused_by_the_server" storage="/users/m.f.d/documents/cuadeai/bawazirapp/backend/tests/wordos.api.tests/bin/debug/net10.0/wordos.api.tests.dll" id="0661d103-3c58-23c8-0c91-40740e565015">
+      <Execution id="0d177c33-4aea-45d1-9462-314298bd8e06" />
+      <TestMethod codeBase="/Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/bin/Debug/net10.0/WordOs.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="WordOs.Api.Tests.Qa.FunctionalQaTests" name="F02_a_flagged_sense_sent_directly_is_refused_by_the_server" />
+    </UnitTest>
+    <UnitTest name="WordOs.Api.Tests.Qa.FunctionalQaTests.F08_deleting_deep_in_the_list_then_continuing_loses_and_repeats_nothing" storage="/users/m.f.d/documents/cuadeai/bawazirapp/backend/tests/wordos.api.tests/bin/debug/net10.0/wordos.api.tests.dll" id="19ff76f4-ee97-c181-5ed3-6c05b9126889">
+      <Execution id="a85ac6cf-79cd-41f9-aa8a-c36039e05073" />
+      <TestMethod codeBase="/Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/bin/Debug/net10.0/WordOs.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="WordOs.Api.Tests.Qa.FunctionalQaTests" name="F08_deleting_deep_in_the_list_then_continuing_loses_and_repeats_nothing" />
+    </UnitTest>
+    <UnitTest name="WordOs.Api.Tests.Qa.FunctionalQaTests.F03_an_archived_word_is_still_marked" storage="/users/m.f.d/documents/cuadeai/bawazirapp/backend/tests/wordos.api.tests/bin/debug/net10.0/wordos.api.tests.dll" id="0126a66b-5f1a-508e-4be2-79404c548900">
+      <Execution id="f8188a73-eed5-40ec-929d-a1849e91c76f" />
+      <TestMethod codeBase="/Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/bin/Debug/net10.0/WordOs.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="WordOs.Api.Tests.Qa.FunctionalQaTests" name="F03_an_archived_word_is_still_marked" />
+    </UnitTest>
+    <UnitTest name="WordOs.Api.Tests.Qa.FunctionalQaTests.F01_the_mark_belongs_to_the_learner_who_owns_the_sense" storage="/users/m.f.d/documents/cuadeai/bawazirapp/backend/tests/wordos.api.tests/bin/debug/net10.0/wordos.api.tests.dll" id="f7de16b8-dfd9-e296-c4cd-0775c0015bb9">
+      <Execution id="31afe822-6c9c-4cf4-8ccf-892dc556e05a" />
+      <TestMethod codeBase="/Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/bin/Debug/net10.0/WordOs.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="WordOs.Api.Tests.Qa.FunctionalQaTests" name="F01_the_mark_belongs_to_the_learner_who_owns_the_sense" />
+    </UnitTest>
+    <UnitTest name="WordOs.Api.Tests.Qa.FunctionalQaTests.F06_the_server_refuses_what_search_marked_as_added" storage="/users/m.f.d/documents/cuadeai/bawazirapp/backend/tests/wordos.api.tests/bin/debug/net10.0/wordos.api.tests.dll" id="bf197597-571e-e554-2376-1f4587bb7be7">
+      <Execution id="babae4ae-772e-4079-8f4a-dcd7026f64ff" />
+      <TestMethod codeBase="/Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/bin/Debug/net10.0/WordOs.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="WordOs.Api.Tests.Qa.FunctionalQaTests" name="F06_the_server_refuses_what_search_marked_as_added" />
+    </UnitTest>
+    <UnitTest name="WordOs.Api.Tests.Qa.FunctionalQaTests.F04_after_a_free_wording_edit_the_old_sense_stays_marked" storage="/users/m.f.d/documents/cuadeai/bawazirapp/backend/tests/wordos.api.tests/bin/debug/net10.0/wordos.api.tests.dll" id="66537eb8-1252-0bb4-d9af-ce229574dc1b">
+      <Execution id="3ae0b629-d2fb-4693-b544-0e1cd2f685c0" />
+      <TestMethod codeBase="/Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/bin/Debug/net10.0/WordOs.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="WordOs.Api.Tests.Qa.FunctionalQaTests" name="F04_after_a_free_wording_edit_the_old_sense_stays_marked" />
+    </UnitTest>
+    <UnitTest name="WordOs.Api.Tests.Qa.FunctionalQaTests.F07_my_words_pages_cover_every_row_exactly_once_at_each_size" storage="/users/m.f.d/documents/cuadeai/bawazirapp/backend/tests/wordos.api.tests/bin/debug/net10.0/wordos.api.tests.dll" id="ff92f38a-bb80-309d-07e3-e8792ca73193">
+      <Execution id="1cb62bc9-4ce6-4a43-9f8b-ccfd243d3c87" />
+      <TestMethod codeBase="/Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/bin/Debug/net10.0/WordOs.Api.Tests.dll" adapterTypeName="executor://xunit/VsTestRunner3/netcore/" className="WordOs.Api.Tests.Qa.FunctionalQaTests" name="F07_my_words_pages_cover_every_row_exactly_once_at_each_size" />
+    </UnitTest>
+  </TestDefinitions>
+  <TestEntries>
+    <TestEntry testId="66537eb8-1252-0bb4-d9af-ce229574dc1b" executionId="3ae0b629-d2fb-4693-b544-0e1cd2f685c0" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="0126a66b-5f1a-508e-4be2-79404c548900" executionId="f8188a73-eed5-40ec-929d-a1849e91c76f" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="ff92f38a-bb80-309d-07e3-e8792ca73193" executionId="1cb62bc9-4ce6-4a43-9f8b-ccfd243d3c87" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="f7de16b8-dfd9-e296-c4cd-0775c0015bb9" executionId="31afe822-6c9c-4cf4-8ccf-892dc556e05a" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="bf197597-571e-e554-2376-1f4587bb7be7" executionId="babae4ae-772e-4079-8f4a-dcd7026f64ff" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="28b1d187-1a91-987f-b1eb-aec5c92af960" executionId="9f58b8c1-ed7b-4d27-88f7-fb17a8167d09" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="3772f1bd-ad4b-0421-3944-69a9c3de135a" executionId="7bb3b83b-aa0c-4cc2-9ead-b002e706096d" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="0661d103-3c58-23c8-0c91-40740e565015" executionId="0d177c33-4aea-45d1-9462-314298bd8e06" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestEntry testId="19ff76f4-ee97-c181-5ed3-6c05b9126889" executionId="a85ac6cf-79cd-41f9-aa8a-c36039e05073" testListId="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+  </TestEntries>
+  <TestLists>
+    <TestList name="Results Not in a List" id="8c84fa94-04c1-424b-9868-57a2d4851a1d" />
+    <TestList name="All Loaded Results" id="19431567-8539-422a-85d7-44ee4e166bda" />
+  </TestLists>
+  <ResultSummary outcome="Failed">
+    <Counters total="9" executed="9" passed="7" failed="2" error="0" timeout="0" aborted="0" inconclusive="0" passedButRunAborted="0" notRunnable="0" notExecuted="0" disconnected="0" warning="0" completed="0" inProgress="0" pending="0" />
+    <Output>
+      <StdOut>[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter v3.1.4+50e68bbb8b (64-bit .NET 10.0.11)
+[xUnit.net 00:00:00.06]   Discovering: WordOs.Api.Tests
+[xUnit.net 00:00:00.12]   Discovered:  WordOs.Api.Tests
+[xUnit.net 00:00:00.13]   Starting:    WordOs.Api.Tests
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Testing
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Api
+warn: Microsoft.AspNetCore.HttpsPolicy.HttpsRedirectionMiddleware[3]
+      Failed to determine the https port for redirect.
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Testing
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Api
+warn: Microsoft.AspNetCore.HttpsPolicy.HttpsRedirectionMiddleware[3]
+      Failed to determine the https port for redirect.
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Testing
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Api
+warn: Microsoft.AspNetCore.HttpsPolicy.HttpsRedirectionMiddleware[3]
+      Failed to determine the https port for redirect.
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+[xUnit.net 00:00:03.05]       Assert.Equal() Failure: Values differ
+[xUnit.net 00:00:03.05]       Expected: Conflict
+[xUnit.net 00:00:03.05]       Actual:   OK
+[xUnit.net 00:00:03.05]       Stack Trace:
+[xUnit.net 00:00:03.05]         /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/Qa/FunctionalQaTests.cs(171,0): at WordOs.Api.Tests.Qa.FunctionalQaTests.F06_the_server_refuses_what_search_marked_as_added()
+[xUnit.net 00:00:03.05]         --- End of stack trace from previous location ---
+[xUnit.net 00:00:03.05]       Output:
+[xUnit.net 00:00:03.05]         direct add of the marked sense: 200; live rows for the word: 2
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Testing
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Api
+warn: Microsoft.AspNetCore.HttpsPolicy.HttpsRedirectionMiddleware[3]
+      Failed to determine the https port for redirect.
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Testing
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Api
+warn: Microsoft.AspNetCore.HttpsPolicy.HttpsRedirectionMiddleware[3]
+      Failed to determine the https port for redirect.
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Testing
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Api
+warn: Microsoft.AspNetCore.HttpsPolicy.HttpsRedirectionMiddleware[3]
+      Failed to determine the https port for redirect.
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Testing
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Api
+warn: Microsoft.AspNetCore.HttpsPolicy.HttpsRedirectionMiddleware[3]
+      Failed to determine the https port for redirect.
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Testing
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Api
+warn: Microsoft.AspNetCore.HttpsPolicy.HttpsRedirectionMiddleware[3]
+      Failed to determine the https port for redirect.
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Testing
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/src/WordOs.Api
+warn: Microsoft.AspNetCore.HttpsPolicy.HttpsRedirectionMiddleware[3]
+      Failed to determine the https port for redirect.
+info: Microsoft.Hosting.Lifetime[0]
+      Application is shutting down...
+[xUnit.net 00:00:04.98]       System.Net.Http.HttpRequestException : Response status code does not indicate success: 503 (Service Unavailable).
+[xUnit.net 00:00:04.98]       Stack Trace:
+[xUnit.net 00:00:04.98]            at System.Net.Http.HttpResponseMessage.EnsureSuccessStatusCode()
+[xUnit.net 00:00:04.98]         /Users/m.f.d/Documents/cuadeai/bawazirapp/backend/tests/WordOs.Api.Tests/Qa/FunctionalQaTests.cs(121,0): at WordOs.Api.Tests.Qa.FunctionalQaTests.F04_after_a_free_wording_edit_the_old_sense_stays_marked()
+[xUnit.net 00:00:04.98]         --- End of stack trace from previous location ---
+[xUnit.net 00:00:04.98]       Output:
+[xUnit.net 00:00:04.98]         edit: 503
+[xUnit.net 00:00:05.24]   Finished:    WordOs.Api.Tests
+</StdOut>
+    </Output>
+    <RunInfos>
+      <RunInfo computerName="MFDs-MacBook-Air" outcome="Error" timestamp="2026-11-11T03:13:10.7605930+05:30">
+        <Text>[xUnit.net 00:00:03.05]     WordOs.Api.Tests.Qa.FunctionalQaTests.F06_the_server_refuses_what_search_marked_as_added [FAIL]</Text>
+      </RunInfo>
+      <RunInfo computerName="MFDs-MacBook-Air" outcome="Error" timestamp="2026-11-11T03:13:12.6873600+05:30">
+        <Text>[xUnit.net 00:00:04.97]     WordOs.Api.Tests.Qa.FunctionalQaTests.F04_after_a_free_wording_edit_the_old_sense_stays_marked [FAIL]</Text>
+      </RunInfo>
+    </RunInfos>
+  </ResultSummary>
+</TestRun>

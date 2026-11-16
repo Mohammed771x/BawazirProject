@@ -1,0 +1,32 @@
+{
+  "campaign": "20261111-0121-d365f09",
+  "script": "budget_model.py (seed 20261111)",
+  "documented_limits": {
+    "render_free_instance_hours_per_workspace_month": {"value": 750, "source": "https://render.com/docs/free", "read": "2026-11-11"},
+    "render_spin_down_after_idle_min": {"value": 15, "source": "https://render.com/docs/free"},
+    "neon_free_cu_hours_per_project_month": {"value": 100, "source": "https://neon.com/docs/introduction/plans", "read": "2026-11-11"},
+    "neon_free_network_transfer_gb_per_project_month": {"value": 5, "source": "same"},
+    "neon_free_scale_to_zero_min": {"value": 5, "source": "same"}
+  },
+  "measured_locally": {
+    "admin_dataset_bytes_per_admin_call": {"value_mb": 1.56, "how": "sum(octet_length(row::text)) over every table IntelDataset.LoadAsync reads, wordos_dev, 55 learners / 65 sessions / 462 words", "confidence": "local data, not production"},
+    "readiness_db_checks_per_hour": {"value": 1, "how": "ReadinessProbeTests (cache 3600 s) passed in this campaign"},
+    "background_jobs_touching_db": {"value": 0, "how": "no IHostedService/BackgroundService/timer in backend/src; no setInterval in admin-web; no Timer.periodic in mobile/lib"}
+  },
+  "assumptions": {
+    "neon_compute_size_cu": 0.25,
+    "ready_probe_interval_min": 60,
+    "scenarios": {
+      "low":  {"sessions_per_learner_day": 1.0, "session_min": 10, "active_window_local": "08-22"},
+      "base": {"sessions_per_learner_day": 1.5, "session_min": 15, "active_window_local": "08-23"},
+      "high": {"sessions_per_learner_day": 2.5, "session_min": 20, "active_window_local": "07-24"}
+    },
+    "lesson_db_transfer_kb": 40,
+    "keep_alive": "/health/live every 10 min keeps Render awake 24/7 (docs/09 §4)"
+  },
+  "formulas": {
+    "render_instance_hours": "24 x days_in_month for one always-awake service (720 in a 30-day month, 744 in a 31-day month)",
+    "neon_cu_hours": "union of awake minutes per day (each activity + 5 min suspend tail, plus hourly ready probe) / 60 x 0.25 CU x days",
+    "admin_calls_to_fill_transfer": "5 GB / bytes per IntelDataset load"
+  }
+}

@@ -1,0 +1,10 @@
+> tsc -b
+
+typecheck exit=0
+src/pages/AiPage.tsx:181:121: warning react(purity): Cannot call impure function during render help: `Date` is an impure function. Calling an impure function can produce unstable results that update unpredictably when the component re-renders
+src/pages/AiPage.tsx:163:5: warning react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+src/pages/AiPage.tsx:173:24: warning react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.
+dist/assets/index-DHn7BqN3.css   27.12 kB │ gzip:   6.17 kB
+dist/assets/index-BUHuvsiJ.js   486.36 kB │ gzip: 139.23 kB
+
+✓ built in 182ms
