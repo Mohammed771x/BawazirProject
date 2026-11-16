@@ -29,6 +29,16 @@ abstraction and the Phase-1 mock both implement exactly this; Phase 5 makes it r
 - Dates are ISO-8601 UTC.
 - Errors: `{ "error": { "code": "STRING_CODE", "message": "...", "details": {...} } }` with
   conventional HTTP status codes.
+- Rate limits (ADR-137): `429 { "error": { "code": "RATE_LIMITED", "message": "..." } }`, with
+  `Retry-After` (seconds) when the limiter knows the wait. Sign-in, forgot and reset are also
+  limited per account; `/auth/refresh` has its own per-address budget; a written meaning, a
+  passage word and a meaning edit spend a per-learner meaning-check budget.
+- Concurrency (ADR-137): `complete`/`abandon` of one session, the redemption of one refresh token,
+  and a learner's weekly-review `start`/`complete` are serialised. A duplicate arriving at the
+  same moment gets the answer a later duplicate would (`409 SESSION_COMPLETE`,
+  `404 SESSION_NOT_FOUND`, the refresh replay path) — never a second application.
+- `POST /events`: a `wordId` or `sessionId` belonging to another learner is dropped from the
+  event (set to null) rather than stored.
 
 ---
 
@@ -244,6 +254,11 @@ handed one item at a time instead of a fixed list.
 | DELETE | `/words/{id}` | → `204` — the learner removes it (ADR-071) |
 | PATCH | `/words/{id}/meaning` | `{meaning}` → `Word` — rewrite the Arabic meaning, keeping the journey (ADR-101, ADR-112) |
 | PATCH | `/words/{id}/meaning` | `{meaning, replaceWithSenseId}` → `Word` — swap for the word that meaning belongs to, from the beginning |
+
+Vocabulary writes reject a duplicate active sense or the same case-insensitive
+English text and exact saved Arabic meaning with `409 WORD_ALREADY_ADDED`.
+An edit whose original meaning or sense changed before saving returns
+`409 WORD_CHANGED`. The learner can reopen the word and try again (ADR-138).
 
 > **The meaning may change; the word may not** (ADR-101). Nothing about the
 > journey moves — state, current skill, every skill's status, attempts and
@@ -493,6 +508,11 @@ handed one item at a time instead of a fixed list.
 | POST | `/sessions/{id}/level` | `{level}` → `SkillSession` — re-levels the session (ADR-030, ADR-038) |
 | POST | `/sessions/{id}/complete` | — → `SessionResult` |
 | POST | `/sessions/{id}/abandon` | — → `204` |
+
+Writing passes when the learner uses the intended sense in an understandable
+sentence. Minor grammar slips can still pass. If meaning cannot be checked,
+the server returns `503 WRITING_CHECK_UNAVAILABLE` and leaves the current
+task and attempt count unchanged (ADR-138).
 
 > **`POST /sessions/{id}/level`** behaves differently by skill, because the
 > skills differ in what a level *is*:

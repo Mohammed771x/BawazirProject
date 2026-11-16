@@ -104,7 +104,7 @@ public static class AuthEndpoints
 
         group.MapPost("/refresh", RefreshAsync)
             .AllowAnonymous()
-            .RequireRateLimiting(RateLimitPolicies.Authentication);
+            .RequireRateLimiting(RateLimitPolicies.Refresh);
 
         group.MapPost("/logout", LogoutAsync).RequireAuthorization();
 
@@ -188,6 +188,8 @@ public static class AuthEndpoints
         WordOsDbContext db,
         IPasswordHasher hasher,
         JwtTokenService tokens,
+        AttemptLimiter attempts,
+        HttpResponse response,
         TimeProvider clock,
         CancellationToken ct)
     {
@@ -195,6 +197,11 @@ public static class AuthEndpoints
             return Results.ValidationProblem(errors);
 
         var email = request.Email.Trim().ToLowerInvariant();
+
+        // Ten tries per account per window, from any number of addresses
+        // (ADR-137). Counted whether or not the account exists, so the
+        // refusal says nothing about who has one.
+        if (attempts.CheckAccount("login", email, response) is { } limited) return limited;
         var now = clock.GetUtcNow();
 
         var user = await db.Users
@@ -245,6 +252,13 @@ public static class AuthEndpoints
     {
         var now = clock.GetUtcNow();
         var hash = JwtTokenService.HashRefreshToken(request.RefreshToken);
+
+        // One presentation of a token at a time (ADR-137). Without this, ten
+        // requests carrying the same token all read it as unused and minted ten
+        // live successors — rotation, and the reuse detection built on it,
+        // undone by a race. The second request now waits, finds the token used,
+        // and takes the replay path below like any late retry.
+        await using var serialised = await RowLock.AcquireAsync(db, "refresh", hash, ct);
 
         var stored = await db.RefreshTokens
             .FirstOrDefaultAsync(t => t.TokenHash == hash, ct);

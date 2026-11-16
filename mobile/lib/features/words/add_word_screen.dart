@@ -219,10 +219,14 @@ class _AddWordScreenState extends ConsumerState<AddWordScreen> {
               }))
             else if (_candidates.isEmpty && _notFoundQuery == null)
               Expanded(
-                child: EmptyState(
-                  icon: Icons.travel_explore_rounded,
-                  title: s.typeWord,
-                  message: s.chooseMeaningSubtitle,
+                child: Center(
+                  child: SingleChildScrollView(
+                    child: EmptyState(
+                      icon: Icons.travel_explore_rounded,
+                      title: s.typeWord,
+                      message: s.chooseMeaningSubtitle,
+                    ),
+                  ),
                 ),
               )
             else

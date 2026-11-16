@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using System.Text.Json;
@@ -70,6 +71,21 @@ public static class EventEndpoints
         var now = clock.GetUtcNow();
         var accepted = 0;
 
+        // An id that belongs to another learner is dropped from the event, not
+        // stored (ADR-137): it cannot reveal anything, but every per-word or
+        // per-session figure in the admin area would count it against the
+        // wrong learner's word. An id that matches nothing is kept — an
+        // abandoned session's row is gone by the time the phone's batch for it
+        // arrives, and the event still belongs to it.
+        var wordIds = request.Events.Select(e => e.WordId).OfType<Guid>().Distinct().ToList();
+        var sessionIds = request.Events.Select(e => e.SessionId).OfType<Guid>().Distinct().ToList();
+        var foreignWords = wordIds.Count == 0 ? [] : (await db.Words.IgnoreQueryFilters()
+            .Where(w => wordIds.Contains(w.Id) && w.UserId != userId)
+            .Select(w => w.Id).ToListAsync(ct)).ToHashSet();
+        var foreignSessions = sessionIds.Count == 0 ? [] : (await db.SkillSessions
+            .Where(x => sessionIds.Contains(x.Id) && x.UserId != userId)
+            .Select(x => x.Id).ToListAsync(ct)).ToHashSet();
+
         foreach (var e in request.Events)
         {
             // Unknown names, and names only the server may write, are dropped
@@ -87,8 +103,8 @@ public static class EventEndpoints
             db.AnalyticsEvents.Add(AnalyticsEvent.Create(
                 userId.Value, e.Name, AnalyticsSource.Client, at, now,
                 appSessionId: e.AppSessionId,
-                sessionId: e.SessionId,
-                wordId: e.WordId,
+                sessionId: e.SessionId is { } sid && foreignSessions.Contains(sid) ? null : e.SessionId,
+                wordId: e.WordId is { } wid && foreignWords.Contains(wid) ? null : e.WordId,
                 skill: Enum.TryParse<SkillType>(e.Skill, ignoreCase: true, out var skill)
                        && Enum.IsDefined(skill) ? skill : null,
                 attempt: e.Attempt,

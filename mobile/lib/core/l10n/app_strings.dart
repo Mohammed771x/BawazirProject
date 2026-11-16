@@ -85,6 +85,10 @@ class AppStrings {
 
         // Adding words.
         'WORD_ALREADY_ADDED' => alreadyInYourWords,
+        'WORD_CHANGED' => _(
+            'This word changed while you were editing it. Reopen it and try again.',
+            'تغيّرت هذه الكلمة أثناء تعديلها. افتحها من جديد وحاول مرة أخرى.',
+          ),
         // Shown only when the checker's own sentence is unavailable — it
         // normally says which spelling it thinks was meant (ADR-075).
         'WORD_NOT_RECOGNIZED' => _(
@@ -196,6 +200,10 @@ class AppStrings {
         'AI_BUSY' => _(
             'Lessons are in high demand right now. Try again in a moment.',
             'الطلب على الدروس مرتفع الآن. حاول بعد لحظات.',
+          ),
+        'WRITING_CHECK_UNAVAILABLE' => _(
+            'Could not check the meaning just now. Try again in a moment.',
+            'تعذّر التحقق من المعنى الآن. حاول بعد لحظات.',
           ),
         'SESSION_STARTING' || 'SESSION_RACE' => _(
             'Your session is still being prepared. Try again in a moment.',

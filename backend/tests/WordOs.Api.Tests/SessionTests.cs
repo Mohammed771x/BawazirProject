@@ -719,6 +719,40 @@ public class SessionTests(PostgresFixture db) : IAsyncLifetime
         Assert.True(body.GetProperty("requeued").GetBoolean());
     }
 
+    [SkippableFact]
+    public async Task Writing_rejects_the_wrong_sense_and_preserves_the_attempt_during_an_outage()
+    {
+        Skip.IfNot(db.IsAvailable, db.SkipReason);
+        await SignInAsync();
+        await AddWordAsync("bank", "ضفة النهر");
+        await AdvanceToWritingAsync();
+
+        var session = await StartAsync("writing");
+        var sessionId = session.GetProperty("id").GetGuid();
+        var itemId = session.GetProperty("items").EnumerateArray().Single()
+            .GetProperty("id").GetGuid();
+        var url = $"/api/sessions/{sessionId}/writing";
+        var answer = new { itemId, answer = "I put my salary in the bank." };
+
+        Ai.Fail = true;
+        var unavailable = await Client.PostAsJsonAsync(url, answer);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailable.StatusCode);
+        Assert.Contains("WRITING_CHECK_UNAVAILABLE", await unavailable.Content.ReadAsStringAsync());
+        await using (var context = db.CreateContext())
+        {
+            Assert.Equal(0, await context.SessionItems.Where(i => i.Id == itemId)
+                .Select(i => i.Attempts).SingleAsync());
+        }
+
+        Ai.Fail = false;
+        Ai.WritingMeaningCorrect = false;
+        var response = await Client.PostAsJsonAsync(url, answer);
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(body.GetProperty("passed").GetBoolean());
+        Assert.True(body.GetProperty("requeued").GetBoolean());
+    }
+
     // ── Spelling ─────────────────────────────────────────────────────────────
 
     [SkippableFact]

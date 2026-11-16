@@ -117,10 +117,12 @@ class WordTile extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: AppSpacing.sm),
-          Row(
+          OverflowBar(
+            alignment: MainAxisAlignment.spaceBetween,
+            spacing: AppSpacing.xs,
+            overflowSpacing: AppSpacing.xs,
             children: [
               SkillPips(skills: word.skills),
-              const Spacer(),
               // What the learner is told about a word is where it is in their
               // own learning, not which state row the server holds (§42–§45):
               // a word still in the pipeline shows the skill it is waiting on,

@@ -17,12 +17,50 @@ public sealed class RateLimitOptions
     public const string SectionName = "RateLimits";
 
     /// <summary>
-    /// Registration and login attempts, partitioned by IP — the
-    /// credential-stuffing surface.
+    /// Registration, sign-in and password-reset requests, partitioned by IP.
     /// </summary>
-    public int AuthenticationPermits { get; init; } = 10;
+    /// <remarks>
+    /// 100, not the 10 it was (ADR-137). One address is very often many
+    /// people — a school, a dormitory, a mobile carrier's NAT — and at 10 a
+    /// class signing in together locked itself out for a quarter of an hour.
+    /// Guessing one account's password is held to the old pace by
+    /// <see cref="AccountAttemptPermits"/>, which is keyed on the account and
+    /// so does not care how many addresses the guesses come from.
+    /// </remarks>
+    public int AuthenticationPermits { get; init; } = 100;
 
     public int AuthenticationWindowMinutes { get; init; } = 15;
+
+    /// <summary>
+    /// Sign-in and reset attempts against one account (by email), wherever
+    /// they come from (ADR-137).
+    /// </summary>
+    public int AccountAttemptPermits { get; init; } = 10;
+
+    public int AccountAttemptWindowMinutes { get; init; } = 15;
+
+    /// <summary>
+    /// <c>/auth/refresh</c>, partitioned by IP, separate from sign-in (ADR-137).
+    /// </summary>
+    /// <remarks>
+    /// The access token lives 15 minutes, so every learner using the app
+    /// refreshes about four times an hour. Sharing the sign-in budget meant
+    /// eleven learners behind one school address could not all keep working
+    /// (QA campaign 20261111, D08-1). A refresh token is 48 random bytes:
+    /// there is nothing to guess, and this budget exists only so one address
+    /// cannot hammer the endpoint. 300 per 15 minutes carries ~300 learners
+    /// behind a single address.
+    /// </remarks>
+    public int RefreshPermits { get; init; } = 300;
+
+    public int RefreshWindowMinutes { get; init; } = 15;
+
+    /// <summary>
+    /// Model calls a learner's own meanings may cost per minute: adding a word
+    /// with a written meaning, adding a passage word, editing a meaning
+    /// (ADR-137). The dictionary add on the same route is not counted.
+    /// </summary>
+    public int MeaningCheckPermitsPerMinute { get; init; } = 20;
 
     /// <summary>Word lookup fires on every keystroke.</summary>
     public int LookupPermitsPerMinute { get; init; } = 120;

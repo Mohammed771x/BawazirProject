@@ -68,11 +68,17 @@ class WordOsBrand extends StatelessWidget {
             SizedBox(width: size == WordOsBrandSize.large
                 ? AppSpacing.sm
                 : AppSpacing.xs),
-            Text(
-              'WordOS',
-              style: size == WordOsBrandSize.large
-                  ? context.text.titleLarge
-                  : context.text.titleMedium,
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'WordOS',
+                  style: size == WordOsBrandSize.large
+                      ? context.text.titleLarge
+                      : context.text.titleMedium,
+                ),
+              ),
             ),
           ],
         ),

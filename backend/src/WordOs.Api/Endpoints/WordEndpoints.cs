@@ -448,6 +448,7 @@ public static class WordEndpoints
         WordOsDbContext db,
         WordOsConfiguration config,
         IAiContentService ai,
+        AttemptLimiter attempts,
         HttpContext http,
         TimeProvider clock,
         CancellationToken ct)
@@ -547,6 +548,8 @@ public static class WordEndpoints
                             : facts.PartOfSpeech,
                     CheckersLevel(v) ?? facts.CefrLevel);
             }
+
+            if (attempts.CheckMeaning(userId.Value, http.Response) is { } limited) return limited;
 
             MeaningCheck described;
             try
@@ -651,6 +654,8 @@ public static class WordEndpoints
                 || (v.Corrected is { Length: > 0 } c
                     && !string.Equals(c, custom, StringComparison.Ordinal))
                 || DescribeWritten(v).IsComplete;
+
+            if (attempts.CheckMeaning(userId.Value, http.Response) is { } limited) return limited;
 
             MeaningCheck verdict;
             try
@@ -824,26 +829,10 @@ public static class WordEndpoints
             source = MeaningSource.Lexicon;
         }
 
-        // Duplicate identity is the sense, scoped to this learner. Deleted rows
-        // are invisible here — the query filter drops them (ADR-071) — so a word
-        // the learner removed and wants back is added afresh rather than refused.
-        var duplicate = await db.Words.AnyAsync(
-            w => w.UserId == userId && w.SenseId == senseId, ct);
-
-        // A written meaning can land on the same text and gloss as a lexicon
-        // sense — type "باع" for `sell` and it reads identically to
-        // `sell%2:40:00::`. Those are different sense ids, so the index would
-        // let both in and the learner would own the same card twice. Checked
-        // here because it is the only place that can see both.
-        if (!duplicate && source != MeaningSource.Lexicon)
-        {
-            duplicate = await db.Words.AnyAsync(
-                w => w.UserId == userId
-                     && w.Meaning == storedMeaning
-                     && EF.Functions.ILike(w.Text, storedText), ct);
-        }
-
-        if (duplicate)
+        // Different sources can produce identical cards with distinct sense
+        // ids. Serialize the check and write for this learner, after any AI call.
+        await using var serialised = await RowLock.AcquireAsync(db, "vocabulary", userId.Value, ct);
+        if (await OwnsMeaningAsync(db, userId.Value, senseId, storedText, storedMeaning, ct))
         {
             return Problems.Conflict(
                 "WORD_ALREADY_ADDED",
@@ -888,6 +877,26 @@ public static class WordEndpoints
 
         return Results.Ok(ToResponse(word, config));
     }
+
+    private static Task<bool> OwnsMeaningAsync(
+        WordOsDbContext db, Guid userId, string senseId, string text,
+        string meaning, CancellationToken ct, Guid? exceptWordId = null)
+    {
+        var foldedText = text.Trim().ToLowerInvariant();
+        var trimmedMeaning = meaning.Trim();
+        return db.Words.AnyAsync(w => w.UserId == userId
+            && (exceptWordId == null || w.Id != exceptWordId)
+            && (w.SenseId == senseId
+                || (w.Text.ToLower() == foldedText && w.Meaning == trimmedMeaning)), ct);
+    }
+
+    private static Task<bool> MeaningIsCurrentAsync(
+        WordOsDbContext db, Word word, CancellationToken ct) => db.Words.AnyAsync(
+        w => w.Id == word.Id && w.UserId == word.UserId
+            && w.SenseId == word.SenseId && w.Meaning == word.Meaning, ct);
+
+    private static IResult MeaningChanged() => Problems.Conflict(
+        "WORD_CHANGED", "This word changed while you were editing it. Reopen it and try again.");
 
     /// <summary>
     /// A part of speech this app can actually say, or nothing (ADR-075).
@@ -1223,6 +1232,7 @@ public static class WordEndpoints
         WordOsDbContext db,
         WordOsConfiguration config,
         IAiContentService ai,
+        AttemptLimiter attempts,
         HttpContext http,
         TimeProvider clock,
         CancellationToken ct)
@@ -1321,19 +1331,14 @@ public static class WordEndpoints
             // the meaning so the stored English definition describes what the
             // learner now says the word means — but only if it is free: they
             // may already own this exact card.
-            if (sameWord.SenseId != word.SenseId)
+            await using var serialised = await RowLock.AcquireAsync(db, "vocabulary", word.UserId, ct);
+            if (!await MeaningIsCurrentAsync(db, word, ct)) return MeaningChanged();
+            if (await OwnsMeaningAsync(db, word.UserId, sameWord.SenseId,
+                    word.Text, sameWord.MeaningAr, ct, word.Id))
             {
-                var taken = await db.Words.AnyAsync(
-                    w => w.UserId == userId
-                         && w.SenseId == sameWord.SenseId
-                         && w.Id != word.Id, ct);
-
-                if (taken)
-                {
-                    return Problems.Conflict(
-                        "WORD_ALREADY_ADDED",
-                        "You already have this word with that meaning.");
-                }
+                return Problems.Conflict(
+                    "WORD_ALREADY_ADDED",
+                    "You already have this word with that meaning.");
             }
 
             word.ChangeMeaning(
@@ -1368,6 +1373,8 @@ public static class WordEndpoints
                     : sense?.PartOfSpeech ?? lexicon?.PartOfSpeech ?? string.Empty,
                 CheckersLevel(v) ?? lexicon?.CefrLevel);
         }
+
+        if (attempts.CheckMeaning(userId.Value, http.Response) is { } limited) return limited;
 
         MeaningCheck verdict;
         try
@@ -1423,6 +1430,11 @@ public static class WordEndpoints
         var description = DescribeEdit(verdict);
         if (!description.IsComplete) return MeaningCheckUnavailable();
 
+        await using var serialisedEdit = await RowLock.AcquireAsync(db, "vocabulary", word.UserId, ct);
+        if (!await MeaningIsCurrentAsync(db, word, ct)) return MeaningChanged();
+        if (await OwnsMeaningAsync(db, word.UserId, word.SenseId, word.Text, meaning, ct, word.Id))
+            return Problems.Conflict("WORD_ALREADY_ADDED", "You already have this word with that meaning.");
+
         word.ChangeMeaning(
             meaning,
             MeaningSource.Learner,
@@ -1474,12 +1486,10 @@ public static class WordEndpoints
                 "That word and meaning are not in the dictionary.");
         }
 
-        var duplicate = await db.Words.AnyAsync(
-            w => w.UserId == word.UserId
-                 && w.SenseId == entry.SenseId
-                 && w.Id != word.Id, ct);
-
-        if (duplicate)
+        await using var serialised = await RowLock.AcquireAsync(db, "vocabulary", word.UserId, ct);
+        if (!await MeaningIsCurrentAsync(db, word, ct)) return MeaningChanged();
+        if (await OwnsMeaningAsync(db, word.UserId, entry.SenseId,
+                entry.Text, entry.MeaningAr, ct, word.Id))
         {
             return Problems.Conflict(
                 "WORD_ALREADY_ADDED",
@@ -1532,6 +1542,7 @@ public static class WordEndpoints
         // `IgnoreQueryFilters` so that a repeat of this very request finds the
         // row it already deleted instead of 404-ing on it. Still scoped to the
         // caller's own id: another learner's word is not addressable.
+        await using var serialised = await RowLock.AcquireAsync(db, "vocabulary", userId.Value, ct);
         var word = await db.Words
             .IgnoreQueryFilters()
             .FirstOrDefaultAsync(w => w.Id == id && w.UserId == userId, ct);

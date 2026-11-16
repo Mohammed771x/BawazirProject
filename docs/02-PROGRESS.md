@@ -1,9 +1,56 @@
 # WordOS — Progress Ledger
 
+> **2026-11-11 — QA prompt handoff prepared (documentation only).**
+> `docs/qa-prompts/README.md` indexes twelve Arabic specialty prompts and a
+> final evidence-review prompt, with shared execution rules, a report template,
+> project context and a source inventory. Includes the `alreadyAdded` lookup change
+> (reconciled with `d365f09`, committed during preparation), recent audio/tour
+> regressions, proposed 100/300/500 user measurement scenarios, and Render/Neon Free monthly-usage analysis. The owner requested
+> neutral verification: passing is a valid outcome, no invented defects, and no
+> capacity claims without measurement. Source review was targeted, not a complete
+> line-by-line audit. No application tests or production load were run, no billing
+> dashboard was inspected, and no runtime code or hosting settings were changed.
+
 > **The live state of the project.** Update this at the end of every working session.
 > A new session should read `CLAUDE.md` → this file → then start at "Next up".
 
-**Last updated:** 2026-11-11 (dictionary marks words already added — ADR-136)
+**Last updated:** 2026-11-11 (QA follow-up — ADR-138 and ADR-139)
+
+> **2026-11-11 — QA follow-up.** Writing checks the intended sense and retains
+> attempts when the meaning evaluator is unavailable. Vocabulary writes reject
+> cross-source duplicates under concurrency. Meaning-check rate limits apply
+> on the AI branches, with retry headers. Neon transaction-pooler hostnames
+> fail startup validation because the session locks require a direct endpoint.
+> Android speech services are declared and the small-screen UI fixes passed.
+> Local verification: Domain 234, API 590, Flutter 650, Python 243, admin build
+> and mobile Chrome focus check, Android emulator TTS. Production read-only
+> health probes answered; billing needs a signed-in dashboard. See
+> `reports/qa/20261111-0121-d365f09/FOLLOW-UP.md`.
+
+> **2026-11-11 — QA campaign complete: all twelve prompts plus the verdict.** Verdict in
+> `reports/qa/20261111-0121-d365f09/FINAL-REPORT.md`: *ready with non-blocking fixes and
+> stated risks* for an internal APK pilot. Open, not fixed (the campaign rule):
+> **D05-1**, where Writing passes a word used with the wrong meaning
+> (`SessionEndpoints.cs:989`, ADR-015 vs spec 08 / MVP Core §32). This needs an owner decision.
+> **D01-1**, where the server accepts a duplicate word with the same text and meaning.
+> **D06-1..4**, overflow at 320dp, the normal-speed speaker button with no name or size,
+> and admin focus on mobile.
+> The new QA tests are `Qa/FunctionalQaTests.cs`, whose F06 and F10 fail on purpose and
+> prove D01-1, and `mobile/test/qa_ui_matrix_test.dart`. `real_backend_journey_test`'s tap
+> helper was fixed so it closes the keyboard first.
+> Local proof: 300 active users at p95 ≤ 28 ms, encrypted backup and restore in 8 s.
+> Not measured: Render Free and a real device's audio.
+> **Before the next release, bump to `1.3.3+7`.** Two synthetic learners (`journey-…`,
+> `resume-…@wordos.test`) are in `wordos_dev` from one run that went to `:5199`; delete them on request.
+
+> **2026-11-11 — The QA campaign's eight defects are fixed (ADR-137).** Local, not committed.
+> API only, **no migration**, no app change. Advisory locks serialise session complete/abandon,
+> refresh-token redemption and weekly-review start/complete. `/auth/refresh` has its own budget
+> (300/15 min/IP), sign-in is 100/15 min/IP plus 10/15 min per account, meaning checks have a
+> per-learner budget, foreign ids are dropped from events, and a 429 carries `RATE_LIMITED`
+> and `Retry-After`. Reports: `reports/qa/20261111-0121-d365f09/`; their tests in
+> `backend/tests/*/Qa/` now pass. **Next:** the owner's OK to commit and deploy the API; then
+> QA prompts 01, 05, 06, 07, 09, 12 and 13.
 
 > **2026-11-11 — The dictionary search says "Added" (ADR-136).** Committed
 > locally, not pushed. `/words/lookup` carries `alreadyAdded` per sense; the add

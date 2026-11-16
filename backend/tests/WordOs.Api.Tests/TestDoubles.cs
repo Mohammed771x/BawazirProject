@@ -261,6 +261,8 @@ public sealed class StubAiContentService : IAiContentService
     /// </remarks>
     public string? LastFeedbackLanguage { get; private set; }
 
+    public bool? WritingMeaningCorrect { get; set; }
+
     public Task<WritingObservation> EvaluateWritingAsync(
         WritingEvaluationRequest request,
         CancellationToken ct = default)
@@ -276,7 +278,7 @@ public sealed class StubAiContentService : IAiContentService
         // can prove §32: a grammar note alone never fails correct usage.
         return Task.FromResult(new WritingObservation(
             UsedWord: used,
-            MeaningCorrect: used,
+            MeaningCorrect: WritingMeaningCorrect ?? used,
             UsageCorrect: used,
             Understandable: request.Sentence.Split(' ').Length >= 3,
             GrammarNote: "missing article",

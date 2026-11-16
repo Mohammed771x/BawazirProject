@@ -79,7 +79,7 @@ builder.WebHost.ConfigureKestrel(options =>
 //
 // A bounded pool moves that queue inside this process, where waiting is cheap
 // and ordered, instead of letting it become an error at the far end.
-var dataSource = new Npgsql.NpgsqlConnectionStringBuilder(connectionString)
+var database = new Npgsql.NpgsqlConnectionStringBuilder(connectionString)
 {
     MaxPoolSize = capacity.DatabaseConnections,
     // A connection that cannot be had is worth waiting a few seconds for; a
@@ -88,7 +88,21 @@ var dataSource = new Npgsql.NpgsqlConnectionStringBuilder(connectionString)
     // Long enough for the heaviest report, short enough that a stuck query
     // does not hold a connection all day.
     CommandTimeout = capacity.DatabaseCommandTimeoutSeconds,
-}.ConnectionString;
+};
+
+// ADR-137 holds PostgreSQL session locks across several commands. Neon's
+// transaction pooler can assign each command to a different server session.
+if (database.Host?.Split(',', StringSplitOptions.TrimEntries)
+    .Select(address => address.Split(':', 2)[0]).Any(host =>
+        host.EndsWith(".neon.tech", StringComparison.OrdinalIgnoreCase)
+        && host.Split('.')[0].EndsWith("-pooler", StringComparison.OrdinalIgnoreCase)) == true)
+{
+    throw new InvalidOperationException(
+        "ConnectionStrings:WordOs must use the direct Neon endpoint for session locks. "
+        + "Copy the connection settings with Connection pooling turned off in Neon.");
+}
+
+var dataSource = database.ConnectionString;
 
 // Pooled: a DbContext is created and thrown away on every request, and at a
 // thousand learners that allocation is worth avoiding. The behaviour is
@@ -314,6 +328,10 @@ builder.Services.AddAuthorizationBuilder()
 var limits = builder.Configuration.GetSection(RateLimitOptions.SectionName)
     .Get<RateLimitOptions>() ?? new RateLimitOptions();
 
+// Budgets keyed on what only a handler knows — the account a sign-in is for,
+// the learner whose meaning is about to cost a model call (ADR-137).
+builder.Services.AddSingleton(_ => new AttemptLimiter(limits));
+
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -333,7 +351,25 @@ builder.Services.AddRateLimiter(options =>
                 context.Request.Path,
                 ClientAddress.Of(context, limits.ClientAddressHeader, limits.ClientAddressEntry),
                 ClientAddress.Describe(context));
-        return ValueTask.CompletedTask;
+
+        // The same error shape as every other refusal, and the wait, when the
+        // limiter knows it (ADR-137). It used to be an empty 429, the one
+        // error in the API a client could not read a code from.
+        if (rejected.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            context.Response.Headers.RetryAfter =
+                ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(
+                    System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        return new ValueTask(context.Response.WriteAsJsonAsync(new
+        {
+            error = new
+            {
+                code = "RATE_LIMITED",
+                message = "Too many requests. Please wait a moment and try again.",
+            },
+        }));
     };
 
     // Authentication is the credential-stuffing surface, so it is partitioned
@@ -346,6 +382,18 @@ builder.Services.AddRateLimiter(options =>
             {
                 PermitLimit = limits.AuthenticationPermits,
                 Window = TimeSpan.FromMinutes(limits.AuthenticationWindowMinutes),
+            }));
+
+    // Refreshing is not signing in (ADR-137): there is no password to guess,
+    // and every learner does it four times an hour. Its own budget, per
+    // address, wide enough for a classroom behind one school address.
+    options.AddPolicy(RateLimitPolicies.Refresh, context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            ClientAddress.Of(context, limits.ClientAddressHeader, limits.ClientAddressEntry),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = limits.RefreshPermits,
+                Window = TimeSpan.FromMinutes(limits.RefreshWindowMinutes),
             }));
 
     // Lookup fires on every keystroke, so the budget is generous but bounded.

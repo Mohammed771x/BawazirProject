@@ -977,16 +977,21 @@ public static class SessionEndpoints
             // in the language they read the app in (ADR-035).
             LearnerLanguage.From(http)), ct);
 
-        if (observation.FromFallback) session.MarkFallbackUsed();
+        // The fallback can spot the word, but cannot check its intended sense.
+        // Leave the item current so the learner can retry without an attempt.
+        if (observation.FromFallback)
+            return Problems.Unavailable(
+                "WRITING_CHECK_UNAVAILABLE",
+                "Could not check the meaning just now. Try your sentence again in a moment.");
+
         session.RecordAiCall(
             observation.PromptVersion, observation.Model, observation.Tokens);
 
-        // ── The rule, applied here and not by the AI ─────────────────────────
-        //
-        // MVP Core §32: a small grammar slip must not fail correct usage. The
-        // model reports `grammar_note`; this line decides what it costs. Living
-        // in C# means a prompt edit cannot silently change what passing means.
-        var passed = observation.UsedWord && observation.Understandable;
+        // MVP Core §32: the intended sense must be clear. A small grammar
+        // slip can still leave a sentence understandable.
+        var passed = observation.UsedWord
+            && observation.MeaningCorrect
+            && observation.Understandable;
 
         item.SetAnswer(sentence);
         var requeued = session.RecordAttempt(
@@ -1310,6 +1315,15 @@ public static class SessionEndpoints
         TimeProvider clock,
         CancellationToken ct)
     {
+        // One completion of a session at a time (ADR-137). Ten completes
+        // released together used to all read the session as open and all apply
+        // it: the word's history recorded ten passes and the activity log ten
+        // completions, which the admin area counts. The second request now
+        // waits here, reads the session as finished, and answers 409 — the
+        // same answer a second tap a moment later always got. Abandon takes
+        // the same lock, so the two cannot interleave either.
+        await using var serialised = await RowLock.AcquireAsync(db, "session", id, ct);
+
         var (session, error) = await LoadSessionAsync(id, principal, db, ct);
         if (error is not null) return error;
 
@@ -1624,6 +1638,12 @@ public static class SessionEndpoints
     {
         var userId = principal.UserId();
         if (userId is null) return Results.Unauthorized();
+
+        // The lock Complete takes (ADR-137). Racing a completion, abandon used
+        // to win half the time after the outcome was already applied — the
+        // words moved on and the session that moved them was deleted — and to
+        // make the completion fail with a 500 the rest of the time.
+        await using var serialised = await RowLock.AcquireAsync(db, "session", id, ct);
 
         // Leaving early must not consume the words: the session is dropped and
         // they stay due.

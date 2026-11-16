@@ -53,6 +53,8 @@ public static class PasswordResetEndpoints
         IPasswordHasher hasher,
         IEmailSender email,
         WordOsConfiguration config,
+        AttemptLimiter attempts,
+        HttpResponse response,
         TimeProvider clock,
         ILoggerFactory logs,
         CancellationToken ct)
@@ -61,6 +63,10 @@ public static class PasswordResetEndpoints
             return Results.ValidationProblem(errors);
 
         var address = request.Email.Trim().ToLowerInvariant();
+
+        // Per account, so one mailbox cannot be flooded with codes from many
+        // addresses (ADR-137). The same for addresses with no account.
+        if (attempts.CheckAccount("forgot", address, response) is { } limited) return limited;
         var now = clock.GetUtcNow();
 
         var user = await db.Users
@@ -113,6 +119,8 @@ public static class PasswordResetEndpoints
         WordOsDbContext db,
         IPasswordHasher hasher,
         WordOsConfiguration config,
+        AttemptLimiter attempts,
+        HttpResponse response,
         TimeProvider clock,
         CancellationToken ct)
     {
@@ -120,6 +128,9 @@ public static class PasswordResetEndpoints
             return Results.ValidationProblem(errors);
 
         var address = request.Email.Trim().ToLowerInvariant();
+
+        // Code guesses per account, on top of the per-code attempt cap (ADR-137).
+        if (attempts.CheckAccount("reset", address, response) is { } limited) return limited;
         var now = clock.GetUtcNow();
 
         var user = await db.Users

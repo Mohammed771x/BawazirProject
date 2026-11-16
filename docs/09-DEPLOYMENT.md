@@ -276,6 +276,12 @@ openssl rand -base64 32   # AI_SERVICE_TOKEN
 
 **None of these belong in Git.** They are typed into Render and nowhere else.
 
+Use Neon's direct endpoint for `ConnectionStrings__WordOs` (Connection
+pooling off in the Neon connection dialog). ADR-137 uses PostgreSQL
+session-level locks, which Neon's transaction pooler does not support.
+Startup rejects a Neon `-pooler` hostname with a configuration error. The
+API still uses its bounded Npgsql connection pool with the direct endpoint.
+
 `AI_SERVICE_TOKEN` and `AiService__Token` are **the same secret seen from both
 ends**: Python checks the header, .NET sends it. Set them to different values
 and every AI call is refused.

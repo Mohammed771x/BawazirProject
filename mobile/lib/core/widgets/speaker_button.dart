@@ -60,9 +60,9 @@ class SpeakerButton extends ConsumerWidget {
           : () => speech.toggle(id, text, rate: rate),
       // Named, so the slow one is distinguishable by a screen reader and by
       // anyone who long-presses rather than guessing from a small glyph.
-      tooltip: tooltip ?? (slow ? s.slowSpeed : null),
+      tooltip: tooltip ?? (playing ? s.stopAudio : (slow ? s.slowSpeed : s.playAudio)),
       iconSize: size,
-      visualDensity: VisualDensity.compact,
+      visualDensity: dense ? VisualDensity.compact : VisualDensity.standard,
       style: IconButton.styleFrom(
         foregroundColor: playing ? tint : context.colors.onSurface,
         backgroundColor:
@@ -71,7 +71,7 @@ class SpeakerButton extends ConsumerWidget {
         // Material 3 pads every icon button to a 48-point tap target, which
         // is what kept a dense pair from fitting beside a question.
         padding: dense ? const EdgeInsets.all(AppSpacing.xxs) : null,
-        minimumSize: dense ? Size.square(size + AppSpacing.sm) : null,
+        minimumSize: dense ? Size.square(size + AppSpacing.sm) : const Size.square(48),
         tapTargetSize: dense ? MaterialTapTargetSize.shrinkWrap : null,
       ),
       icon: Icon(

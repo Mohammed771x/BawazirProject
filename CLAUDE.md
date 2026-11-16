@@ -153,6 +153,11 @@ dev.flutter.plugins.integration_test does not exist"* — a compile error about 
 file nobody wrote, naming a plugin nobody asked for. Delete that file and build
 again, with nothing else running.
 
+Keep Pub enabled for this build. `--no-pub` also skips regenerating the native
+plugin registrant. Gradle can then produce an APK that opens but has no native
+plugins registered. Check that the release registrant contains `FlutterTtsPlugin`
+and `SpeechToTextPlugin` and excludes `IntegrationTestPlugin`.
+
 Release is currently signed with the **debug key**. It installs and runs, and it
 is not a store-ready build: a real upload key is still to be created, and
 switching to one later means anyone who installed this must uninstall first.

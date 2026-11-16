@@ -176,15 +176,26 @@ this is a stored-XSS vector.
 
 ## 6. Rate limiting and abuse
 
-📋 Per-user and per-IP limits, tightest on the expensive paths:
+✅ The limits as built (`RateLimitOptions`, ADR-137). Every number is configuration:
 
 | Endpoint | Limit |
 |---|---|
-| `POST /auth/login`, `/auth/register` | 5 / 15 min per IP, exponential backoff |
-| `GET /words/lookup` | 60 / min per user (fires on every keystroke) |
-| `POST /sessions/*/writing`, `/speaking/turn` | 30 / min per user (each costs an AI call) |
-| `POST /placement/*` | 20 / min per user |
-| everything else | 120 / min per user |
+| `POST /auth/register`, `/auth/login`, `/auth/password/*` | 100 / 15 min per IP |
+| `POST /auth/login`, `/auth/password/forgot`, `/auth/password/reset` | **and** 10 / 15 min per account (email), from any address |
+| `POST /auth/refresh` | 300 / 15 min per IP — its own budget, not sign-in's |
+| `GET /words/lookup`, `/words/define` | 120 / min per user |
+| session start / writing / speaking turn / level, placement, transcription, feedback, admin AI | 30 / min per user (Expensive) |
+| `POST /words` with a written meaning or from a passage, `PATCH /words/{id}/meaning` | 20 / min per user (meaning checks only; a dictionary add is not counted) |
+| `POST /speech/synthesize` | 120 / min per user |
+| everything | 300 / min per user (Global) |
+
+✅ **A refusal is `429 {"error":{"code":"RATE_LIMITED",…}}` with `Retry-After`**
+(ADR-137). A refused refresh does not sign the learner out (ADR-093).
+
+✅ **One address is often many people** (ADR-137). Sign-in used to be 10 per 15
+minutes per IP and shared that budget with refresh, so a class behind one school
+address stopped working after its tenth learner. Guessing a password is now held
+back per account, which a botnet's thousand addresses do not get around either.
 
 📋 A daily AI-spend cap per user, so one account cannot exhaust the budget.
 

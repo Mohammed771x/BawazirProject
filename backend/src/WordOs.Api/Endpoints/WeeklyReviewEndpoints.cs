@@ -58,6 +58,11 @@ public static class WeeklyReviewEndpoints
         var userId = principal.UserId();
         if (userId is null) return Results.Unauthorized();
 
+        // One start per learner at a time (ADR-137): the stale-review sweep
+        // below reads, then deletes, then inserts, and ten starts released
+        // together used to leave ten open reviews behind it.
+        await using var serialised = await RowLock.AcquireAsync(db, "weekly-review", userId.Value, ct);
+
         var now = clock.GetUtcNow();
 
         // Every word this learner still owes a review, whatever pipeline state
@@ -338,6 +343,10 @@ public static class WeeklyReviewEndpoints
     {
         var userId = principal.UserId();
         if (userId is null) return Results.Unauthorized();
+
+        // Same lock as start: a completion racing another, or a new start,
+        // waits for it (ADR-137).
+        await using var serialised = await RowLock.AcquireAsync(db, "weekly-review", userId.Value, ct);
 
         var review = await db.WeeklyReviews
             .Include(r => r.Items)

@@ -532,7 +532,14 @@ Future<void> _tapText(WidgetTester tester, String text) async {
 
 Future<void> _tapButton(WidgetTester tester, String label) async {
   final button = find.widgetWithText(FilledButton, label);
-  await tester.tap(button.evaluate().isNotEmpty ? button.first : find.text(label).first);
+  final target = button.evaluate().isNotEmpty ? button.first : find.text(label).first;
+  // QA 2026-11-11: the keyboard left up by the last field covered the button,
+  // so the tap landed on nothing. Close it and bring the button into view.
+  FocusManager.instance.primaryFocus?.unfocus();
+  await tester.pump(const Duration(milliseconds: 400));
+  await tester.ensureVisible(target);
+  await tester.pump(const Duration(milliseconds: 200));
+  await tester.tap(target);
   await tester.pump(const Duration(milliseconds: 200));
 }
 

@@ -74,7 +74,7 @@ export function Layout() {
 
   return (
     <div className="shell">
-      <aside className={`sidebar ${open ? 'open' : ''}`} aria-label="التنقل">
+      <aside id="admin-navigation" className={`sidebar ${open ? 'open' : ''}`} aria-label="التنقل">
         <div className="brand">
           <div className="brand-mark">W</div>
           <div>
@@ -107,7 +107,8 @@ export function Layout() {
       <div className="main">
         {isMock && <div className="mock-banner">بيانات تجريبية — هذا الوضع لا يتصل بقاعدة البيانات (VITE_ADMIN_MOCK=true).</div>}
         <header className="topbar">
-          <button className="btn ghost sm menu-btn" onClick={() => setOpen(true)} aria-label="القائمة"><Menu /></button>
+          <button className="btn ghost sm menu-btn" onClick={() => setOpen(!open)} aria-label="القائمة"
+            aria-expanded={open} aria-controls="admin-navigation"><Menu /></button>
           {showFilters ? <FilterBar /> : <div style={{ flex: 1 }} />}
         </header>
         <main className="content">

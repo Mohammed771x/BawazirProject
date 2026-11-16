@@ -250,6 +250,9 @@ public static class RateLimitPolicies
     /// <summary>Login and registration — the credential-stuffing surface.</summary>
     public const string Authentication = "auth";
 
+    /// <summary>Renewing an access token: per address, apart from sign-in (ADR-137).</summary>
+    public const string Refresh = "refresh";
+
     /// <summary>Lookup fires on every keystroke, so its budget is larger.</summary>
     public const string Lookup = "lookup";
 

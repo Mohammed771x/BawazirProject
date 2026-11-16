@@ -515,8 +515,8 @@ table.table { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 @media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
-  .sidebar { position: fixed; inset-inline-start: 0; z-index: 60; transform: translateX(110%); transition: transform .2s; width: 260px; box-shadow: var(--shadow-pop); }
-  .sidebar.open { transform: none; }
+  .sidebar { position: fixed; inset-inline-start: 0; z-index: 60; visibility: hidden; transform: translateX(110%); transition: transform .2s; width: 260px; box-shadow: var(--shadow-pop); }
+  .sidebar.open { visibility: visible; transform: none; }
   .menu-btn { display: inline-flex; }
   .topbar, .content, .mock-banner { padding-inline: 16px; }
   .g-2, .g-3 { grid-template-columns: 1fr; }

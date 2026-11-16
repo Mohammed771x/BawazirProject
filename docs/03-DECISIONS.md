@@ -6720,3 +6720,99 @@ wrong.
 
 **Rollout:** additive — an old app ignores the field, a new app on an old
 server reads it as false and behaves as before. Deploy the API, then the app.
+
+## ADR-137 — One action at a time on one thing, and a school is not an attacker
+
+**Date:** 2026-11-11 · **Status:** Accepted · API only
+
+**Found by** the QA campaign `20261111-0121-d365f09` (`reports/qa/…/README.md`),
+each with a test in `backend/tests/WordOs.Api.Tests/Qa/` that failed before
+this and passes after it.
+
+**1. Races (D03-1, D03-2, D03-3, D04-1).** Four handlers read a row, decided,
+and wrote, with nothing stopping a second request reading the same row first:
+
+| What | Before | Measured |
+|---|---|---|
+| `POST /sessions/{id}/complete` ×10 | every request applied the session | up to 10 `SkillPassed` events and 10 completions in the activity log for one session, 4/4 runs |
+| complete racing abandon | 500 in 8/10 rounds; in 1/10 both succeeded and the completed session was deleted | |
+| `POST /auth/refresh` with one token ×10 | ten live successors; rotation and reuse detection bypassed | |
+| `POST /weekly-review/start` ×10 | ten open reviews | |
+
+**Decided:** a PostgreSQL **advisory lock** per thing (`Endpoints/RowLock.cs`):
+`session:<id>` for complete and abandon, `refresh:<token hash>` for refresh,
+`weekly-review:<user>` for start and complete. The second request waits, reads
+the state the first left, and answers as a later duplicate always did — 409,
+404, or the refresh replay path.
+
+Not `SELECT … FOR UPDATE`: that needs a caller-owned transaction, which the
+connection-retry strategy only allows by replaying the whole handler — for
+Speaking, including the model call that judges the conversation. Not an
+`xmin` concurrency token: it is a model change with a migration, and it would
+turn every concurrent answer and turn into an exception path as well. The
+advisory lock needs no migration and no schema change; it is released
+explicitly, by PostgreSQL if the connection dies, and by `DISCARD ALL` when a
+pooled connection is reused.
+
+**2. One address is many people (D08-1).** Sign-in was 10 per 15 minutes per IP,
+and `/auth/refresh` shared it. With a 15-minute access token every learner
+refreshes about four times an hour, so eleven learners behind one school or
+carrier address could not all keep using the app.
+
+**Decided:**
+- `/auth/refresh` gets its own policy, `RefreshPermits` = 300 per 15 minutes per IP.
+  A refresh token is 48 random bytes; there is nothing to guess.
+- The per-IP sign-in budget becomes **100** per 15 minutes, so a class can register
+  and sign in together.
+- Password guessing is held at the old pace **per account**:
+  `AccountAttemptPermits` = 10 per 15 minutes, keyed on the email, for login,
+  forgot and reset, from any number of addresses. It is counted whether or not
+  the account exists, so the refusal reveals nothing.
+
+**3. Model calls outside the Expensive budget (D08-2).** A written meaning, a
+passage word and a meaning edit each ask the model, on routes that are not under
+the Expensive policy, because the dictionary add on the same route is free.
+
+**Decided:** those branches spend a per-learner budget,
+`MeaningCheckPermitsPerMinute` = 20 (`Endpoints/AttemptLimiter.cs`). A dictionary
+add is not counted. The Speaking evaluation in `complete` needed nothing more:
+with (1) it runs once per session, and session starts are Expensive.
+
+**4. Event ids (D04-2).** `POST /events` stored any `wordId` or `sessionId` it was
+given. One belonging to another learner is now dropped from the event. One that
+matches nothing is kept, because an abandoned session's row is gone by the time
+the phone's batch for it arrives.
+
+**5. The refusal says what it is.** A 429 was an empty body. It is now the
+ordinary error shape with code `RATE_LIMITED`, plus `Retry-After`. The app
+already mapped the code and the status, so no app release is needed for any of
+this.
+
+## ADR-138 — Writing checks the sense and vocabulary writes agree with search
+
+**Date:** 2026-11-11 · **Status:** Accepted
+
+- Writing requires `usedWord && meaningCorrect && understandable`. The rule
+  keeps the tolerance for grammar slips from ADR-015. The lexical fallback
+  cannot assess meaning, so the API returns a retryable 503 without recording
+  an attempt when that fallback is used.
+- Add, edit and replace reject duplicates by the same identity shown in
+  lookup: a sense id or case-insensitive text with the same Arabic meaning.
+  Serialize the final vocabulary write per learner so a dictionary add and
+  a written meaning cannot both create the same card. AI checks happen before
+  the lock. A meaning edit validates that its original snapshot is current.
+- The meaning budget is checked before AI evaluation. Dictionary saves, no-op
+  edits and swaps can proceed after that budget is spent. Handler-level 429
+  responses send `Retry-After` when available. The global limit stays in effect.
+- The ADR-137 session locks require a direct Neon endpoint. Reject a Neon
+  transaction-pooler hostname at startup and document the deployment setting.
+
+## ADR-139 — Android discovers the platform speech services
+
+**Date:** 2026-11-11 · **Status:** Accepted
+
+Android 11+ package visibility requires declaring the TTS and recognition
+service intents in the app manifest. Declare both so Android can discover
+the installed services. The app still requests microphone permission through
+its existing flow. The Android release check also verifies the generated native
+plugin registrant after building the APK.
