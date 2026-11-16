@@ -18,9 +18,17 @@ import 'placement/placement_item_bank.dart';
 /// `lib/features/**` on purpose: the app's feature layer must keep treating
 /// these decisions as server-owned facts (rule R1).
 class MockEngine {
-  MockEngine({this.openEverySkillForNewAccounts = false}) {
+  MockEngine({
+    this.openEverySkillForNewAccounts = false,
+    this.requireEmailVerification = false,
+  }) {
     _seedData();
   }
+
+  /// The server's `WordOs:RequireEmailVerification` (ADR-141). Off by default,
+  /// as there: the flows that predate it run unchanged.
+  /// Settable so a widget test can turn it on for the engine the app built.
+  bool requireEmailVerification;
 
   /// A new account starts with a word waiting in every skill, so a demo can
   /// walk from sign-up straight into all five sessions — and their guided
@@ -155,7 +163,96 @@ class MockEngine {
     _usersByEmail[key] = user;
     _usersById[user.id] = user;
     if (openEverySkillForNewAccounts) _seedEverySkill(user);
+    if (requireEmailVerification) {
+      user.stage = OnboardingStage.verifyEmail;
+      _issueEmailCode(user);
+    }
     return _authFor(user);
+  }
+
+  // ── Email verification (ADR-141) ──────────────────────────────────────────
+  //
+  // The server's rules, simulated: one code at a time, a cooldown between
+  // sends, five guesses, an expiry, and nothing past the code until it is
+  // entered.
+
+  final Map<String, _MockEmailCode> _emailCodes = {};
+  static const int _emailCodeExpiryMinutes = 30;
+  static const int _emailCodeMaxAttempts = 5;
+  static const int _emailCodeResendSeconds = 60;
+
+  void _issueEmailCode(MockUser user) {
+    final code = _random.nextInt(1000000).toString().padLeft(6, '0');
+    _emailCodes[user.id] = _MockEmailCode(
+      code: code,
+      sentAt: now,
+      expiresAt: now.add(const Duration(minutes: _emailCodeExpiryMinutes)),
+    );
+    // ignore: avoid_print
+    print('[mock] email verification code for ${user.email}: $code');
+  }
+
+  /// The outstanding verification code for [email] — the mock's inbox, so a
+  /// widget test can read it the way a learner would.
+  String? outstandingEmailCodeFor(String email) =>
+      _emailCodes[_usersByEmail[email.trim().toLowerCase()]?.id]?.code;
+
+  UserProfile verifyEmail(MockUser user, String code) {
+    if (user.stage != OnboardingStage.verifyEmail) return _profile(user);
+    final stored = _emailCodes[user.id];
+    if (stored == null ||
+        stored.attempts >= _emailCodeMaxAttempts ||
+        !stored.expiresAt.isAfter(now)) {
+      throw const ApiException('EMAIL_CODE_EXPIRED',
+          'That code has expired or was tried too many times.',
+          statusCode: 400);
+    }
+    if (stored.code != code) {
+      stored.attempts++;
+      throw const ApiException('INVALID_EMAIL_CODE', 'That code is not right.',
+          statusCode: 400);
+    }
+    _emailCodes.remove(user.id);
+    user.stage = OnboardingStage.interests;
+    return _profile(user);
+  }
+
+  int resendEmailCode(MockUser user) {
+    if (user.stage != OnboardingStage.verifyEmail) {
+      throw const ApiException('EMAIL_ALREADY_VERIFIED',
+          'This email address is already verified.',
+          statusCode: 409);
+    }
+    final last = _emailCodes[user.id];
+    if (last != null &&
+        now.difference(last.sentAt).inSeconds < _emailCodeResendSeconds) {
+      throw const ApiException('RATE_LIMITED',
+          'Wait a moment before asking for another code.',
+          statusCode: 429);
+    }
+    _issueEmailCode(user);
+    return _emailCodeResendSeconds;
+  }
+
+  // ── Account deletion (ADR-140) ────────────────────────────────────────────
+
+  void deleteAccount(MockUser user, String password) {
+    if (user.role != UserRole.user) {
+      throw const ApiException('STAFF_ACCOUNT',
+          'Staff accounts cannot be deleted from the app.',
+          statusCode: 403);
+    }
+    if (user.password != password) {
+      throw const ApiException('WRONG_PASSWORD', 'That password is not right.',
+          statusCode: 400);
+    }
+    _usersByEmail.remove(user.email);
+    _usersById.remove(user.id);
+    _tokens.removeWhere((_, userId) => userId == user.id);
+    _sessions.removeWhere((_, s) => s.userId == user.id);
+    _reviews.removeWhere((_, r) => r.userId == user.id);
+    _resetCodes.remove(user.id);
+    _emailCodes.remove(user.id);
   }
 
   /// One word due in each skill, placed exactly as if it had walked the
@@ -555,6 +652,11 @@ class MockEngine {
   ];
 
   UserProfile saveInterests(MockUser user, List<String> interests) {
+    if (user.stage == OnboardingStage.verifyEmail) {
+      throw const ApiException('EMAIL_NOT_VERIFIED',
+          'Verify your email address first.',
+          statusCode: 409);
+    }
     user.interests
       ..clear()
       ..addAll(interests);
@@ -2813,6 +2915,19 @@ class _WritingVerdict {
 /// attempt success passes the word for that skill; anything else leaves the
 /// word to be rescheduled, which is what turns a mistake into reinforcement
 /// rather than a dead end.
+class _MockEmailCode {
+  _MockEmailCode({
+    required this.code,
+    required this.sentAt,
+    required this.expiresAt,
+  });
+
+  final String code;
+  final DateTime sentAt;
+  final DateTime expiresAt;
+  int attempts = 0;
+}
+
 class _MockSession {
   _MockSession({
     required this.id,

@@ -53,6 +53,51 @@ abstraction and the Phase-1 mock both implement exactly this; Phase 5 makes it r
 | POST | `/auth/password/forgot` | `{email}` → **always** `202 {message}` (ADR-078) |
 | POST | `/auth/password/reset` | `{email, code, newPassword}` → `200 {message}` |
 | GET | `/me` | — → `UserProfile` |
+| POST | `/auth/email/verify` | `{code}` → `200 UserProfile` (ADR-141) |
+| POST | `/auth/email/resend` | — → `202 {resendAfterSeconds}` · `429` inside the cooldown |
+| POST | `/me/delete` | `{password}` → `204` — deletes the account and all its data (ADR-140) |
+
+### Confirming the email address (ADR-141)
+
+Only when `WordOs:RequireEmailVerification` is on (off by default). A new
+account's `onboardingStage` is then `VERIFY_EMAIL`, and a six-digit code is
+emailed after the account is saved. The client routes on the stage as it does
+for `INTERESTS` and `PLACEMENT`.
+
+```jsonc
+// POST /auth/email/verify   (signed in)
+{ "code": "048213" }
+
+// 200 — the profile, now at INTERESTS. Repeating it once verified answers the
+// same, so a retry whose first reply was lost is harmless.
+```
+
+| Failure | Code |
+|---|---|
+| Wrong code | `400 INVALID_EMAIL_CODE` |
+| Expired (30 min) or five wrong guesses | `400 EMAIL_CODE_EXPIRED` → send a new one |
+| Resend within 60 s of the last code | `429 RATE_LIMITED` + `Retry-After`, `retryAfterSeconds` |
+| Resend once verified | `409 EMAIL_ALREADY_VERIFIED` |
+| Saving interests or placement before verifying | `409 EMAIL_NOT_VERIFIED` |
+
+A new code replaces the last one and its wrong guesses.
+
+### Deleting the account (ADR-140)
+
+```jsonc
+// POST /me/delete   (signed in)
+{ "password": "the account's password" }
+
+// 204 — the account and every row of its data are gone: words, sessions,
+// placement, levels, interests, reviews, feedback, events, tokens. The client
+// drops its tokens; the access token it held now gets 401 from /me.
+```
+
+| Failure | Code |
+|---|---|
+| Wrong password | `400 WRONG_PASSWORD` — not 401, the session is fine |
+| Ten wrong tries in 15 minutes | `429 RATE_LIMITED` (the per-account sign-in budget) |
+| `OWNER` / `ANALYST` | `403 STAFF_ACCOUNT` |
 
 ### Forgotten password
 

@@ -117,6 +117,7 @@ public static class AuthEndpoints
         RegisterRequest request,
         WordOsDbContext db,
         IPasswordHasher hasher,
+        IEmailSender emailSender,
         JwtTokenService tokens,
         WordOsConfiguration config,
         TimeProvider clock,
@@ -179,6 +180,11 @@ public static class AuthEndpoints
             return Problems.Conflict(
                 "EMAIL_TAKEN", "This email is already registered.");
         }
+
+        // After the account is saved, so a failed send never loses a
+        // registration: the learner asks for another code (ADR-141).
+        if (user.AwaitsEmailVerification)
+            await AccountEndpoints.SendCodeAsync(user, db, hasher, emailSender, config, now, ct);
 
         return Results.Ok(ToAuthResponse(user, issued));
     }

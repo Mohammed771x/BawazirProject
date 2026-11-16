@@ -610,6 +610,7 @@ app.MapGet("/health/ready", async (
 
 app.MapAuthEndpoints();
 app.MapPasswordResetEndpoints();
+app.MapAccountEndpoints();
 app.MapOnboardingEndpoints();
 app.MapSettingsEndpoints();
 app.MapHubEndpoints();

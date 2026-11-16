@@ -27,6 +27,11 @@ public enum ActivityType
     PasswordReset,
 
     /// <summary>
+    /// The learner proved their email address with the emailed code (ADR-141).
+    /// </summary>
+    EmailVerified,
+
+    /// <summary>
     /// The Owner brought this learner's schedule forward, to demonstrate or
     /// test the spaced gaps without waiting two days for each one.
     /// </summary>

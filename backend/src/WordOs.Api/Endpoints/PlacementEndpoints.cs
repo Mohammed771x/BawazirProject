@@ -63,6 +63,11 @@ public static class PlacementEndpoints
         var userId = principal.UserId();
         if (userId is null) return Results.Unauthorized();
 
+        // The address comes first when it must be proved (ADR-141).
+        if (await db.Users.AnyAsync(
+                u => u.Id == userId && u.OnboardingStage == OnboardingStage.VerifyEmail, ct))
+            return OnboardingEndpoints.EmailNotVerified();
+
         var now = clock.GetUtcNow();
 
         // Abandon any run left open, so a learner who closed the app mid-test
@@ -197,6 +202,9 @@ public static class PlacementEndpoints
         var user = await db.Users
             .Include(u => u.SkillLevels)
             .FirstAsync(u => u.Id == userId, ct);
+
+        // Placement cannot be the way round proving the address (ADR-141).
+        if (user.AwaitsEmailVerification) return OnboardingEndpoints.EmailNotVerified();
 
         foreach (var result in outcome.Levels)
         {

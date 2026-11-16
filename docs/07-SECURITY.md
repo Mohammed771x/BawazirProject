@@ -312,8 +312,16 @@ and signals a misconfigured policy.
 every access is logged, and the drill-down shows what the documents require —
 not free-text content beyond mistakes and vocabulary.
 
-📋 Account deletion removes personal data and anonymises retained analytics
-rows, keeping the algorithm-validation value without keeping the person.
+✅ A learner deletes their own account from Settings (ADR-140). The password
+is asked for again (an unlocked phone is not consent), wrong tries share the
+per-account sign-in budget, and staff accounts are refused. One `users` row is
+deleted and the schema's ON DELETE CASCADE removes everything else, **analytics
+included**: the owner chose removal over anonymising, so the admin's history
+loses that learner. Admin audit rows keep the bare id of a viewed learner and
+nothing that identifies them.
+
+✅ A new account can be required to prove its email address with a six-digit
+code (ADR-141): hashed on the row, 30 minutes, five guesses, one send a minute.
 
 ⚠️ Analytics currently keys on real `user_id`. For exported or shared analysis a
 pseudonymous id should be substituted.

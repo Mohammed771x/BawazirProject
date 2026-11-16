@@ -55,6 +55,22 @@ abstract class WordOsApi {
 
   Future<UserProfile> me();
 
+  /// Redeems the six-digit code emailed at registration (ADR-141) and
+  /// returns the profile, whose stage has moved on to interests.
+  Future<UserProfile> verifyEmail(String code);
+
+  /// Emails a fresh code, replacing the last one. Refused with `RATE_LIMITED`
+  /// inside the server's cooldown; returns how long until the next is allowed.
+  Future<int> resendEmailCode();
+
+  /// Deletes the signed-in account and everything in it, for good (ADR-140).
+  ///
+  /// The password is asked for again on purpose: an unlocked phone is not
+  /// consent. A wrong one is `WRONG_PASSWORD` (400, the session untouched).
+  /// On success the server holds nothing of this learner; the caller forgets
+  /// the tokens.
+  Future<void> deleteAccount({required String password});
+
   // ── Onboarding ────────────────────────────────────────────────────────────
   Future<List<InterestOption>> interestOptions();
 

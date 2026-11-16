@@ -175,6 +175,19 @@ class SessionController extends Notifier<SessionState> {
     unawaited(_api.logout().catchError((Object _) {}));
   }
 
+  /// Deletes the account on the server, then forgets it here (ADR-140).
+  ///
+  /// Throws the server's refusal (a wrong password, a staff account) so the
+  /// confirmation dialog can say why and stay open. On success nothing of the
+  /// account is left to sign out of: the tokens are dropped locally and no
+  /// logout is sent, because its token now names nobody.
+  Future<void> deleteAccount(String password) async {
+    await _api.deleteAccount(password: password);
+    await ref.read(tokenStoreProvider).clear();
+    await ref.read(appPreferencesProvider).setOnboardingSeen(true);
+    state = const SessionState(restoring: false);
+  }
+
   /// The failure in the learner's language.
   ///
   /// "Wrong email or password" is the app talking to the learner, so it is said

@@ -91,6 +91,9 @@ public static class OnboardingEndpoints
             .FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user is null) return Results.Unauthorized();
 
+        // The address comes first when it must be proved (ADR-141).
+        if (user.AwaitsEmailVerification) return EmailNotVerified();
+
         // Removal and insertion are both stated explicitly against the DbSet.
         //
         // Entities generate their own key in the property initialiser, so a
@@ -114,6 +117,10 @@ public static class OnboardingEndpoints
         // exactly one response and nobody notices until the UI reads a default.
         return Results.Ok(AuthEndpoints.ToUserResponse(user));
     }
+
+    /// <summary>The answer while the address is unproved (ADR-141).</summary>
+    internal static IResult EmailNotVerified() => Problems.Conflict(
+        "EMAIL_NOT_VERIFIED", "Verify your email address first.");
 }
 
 public static class SettingsEndpoints

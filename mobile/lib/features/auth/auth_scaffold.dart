@@ -69,3 +69,36 @@ class AuthScaffold extends StatelessWidget {
     );
   }
 }
+
+/// The one error line under an auth form, in the danger colours.
+class AuthErrorBanner extends StatelessWidget {
+  const AuthErrorBanner({super.key, required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: context.palette.dangerSurface,
+        borderRadius: AppRadii.fieldBorder,
+        border: Border.all(color: context.palette.danger.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.error_outline_rounded,
+              size: 18, color: context.palette.danger),
+          const SizedBox(width: AppSpacing.xs),
+          Expanded(
+            child: Text(
+              message,
+              style: context.text.bodySmall
+                  ?.copyWith(color: context.palette.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

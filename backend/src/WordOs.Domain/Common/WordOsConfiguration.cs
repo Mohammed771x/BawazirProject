@@ -309,6 +309,39 @@ public sealed record WordOsConfiguration
     public int PasswordResetMaxAttempts { get; init; } = 5;
 
     /// <summary>
+    /// Whether a new account must prove its email address with a six-digit
+    /// code before onboarding (ADR-141).
+    /// </summary>
+    /// <remarks>
+    /// Off by default, deliberately. An app older than 1.3.4 has no screen for
+    /// the code: a learner registering on it while this is on would land on
+    /// the interests screen of an account the server holds at the
+    /// verification step. Turn it on (<c>WordOs__RequireEmailVerification=true</c>)
+    /// once the app that can verify is what students have. Existing accounts
+    /// are never affected either way.
+    /// </remarks>
+    public bool RequireEmailVerification { get; init; }
+
+    /// <summary>How long an email verification code stays usable.</summary>
+    /// <remarks>
+    /// Longer than a reset code: this one arrives while someone is signing up
+    /// for the first time, often on a slow connection, and guessing it gains
+    /// an attacker nothing they did not already have — they are signed in to
+    /// the account they just created.
+    /// </remarks>
+    public int EmailVerificationCodeExpiryMinutes { get; init; } = 30;
+
+    /// <summary>Wrong guesses allowed against one verification code.</summary>
+    public int EmailVerificationMaxAttempts { get; init; } = 5;
+
+    /// <summary>
+    /// The least time between two verification emails to one account. Every
+    /// email spends the daily sending quota, which on the free tier is shared
+    /// with password resets.
+    /// </summary>
+    public int EmailVerificationResendSeconds { get; init; } = 60;
+
+    /// <summary>
     /// How many times the meaning checker is asked for a complete answer
     /// before a word is refused for now (ADR-131).
     /// </summary>

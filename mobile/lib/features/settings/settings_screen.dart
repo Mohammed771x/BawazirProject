@@ -167,6 +167,14 @@ class SettingsScreen extends ConsumerWidget {
             icon: const Icon(Icons.logout_rounded),
             label: Text(s.signOut),
           ),
+          // Last, and apart from everything else on the screen: the one action
+          // here that cannot be taken back (ADR-140). Staff accounts are
+          // removed by the Owner, not from a phone, so they are not offered it.
+          if (user.role == UserRole.user) ...[
+            const SizedBox(height: AppSpacing.xl),
+            SectionHeader(title: s.accountSection),
+            const _DeleteAccountCard(),
+          ],
         ],
       ),
       ),
@@ -1045,4 +1053,164 @@ Future<void> _openSupport(BuildContext context, WidgetRef ref) async {
       ],
     ),
   );
+}
+
+/// The way to delete the account (ADR-140; Google Play requires one in-app).
+class _DeleteAccountCard extends ConsumerWidget {
+  const _DeleteAccountCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+    final danger = context.palette.danger;
+    return AppCard(
+      onTap: () => showDialog<void>(
+        context: context,
+        builder: (_) => const _DeleteAccountDialog(),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.delete_forever_rounded, color: danger),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(s.deleteAccount,
+                    style: context.text.titleSmall?.copyWith(color: danger)),
+                const SizedBox(height: 2),
+                Text(
+                  s.deleteAccountHint,
+                  style: context.text.bodySmall?.copyWith(
+                    color: context.colors.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(
+            Icons.chevron_right_rounded,
+            color: context.colors.onSurface.withValues(alpha: 0.65),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Says exactly what goes, and asks for the password before anything goes.
+///
+/// The server decides — a wrong password or a staff account is its refusal,
+/// shown here with the dialog left open. On success the session is already
+/// gone, so the router takes the learner to sign-in; the snackbar is said on
+/// the root messenger so it outlives this screen.
+class _DeleteAccountDialog extends ConsumerStatefulWidget {
+  const _DeleteAccountDialog();
+
+  @override
+  ConsumerState<_DeleteAccountDialog> createState() =>
+      _DeleteAccountDialogState();
+}
+
+class _DeleteAccountDialogState extends ConsumerState<_DeleteAccountDialog> {
+  final _password = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    super.dispose();
+  }
+
+  Future<void> _delete() async {
+    final s = ref.read(stringsProvider);
+    if (_password.text.isEmpty) {
+      setState(() => _error = s.deleteAccountPasswordPrompt);
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    try {
+      await ref.read(sessionProvider.notifier).deleteAccount(_password.text);
+      navigator.pop();
+      messenger.showSnackBar(SnackBar(content: Text(s.accountDeleted)));
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = s.apiError(e.code, e.message);
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = s.somethingWentWrong;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = ref.watch(stringsProvider);
+    final danger = context.palette.danger;
+    return AlertDialog(
+      icon: Icon(Icons.warning_amber_rounded, color: danger),
+      title: Text(s.deleteAccountTitle),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(s.deleteAccountBody),
+            const SizedBox(height: AppSpacing.md),
+            Text(s.deleteAccountPasswordPrompt, style: context.text.bodySmall),
+            const SizedBox(height: AppSpacing.xs),
+            TextField(
+              controller: _password,
+              obscureText: true,
+              enabled: !_busy,
+              autofillHints: const [AutofillHints.password],
+              decoration: InputDecoration(
+                labelText: s.password,
+                prefixIcon: const Icon(Icons.lock_outline_rounded),
+                errorText: _error,
+                errorMaxLines: 3,
+              ),
+              onSubmitted: (_) => _busy ? null : _delete(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: Text(s.cancel),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: danger,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: _busy ? null : _delete,
+          child: _busy
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    color: Colors.white,
+                  ),
+                )
+              : Text(s.deleteAccountConfirm),
+        ),
+      ],
+    );
+  }
 }

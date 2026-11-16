@@ -7,6 +7,7 @@ import '../core/storage/preferences_providers.dart';
 import '../features/auth/forgot_password_screen.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/register_screen.dart';
+import '../features/auth/verify_email_screen.dart';
 import '../features/auth/session_controller.dart';
 import '../features/developer/developer_screen.dart';
 import '../features/developer/developer_user_screen.dart';
@@ -32,6 +33,7 @@ class Routes {
   static const login = '/login';
   static const register = '/register';
   static const forgotPassword = '/forgot-password';
+  static const verifyEmail = '/verify-email';
   static const interests = '/interests';
   static const placement = '/placement';
   static const hub = '/hub';
@@ -108,6 +110,9 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
 
       switch (session.user!.onboardingStage) {
+        // Before anything else, when the server requires it (ADR-141).
+        case OnboardingStage.verifyEmail:
+          return path == Routes.verifyEmail ? null : Routes.verifyEmail;
         case OnboardingStage.interests:
           return path == Routes.interests ? null : Routes.interests;
         case OnboardingStage.placement:
@@ -115,6 +120,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         case OnboardingStage.complete:
           if (isAuthRoute ||
               path == Routes.splash ||
+              path == Routes.verifyEmail ||
               path == Routes.interests ||
               path == Routes.placement) {
             return Routes.hub;
@@ -136,6 +142,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: Routes.forgotPassword,
         builder: (_, _) => const ForgotPasswordScreen(),
+      ),
+      GoRoute(
+        path: Routes.verifyEmail,
+        builder: (_, _) => const VerifyEmailScreen(),
       ),
       GoRoute(
         path: Routes.interests,

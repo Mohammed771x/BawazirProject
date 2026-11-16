@@ -14,7 +14,31 @@
 > **The live state of the project.** Update this at the end of every working session.
 > A new session should read `CLAUDE.md` → this file → then start at "Next up".
 
-**Last updated:** 2026-11-11 (QA follow-up — ADR-138 and ADR-139)
+**Last updated:** 2026-11-16 (account deletion and email verification — ADR-140, ADR-141)
+
+> **2026-11-16 — Delete account, and a code to confirm the email (ADR-140, ADR-141).**
+> Local, not committed. App **1.3.4+8**.
+> - **Delete account:** Settings → Account → Delete account asks for the password,
+>   then `POST /api/me/delete` removes the `users` row, and the schema's cascade
+>   removes everything else, analytics included. Staff accounts are refused.
+> - **Email verification:** `WordOs:RequireEmailVerification` (**off**) puts new
+>   accounts at onboarding stage `VERIFY_EMAIL`. Brevo sends a six-digit code that
+>   lasts 30 minutes, allows five guesses and one resend per minute.
+>   `/api/auth/email/verify` and `/resend`. Interests and placement refuse until it
+>   is entered.
+> - **Migration:** `EmailVerification`, which only adds columns.
+> - **Tests:** new `AccountTests.cs` (15) and `test/account_test.dart` (7).
+>
+> **Next:**
+> 1. Apply the migration on Neon.
+> 2. Deploy the API.
+> 3. Ship 1.3.4.
+> 4. Then turn the setting on.
+> 5. Update the privacy page's deletion section for Play Console.
+
+> **2026-11-16 — Deployed.** `8172e50` (ADR-137/138/139) is live on Render, with
+> Render's database URL now Neon's direct endpoint (the `-pooler` host made the
+> first deploy fail; the old version kept serving). APK 1.3.3 (2007) is on the Desktop.
 
 > **2026-11-11 — QA follow-up.** Writing checks the intended sense and retains
 > attempts when the meaning evaluator is unavailable. Vocabulary writes reject

@@ -118,7 +118,7 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
         if (_step == _Step.requestCode) ..._requestStep(s) else ..._codeStep(s),
         if (_error != null) ...[
           const SizedBox(height: AppSpacing.md),
-          _ErrorBanner(message: _error!),
+          AuthErrorBanner(message: _error!),
         ],
         const SizedBox(height: AppSpacing.lg),
         FilledButton(
@@ -227,36 +227,4 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
           ),
         ),
       ];
-}
-
-class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.sm),
-      decoration: BoxDecoration(
-        color: context.palette.dangerSurface,
-        borderRadius: AppRadii.fieldBorder,
-        border: Border.all(color: context.palette.danger.withValues(alpha: 0.4)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.error_outline_rounded,
-              size: 18, color: context.palette.danger),
-          const SizedBox(width: AppSpacing.xs),
-          Expanded(
-            child: Text(
-              message,
-              style: context.text.bodySmall
-                  ?.copyWith(color: context.palette.danger),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }

@@ -125,6 +125,12 @@ public enum UserRole
 
 public enum OnboardingStage
 {
+    /// <summary>
+    /// The address has not been proved yet (ADR-141). Only reached when
+    /// <c>RequireEmailVerification</c> is on; accounts that existed before it
+    /// never pass through it. Stored as text, so its place here moves nothing.
+    /// </summary>
+    VerifyEmail,
     Interests,
     Placement,
     Complete,

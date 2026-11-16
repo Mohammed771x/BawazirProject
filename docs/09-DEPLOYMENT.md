@@ -323,6 +323,23 @@ and the log says why. Password reset is the only email WordOS sends.
 
 ---
 
+### Email verification and account deletion (ADR-140, ADR-141)
+
+Account deletion needs nothing: it is the schema's existing cascade.
+
+Email verification ships **off**. To deploy it:
+
+1. Apply the `EmailVerification` migration (five columns on `users`; no new
+   table, so no GRANT) with the migrator command above. It is additive, and
+   the running code ignores the columns, so apply it **before** the deploy.
+2. Deploy the API. Nothing changes for anyone yet.
+3. Once students have app **1.3.4** or later, set
+   `WordOs__RequireEmailVerification=true` on Render. From then on, new
+   accounts get a code. Existing accounts are never asked.
+
+Each new account sends one email, and each resend another, from the same
+Brevo quota as password resets (300 a day on the free plan).
+
 ## 3 · The service (Render)
 
 1. Push this repository to GitHub if it is not there already.

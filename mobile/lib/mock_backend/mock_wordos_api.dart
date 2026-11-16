@@ -106,6 +106,19 @@ class MockWordOsApi implements WordOsApi {
   Future<UserProfile> me() => _delay(() => engine.profile(_user));
 
   @override
+  Future<UserProfile> verifyEmail(String code) =>
+      _write(() => engine.verifyEmail(_user, code));
+
+  @override
+  Future<int> resendEmailCode() => _write(() => engine.resendEmailCode(_user));
+
+  /// No change announced, as on the real client: the account is gone, and a
+  /// refetch would only meet a token that names nobody.
+  @override
+  Future<void> deleteAccount({required String password}) =>
+      _delay(() => engine.deleteAccount(_user, password));
+
+  @override
   Future<List<InterestOption>> interestOptions() =>
       _delay(() => MockEngine.interestOptions);
 

@@ -116,6 +116,8 @@ enum SkillAvailability {
 }
 
 enum OnboardingStage {
+  /// The new account has not proved its email address yet (ADR-141).
+  verifyEmail('VERIFY_EMAIL'),
   interests('INTERESTS'),
   placement('PLACEMENT'),
   complete('COMPLETE');

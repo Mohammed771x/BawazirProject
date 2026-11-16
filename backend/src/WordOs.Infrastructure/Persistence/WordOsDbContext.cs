@@ -157,6 +157,10 @@ public class WordOsDbContext(
             e.Property(x => x.TimeZone).HasMaxLength(64);
             e.Property(x => x.SpellingHintStart)
                 .HasConversion<string>().HasMaxLength(32);
+            // ADR-141. On the users table rather than a table of their own: one
+            // outstanding code per account, and a new column needs no fresh
+            // GRANT to the runtime role on Neon, where a new table does (ADR-079).
+            e.Property(x => x.EmailCodeHash).HasMaxLength(256);
 
             e.HasMany(x => x.Interests)
                 .WithOne().HasForeignKey(x => x.UserId)

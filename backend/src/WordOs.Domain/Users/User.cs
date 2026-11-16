@@ -63,6 +63,26 @@ public class User
     /// </summary>
     public SpellingClueKind? SpellingHintStart { get; private set; }
 
+    /// <summary>
+    /// When the learner proved they read this address, or null if they never
+    /// had to (ADR-141). Accounts created before verification existed stay
+    /// null — truthfully unverified, and not blocked for it.
+    /// </summary>
+    public DateTimeOffset? EmailVerifiedAt { get; private set; }
+
+    /// <summary>
+    /// The outstanding verification code, hashed like a password; never the
+    /// code itself. One at a time: sending a new one replaces it.
+    /// </summary>
+    public string? EmailCodeHash { get; private set; }
+
+    public DateTimeOffset? EmailCodeSentAt { get; private set; }
+
+    public DateTimeOffset? EmailCodeExpiresAt { get; private set; }
+
+    /// <summary>Wrong guesses against the outstanding code.</summary>
+    public int EmailCodeAttempts { get; private set; }
+
     public IReadOnlyList<UserInterest> Interests => _interests;
 
     public IReadOnlyList<SkillLevel> SkillLevels => _skillLevels;
@@ -112,6 +132,11 @@ public class User
             PhoneNumber = number,
             Role = role,
             CreatedAt = now,
+            // Proving the address comes before anything else when it is
+            // required (ADR-141); otherwise onboarding starts where it always did.
+            OnboardingStage = config.RequireEmailVerification
+                ? OnboardingStage.VerifyEmail
+                : OnboardingStage.Interests,
         };
 
         // Exactly one level row per skill, from the moment the account exists.
@@ -159,7 +184,66 @@ public class User
         PasswordHash = passwordHash;
     }
 
-    public void AdvanceOnboarding(OnboardingStage stage) => OnboardingStage = stage;
+    /// <summary>
+    /// Moves onboarding on. Never out of <see cref="OnboardingStage.VerifyEmail"/>:
+    /// only <see cref="ConfirmEmail"/> leaves it, so no other path — placement
+    /// finished by a crafted request, say — can skip proving the address.
+    /// </summary>
+    public void AdvanceOnboarding(OnboardingStage stage)
+    {
+        if (OnboardingStage == OnboardingStage.VerifyEmail)
+        {
+            throw new InvalidOperationException(
+                "The email address must be verified before onboarding moves on.");
+        }
+
+        OnboardingStage = stage;
+    }
+
+    public bool AwaitsEmailVerification => OnboardingStage == OnboardingStage.VerifyEmail;
+
+    /// <summary>
+    /// Stores a fresh verification code (hashed by the caller) and forgets any
+    /// earlier one, along with its wrong guesses.
+    /// </summary>
+    public void IssueEmailCode(string codeHash, DateTimeOffset now, DateTimeOffset expiresAt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(codeHash);
+        EmailCodeHash = codeHash;
+        EmailCodeSentAt = now;
+        EmailCodeExpiresAt = expiresAt;
+        EmailCodeAttempts = 0;
+    }
+
+    /// <summary>Seconds until another code may be sent; zero when it may.</summary>
+    public int SecondsUntilEmailCodeResend(DateTimeOffset now, int cooldownSeconds)
+    {
+        if (EmailCodeSentAt is not { } sent) return 0;
+        var wait = sent.AddSeconds(cooldownSeconds) - now;
+        return wait <= TimeSpan.Zero ? 0 : (int)Math.Ceiling(wait.TotalSeconds);
+    }
+
+    public bool EmailCodeRedeemable(DateTimeOffset now, int maxAttempts) =>
+        EmailCodeHash is not null
+        && EmailCodeExpiresAt > now
+        && EmailCodeAttempts < maxAttempts;
+
+    /// <summary>Counts a wrong guess; the code is spent at the limit.</summary>
+    public void RecordEmailCodeFailure() => EmailCodeAttempts++;
+
+    /// <summary>
+    /// The address is proved: record it, spend the code, and let onboarding
+    /// start where it starts for everyone.
+    /// </summary>
+    public void ConfirmEmail(DateTimeOffset now)
+    {
+        EmailVerifiedAt ??= now;
+        EmailCodeHash = null;
+        EmailCodeExpiresAt = null;
+        EmailCodeAttempts = 0;
+        if (OnboardingStage == OnboardingStage.VerifyEmail)
+            OnboardingStage = OnboardingStage.Interests;
+    }
 
     /// <summary>
     /// Chooses the rung every Spelling word starts on, or null for automatic

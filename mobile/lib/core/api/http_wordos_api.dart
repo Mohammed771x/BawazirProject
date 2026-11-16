@@ -460,6 +460,25 @@ class HttpWordOsApi implements WordOsApi {
   Future<UserProfile> me() async => UserProfile.fromJson(await _get('/me'));
 
   @override
+  Future<UserProfile> verifyEmail(String code) async =>
+      UserProfile.fromJson(await _post('/auth/email/verify', {'code': code}));
+
+  @override
+  Future<int> resendEmailCode() async {
+    final body = await _post('/auth/email/resend', const <String, dynamic>{});
+    return (body['resendAfterSeconds'] as num?)?.toInt() ?? 60;
+  }
+
+  @override
+  Future<void> deleteAccount({required String password}) async {
+    // Not through [_post]: that announces a change, and every screen on the
+    // stack would refetch — with a token whose account no longer exists, which
+    // the refresh logic reads as an expired session and says so on the way
+    // out. The caller forgets the tokens instead.
+    await _guard(() => _dio.post<dynamic>('/me/delete', data: {'password': password}));
+  }
+
+  @override
   Future<List<InterestOption>> interestOptions() async {
     final res = await _guard(() => _dio.get<dynamic>('/onboarding/interests'));
     return (res.data as List<dynamic>)

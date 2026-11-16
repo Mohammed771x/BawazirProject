@@ -83,6 +83,34 @@ class AppStrings {
           ),
         'WEAK_PASSWORD' => passwordRequired,
 
+        // Proving the email address (ADR-141).
+        'INVALID_EMAIL_CODE' => _(
+            'That code is not right. Check it and try again.',
+            'الرمز غير صحيح. تحقّق منه وحاول مرة أخرى.',
+          ),
+        'EMAIL_CODE_EXPIRED' => _(
+            'That code has expired or was tried too many times. Send a new one.',
+            'انتهت صلاحية الرمز أو جُرِّب مرات كثيرة. أرسل رمزًا جديدًا.',
+          ),
+        'EMAIL_NOT_VERIFIED' => _(
+            'Confirm your email address first.',
+            'أكّد بريدك الإلكتروني أولًا.',
+          ),
+        'EMAIL_ALREADY_VERIFIED' => _(
+            'Your email address is already confirmed.',
+            'بريدك الإلكتروني مؤكَّد بالفعل.',
+          ),
+
+        // Deleting the account (ADR-140).
+        'WRONG_PASSWORD' => _(
+            'That password is not right.',
+            'كلمة المرور غير صحيحة.',
+          ),
+        'STAFF_ACCOUNT' => _(
+            'Staff accounts cannot be deleted from the app.',
+            'حسابات فريق العمل لا تُحذف من التطبيق.',
+          ),
+
         // Adding words.
         'WORD_ALREADY_ADDED' => alreadyInYourWords,
         'WORD_CHANGED' => _(
@@ -451,6 +479,51 @@ class AppStrings {
       _('The two passwords do not match', 'كلمتا المرور غير متطابقتين');
   String get setNewPassword => _('Set new password', 'تعيين كلمة المرور');
   String get resendCode => _('Send another code', 'إرسال رمز آخر');
+
+  // ── Confirming the email address (ADR-141) ────────────────────────────────
+  String get verifyEmailTitle =>
+      _('Confirm your email', 'أكّد بريدك الإلكتروني');
+  String verifyEmailIntro(String email) => _(
+        'We sent a six-digit code to $email. Enter it to continue.',
+        'أرسلنا رمزًا من ستة أرقام إلى $email. أدخله للمتابعة.',
+      );
+  String get verifyEmailNotThere => _(
+        'Not there? Check your spam folder, or send another code.',
+        'ما وصلك؟ تفقّد مجلد الرسائل غير المرغوب فيها، أو أرسل رمزًا آخر.',
+      );
+  String get verifyEmailButton => _('Confirm', 'تأكيد');
+  String resendCodeIn(int seconds) => _(
+        'Send another code in ${seconds}s',
+        'إرسال رمز آخر بعد $seconds ث',
+      );
+  String get codeSentAgain =>
+      _('A new code is on its way.', 'أرسلنا رمزًا جديدًا إلى بريدك.');
+  String get wrongEmailSignOut => _(
+        'Wrong email? Sign out and register again',
+        'البريد غير صحيح؟ سجّل الخروج وأنشئ الحساب من جديد',
+      );
+
+  // ── Deleting the account (ADR-140) ────────────────────────────────────────
+  String get accountSection => _('Account', 'الحساب');
+  String get deleteAccount => _('Delete account', 'حذف الحساب');
+  String get deleteAccountHint => _(
+        'Permanently delete your account and all of its data',
+        'احذف حسابك وكل بياناته نهائيًا',
+      );
+  String get deleteAccountTitle =>
+      _('Delete your account?', 'حذف حسابك نهائيًا؟');
+  String get deleteAccountBody => _(
+        'This deletes your account and everything in it: your words, your '
+            'progress in every skill, your sessions and levels, your reviews '
+            'and your messages. It cannot be undone.',
+        'سيُحذف حسابك وكل ما فيه: كلماتك، وتقدّمك في كل المهارات، وجلساتك '
+            'ومستوياتك، ومراجعاتك ورسائلك. لا يمكن التراجع عن ذلك.',
+      );
+  String get deleteAccountPasswordPrompt =>
+      _('Enter your password to confirm.', 'أدخل كلمة المرور للتأكيد.');
+  String get deleteAccountConfirm => _('Delete permanently', 'احذف نهائيًا');
+  String get accountDeleted =>
+      _('Your account has been deleted.', 'تم حذف حسابك.');
 
   /// Says the sessions ended, because the learner will notice and should not
   /// have to wonder why.

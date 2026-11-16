@@ -6816,3 +6816,96 @@ service intents in the app manifest. Declare both so Android can discover
 the installed services. The app still requests microphone permission through
 its existing flow. The Android release check also verifies the generated native
 plugin registrant after building the APK.
+
+## ADR-140 — A learner can delete their account, and all of it goes
+
+**Date:** 2026-11-16 · **Status:** Accepted
+
+**Context.** Google Play requires an app that creates accounts to let the user
+delete one from inside the app, and to say on the web how to ask for it. The
+owner asked for exactly that: one action in Settings that removes the account
+and everything in it — words, sessions, progress, all of it.
+`docs/07-SECURITY.md` §12 had planned deletion that *anonymised* analytics
+rows instead of removing them. R8 and ADR-071 say a deleted word is kept for
+the Owner.
+
+**Decision.**
+
+- `POST /api/me/delete {password}` → `204`. The password is asked for again:
+  an unlocked phone, or a token left on a borrowed one, is not consent. A wrong
+  one is `400 WRONG_PASSWORD` (not 401, which the app would read as an expired
+  session and sign out). It shares the per-account sign-in budget (10 per
+  15 minutes), so a stolen token does not make guessing free.
+- One row is deleted, `users`, and PostgreSQL deletes the rest. Every table
+  holding a learner's data references `users` (directly, or through `words`,
+  `skill_sessions`, `placement_sessions`, `weekly_reviews`) with ON DELETE
+  CASCADE. That covers words and their states, events, exposures and review
+  items; sessions and items; placement; levels and level changes; interests;
+  feedback; activity and analytics events; refresh tokens and reset codes. A
+  test finds every learner-keyed column from the schema and counts zero after
+  a deletion, so a table added later is checked without being listed by hand.
+- **Analytics go too.** The owner asked for "all of it", and anonymised rows
+  are still the learner's behaviour. The admin's historical figures lose that
+  learner, as if they had never signed up. §12 is rewritten to say so.
+- R8 and ADR-071 are untouched in what they govern: the *system* never
+  discards a word, and a learner deleting one word still makes it `DELETED`.
+  Deleting the whole account is the learner's own request about their own
+  data, which those rules never meant to refuse.
+- Staff accounts (`OWNER`, `ANALYST`) get `403 STAFF_ACCOUNT` and the app does
+  not offer them the action. Decisions, notes and the audit trail name their
+  author (`ON DELETE RESTRICT`), and an Owner deleted from a phone could leave
+  nobody able to run the product. The Owner removes staff with SQL.
+- Admin audit rows that name the learner as a *target* (`user.viewed`) keep
+  the bare id. They record what staff did, carry no name or address, and point
+  at nothing once the account is gone.
+- The app drops its tokens locally after the 204 and sends no logout. The
+  access token it held for up to 15 minutes now names nobody: `/api/me`
+  answers 401.
+
+**Consequences.** No migration: the cascade was already the schema's. The web
+page Play Console asks for (the "delete account URL") must describe this in-app
+path and the support route for someone who no longer has the app.
+
+## ADR-141 — A new account proves its email address with a code
+
+**Date:** 2026-11-16 · **Status:** Accepted
+
+**Context.** The owner asked that an email address be confirmed with a code
+sent to it. An unchecked address breaks password reset (ADR-078) for anyone
+who mistyped it, and it is the only way the product can reach a learner.
+Brevo already sends the reset codes in production.
+
+**Decision.**
+
+- Verified **once, at registration**, not at every sign-in. Proving the
+  address is the point. A code at every sign-in would be a second factor, which
+  nobody asked for, and it would spend the free email quota (300 a day, shared
+  with resets) on every returning learner.
+- When `WordOs:RequireEmailVerification` is on, a new account starts at the
+  onboarding stage `VERIFY_EMAIL`. A six-digit code is emailed after the
+  account is saved, so a failed send never loses a registration. The app's
+  router already follows the stage, and the new screen is reached the same way
+  interests and placement are.
+- `POST /api/auth/email/verify {code}` → `200 UserProfile`, now at `INTERESTS`.
+  The code is stored hashed on the `users` row: one outstanding code at a time,
+  valid 30 minutes (`EmailVerificationCodeExpiryMinutes`), five wrong guesses
+  (`EmailVerificationMaxAttempts`, then `EMAIL_CODE_EXPIRED`).
+  `POST /api/auth/email/resend` → `202`, at most once a minute
+  (`EmailVerificationResendSeconds`). The cooldown is on the row, not in
+  memory, so a restart or a second instance cannot be used to send a flood.
+  Inside it the answer is `429 RATE_LIMITED` with `Retry-After`.
+- Onboarding cannot go round it: saving interests and starting or completing
+  placement answer `409 EMAIL_NOT_VERIFIED`. `User.AdvanceOnboarding` refuses
+  to leave the stage; only `ConfirmEmail` does.
+- Columns on `users` rather than a new table. A new column reaches the runtime
+  role through its existing table grant. A new table on Neon needs a manual
+  GRANT that has been forgotten before (ADR-079).
+- **Off by default.** An app older than 1.3.4 has no screen for the code. A
+  learner registering on it while verification is required would be held at a
+  stage that app cannot show. Turn it on once students have the app that can
+  verify. Existing accounts are never affected: they are past the stage, and
+  their `EmailVerifiedAt` stays null, truthfully.
+
+**Consequences.** One additive migration (`EmailVerification`, five nullable
+or defaulted columns), safe to apply before the deploy. Each registration
+costs one email from the Brevo quota, and each resend another.
